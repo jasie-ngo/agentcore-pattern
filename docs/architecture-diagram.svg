@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 648" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arw" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#7c8cff"/></marker>
+    <marker id="arwc" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#3fd6e0"/></marker>
+    <style>
+      .name{fill:#eaf0fb;font-size:14px;font-weight:700}
+      .sub{fill:#93a1bd;font-size:11px}
+      .zt{fill:#3fd6e0;font-size:12px;font-weight:700;letter-spacing:1.4px}
+      .ttl{fill:#ffffff;font-size:25px;font-weight:800}
+      .stl{fill:#93a1bd;font-size:13px}
+      .edge{stroke:#7c8cff;stroke-width:2;fill:none;marker-end:url(#arw)}
+      .edgec{stroke:#3fd6e0;stroke-width:1.8;fill:none;stroke-dasharray:5 4;marker-end:url(#arwc)}
+      .lbl{fill:#c3ccff;font-size:10.5px;font-weight:600}
+      .chip{fill:#0f1a30;stroke:#01a88d;stroke-opacity:.55}
+      .chn{fill:#eaf0fb;font-size:12.5px;font-weight:700}
+      .lg{fill:#aeb9d4;font-size:11px}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="648" fill="#0f1729"/>
+  <text class="ttl" x="40" y="42">Event-Driven Claims Agent — AWS Architecture</text>
+  <text class="stl" x="40" y="66">Amazon Bedrock AgentCore · ap-southeast-2 · autonomous claim intake → decision → execution</text>
+
+  <!-- zone labels -->
+  <text class="zt" x="44" y="102">1 · INGRESS</text>
+  <text class="zt" x="336" y="102">2 · PROCESSING · AMAZON BEDROCK AGENTCORE</text>
+  <text class="zt" x="888" y="102">3 · TOOLS &amp; DATA</text>
+
+  <!-- ================= INGRESS ================= -->
+  <!-- SES in -->
+  <g><rect x="40" y="116" width="252" height="56" rx="11" fill="#16203a" stroke="#e7157b" stroke-opacity=".7"/><rect x="52" y="133" width="22" height="22" rx="6" fill="#e7157b"/><text class="name" x="84" y="140">Amazon SES</text><text class="sub" x="84" y="157">Inbound claim email</text></g>
+  <!-- S3 -->
+  <g><rect x="40" y="194" width="252" height="56" rx="11" fill="#16203a" stroke="#7aa116" stroke-opacity=".7"/><rect x="52" y="211" width="22" height="22" rx="6" fill="#7aa116"/><text class="name" x="84" y="218">Amazon S3</text><text class="sub" x="84" y="235">claims-inbox/ bucket</text></g>
+  <!-- EventBridge -->
+  <g><rect x="40" y="272" width="252" height="56" rx="11" fill="#16203a" stroke="#e7157b" stroke-opacity=".7"/><rect x="52" y="289" width="22" height="22" rx="6" fill="#e7157b"/><text class="name" x="84" y="296">Amazon EventBridge</text><text class="sub" x="84" y="313">Rule on S3 ObjectCreated</text></g>
+  <!-- Trigger Lambda -->
+  <g><rect x="40" y="350" width="252" height="56" rx="11" fill="#16203a" stroke="#ed7100" stroke-opacity=".7"/><rect x="52" y="367" width="22" height="22" rx="6" fill="#ed7100"/><text class="name" x="84" y="374">AWS Lambda · Trigger</text><text class="sub" x="84" y="391">Signs SigV4 → Runtime</text></g>
+  <!-- ingress vertical arrows -->
+  <path class="edge" d="M166,172 L166,192"/>
+  <path class="edge" d="M166,250 L166,270"/>
+  <path class="edge" d="M166,328 L166,348"/>
+
+  <!-- ================= PROCESSING ================= -->
+  <rect x="318" y="112" width="486" height="360" rx="16" fill="#01a88d" fill-opacity=".055" stroke="#01a88d" stroke-opacity=".45"/>
+  <!-- Runtime -->
+  <g><rect x="334" y="150" width="454" height="108" rx="12" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/>
+    <rect x="346" y="163" width="20" height="20" rx="5" fill="#01a88d"/>
+    <text class="name" x="374" y="178">AgentCore Runtime · Dual-Agent Pipeline</text>
+    <g><rect class="chip" x="346" y="196" width="138" height="48" rx="8"/><text class="chn" x="415" y="216" text-anchor="middle">Phase 1</text><text class="sub" x="415" y="232" text-anchor="middle">Processor</text></g>
+    <g><rect class="chip" x="492" y="196" width="138" height="48" rx="8"/><text class="chn" x="561" y="216" text-anchor="middle">Phase 2</text><text class="sub" x="561" y="232" text-anchor="middle">Validator</text></g>
+    <g><rect class="chip" x="638" y="196" width="138" height="48" rx="8"/><text class="chn" x="707" y="216" text-anchor="middle">Phase 3</text><text class="sub" x="707" y="232" text-anchor="middle">Execution</text></g>
+  </g>
+  <!-- Bedrock -->
+  <g><rect x="334" y="278" width="220" height="56" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/><rect x="346" y="295" width="22" height="22" rx="6" fill="#01a88d"/><text class="name" x="378" y="302">Amazon Bedrock</text><text class="sub" x="378" y="319">Claude Sonnet 4.6 · Haiku 4.5</text></g>
+  <!-- Identity -->
+  <g><rect x="568" y="278" width="220" height="56" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/><rect x="580" y="295" width="22" height="22" rx="6" fill="#01a88d"/><text class="name" x="612" y="302">AgentCore Identity</text><text class="sub" x="612" y="319">OAuth token vault</text></g>
+  <!-- Memory -->
+  <g><rect x="334" y="346" width="220" height="56" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/><rect x="346" y="363" width="22" height="22" rx="6" fill="#01a88d"/><text class="name" x="378" y="370">AgentCore Memory</text><text class="sub" x="378" y="387">Semantic + Summarization</text></g>
+  <!-- Policy Engine -->
+  <g><rect x="568" y="346" width="220" height="56" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/><rect x="580" y="363" width="22" height="22" rx="6" fill="#01a88d"/><text class="name" x="612" y="370">AgentCore Policy Engine</text><text class="sub" x="612" y="387">Cedar · pre-tool authz</text></g>
+  <!-- runtime internal arrow to bedrock -->
+  <path class="edge" d="M444,258 L444,278"/>
+  <text class="lbl" x="450" y="272">Converse</text>
+
+  <!-- ================= TOOLS ================= -->
+  <!-- Cognito -->
+  <g><rect x="884" y="120" width="176" height="52" rx="11" fill="#16203a" stroke="#dd344c" stroke-opacity=".7"/><rect x="896" y="135" width="22" height="22" rx="6" fill="#dd344c"/><text class="name" x="928" y="142">Amazon Cognito</text><text class="sub" x="928" y="159">M2M · JWT auth</text></g>
+  <!-- Gateway -->
+  <g><rect x="884" y="192" width="356" height="56" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".7"/><rect x="896" y="208" width="22" height="22" rx="6" fill="#01a88d"/><text class="name" x="928" y="215">AgentCore Gateway</text><text class="sub" x="928" y="232">MCP · 6 Lambda targets · semantic search</text></g>
+  <!-- Tool Lambdas -->
+  <g><rect x="884" y="272" width="356" height="62" rx="11" fill="#16203a" stroke="#ed7100" stroke-opacity=".7"/><rect x="896" y="291" width="22" height="22" rx="6" fill="#ed7100"/><text class="name" x="928" y="298">AWS Lambda · 6 Tool Functions</text><text class="sub" x="928" y="315">policy · claim · review · notify · list · resolve</text></g>
+  <!-- DynamoDB -->
+  <g><rect x="884" y="358" width="172" height="56" rx="11" fill="#16203a" stroke="#4b61d1" stroke-opacity=".8"/><rect x="896" y="375" width="22" height="22" rx="6" fill="#4b61d1"/><text class="name" x="928" y="382">Amazon DynamoDB</text><text class="sub" x="928" y="399">Policies · Claims · Reviews</text></g>
+  <!-- SNS -->
+  <g><rect x="1068" y="358" width="172" height="56" rx="11" fill="#16203a" stroke="#e7157b" stroke-opacity=".7"/><rect x="1080" y="375" width="22" height="22" rx="6" fill="#e7157b"/><text class="name" x="1112" y="382">Amazon SNS</text><text class="sub" x="1112" y="399">Human-review escalation</text></g>
+  <!-- SES out -->
+  <g><rect x="884" y="428" width="356" height="52" rx="11" fill="#16203a" stroke="#e7157b" stroke-opacity=".7"/><rect x="896" y="443" width="22" height="22" rx="6" fill="#e7157b"/><text class="name" x="928" y="450">Amazon SES</text><text class="sub" x="928" y="467">Outbound claimant notifications</text></g>
+  <!-- tools arrows -->
+  <path class="edge" d="M972,172 L972,192"/><text class="lbl" x="978" y="186">JWT</text>
+  <path class="edge" d="M1062,248 L1062,272"/><text class="lbl" x="1068" y="264">invoke</text>
+  <path class="edge" d="M970,334 L970,358"/>
+  <path class="edge" d="M1154,334 L1154,358"/>
+  <path class="edge" d="M1040,334 C1040,400 1040,400 1040,428"/>
+
+  <!-- ================= CROSS-ZONE FLOWS ================= -->
+  <!-- Trigger Lambda -> Runtime -->
+  <path class="edge" d="M292,378 C312,378 316,205 332,205"/>
+  <text class="lbl" x="298" y="300">invoke</text><text class="lbl" x="298" y="314">(SigV4)</text>
+  <!-- Runtime -> Gateway -->
+  <path class="edge" d="M788,205 C838,205 846,220 882,220"/>
+  <text class="lbl" x="808" y="199">MCP call</text>
+  <!-- Identity -> Gateway (oauth, dashed) -->
+  <path class="edgec" d="M788,300 C846,300 850,236 882,232"/>
+  <text class="lbl" x="800" y="286">OAuth token</text>
+  <!-- Policy engine intercept note -->
+  <path class="edgec" d="M788,368 C852,368 858,250 882,244"/>
+  <text class="lbl" x="806" y="360">Cedar authz</text>
+
+  <!-- ================= OBSERVABILITY ================= -->
+  <rect x="318" y="500" width="922" height="60" rx="14" fill="#8c4fff" fill-opacity=".06" stroke="#8c4fff" stroke-opacity=".45"/>
+  <rect x="330" y="518" width="20" height="20" rx="5" fill="#8c4fff"/>
+  <text class="name" x="358" y="533">Observability &amp; Evaluation</text>
+  <g><rect x="560" y="514" width="150" height="32" rx="8" fill="#0f1a30" stroke="#8c4fff" stroke-opacity=".4"/><text class="sub" x="635" y="534" text-anchor="middle" fill="#cdd7ec">CloudWatch Logs</text></g>
+  <g><rect x="722" y="514" width="140" height="32" rx="8" fill="#0f1a30" stroke="#8c4fff" stroke-opacity=".4"/><text class="sub" x="792" y="534" text-anchor="middle" fill="#cdd7ec">X-Ray Traces</text></g>
+  <g><rect x="874" y="514" width="170" height="32" rx="8" fill="#0f1a30" stroke="#8c4fff" stroke-opacity=".4"/><text class="sub" x="959" y="534" text-anchor="middle" fill="#cdd7ec">Transaction Search</text></g>
+  <g><rect x="1056" y="514" width="172" height="32" rx="8" fill="#0f1a30" stroke="#8c4fff" stroke-opacity=".4"/><text class="sub" x="1142" y="534" text-anchor="middle" fill="#cdd7ec">AgentCore Evaluation</text></g>
+  <path class="edgec" d="M560,470 C560,490 560,490 560,500"/>
+
+  <!-- ================= LEGEND ================= -->
+  <g transform="translate(40,590)">
+    <rect x="0" y="0" width="13" height="13" rx="3" fill="#ed7100"/><text class="lg" x="19" y="11">Compute</text>
+    <rect x="96" y="0" width="13" height="13" rx="3" fill="#7aa116"/><text class="lg" x="115" y="11">Storage</text>
+    <rect x="188" y="0" width="13" height="13" rx="3" fill="#4b61d1"/><text class="lg" x="207" y="11">Database</text>
+    <rect x="280" y="0" width="13" height="13" rx="3" fill="#e7157b"/><text class="lg" x="299" y="11">App Integration</text>
+    <rect x="410" y="0" width="13" height="13" rx="3" fill="#dd344c"/><text class="lg" x="429" y="11">Identity / Security</text>
+    <rect x="560" y="0" width="13" height="13" rx="3" fill="#01a88d"/><text class="lg" x="579" y="11">AI / ML · Bedrock &amp; AgentCore</text>
+    <rect x="810" y="0" width="13" height="13" rx="3" fill="#8c4fff"/><text class="lg" x="829" y="11">Observability</text>
+    <text class="lg" x="960" y="11" fill="#6b7793">— solid: data flow   – – cyan: auth</text>
+  </g>
+</svg>

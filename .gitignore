@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+__MACOSX/
+Icon?
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+
+# CDK / build artifacts
+cdk.out/
+*.tsbuildinfo
+dist/
+build/
+
+# Environments & secrets (keep *.example.env templates)
+.env
+.env.*
+!*.example.env
+.cognito-state.json
+
+# Editor / OS
+.idea/
+*.swp
