@@ -28,7 +28,7 @@ access key / secret is used; the tool issues **temporary** credentials.
 | Assumed role | `cloudboost_account_operator` |
 | Azure Tenant ID | `de08c407-19b9-427d-9fe8-edf254300ca7` |
 | Azure App ID URI | `10d1e685-cfaa-4bf2-99a0-f3463bb24952` |
-| Username | `2279521@cognizant.com` |
+| Username | `<employee_id(number)>@cognizant.com` |
 | CLI profile | `cognizant-sandbox` |
 
 ---
@@ -138,14 +138,23 @@ CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate   (Python)
 x509: certificate signed by unknown authority                        (Docker / Go)
 SELF_SIGNED_CERT_IN_CHAIN / unable to get local issuer certificate   (Node / npm)
 ```
+Fix
 
-macOS system tools (browser, AWS CLI, `curl`) already trust it; the fixes below
-are only for runtimes that ship their own trust store.
-
-The Zscaler root CA is exported to **`~/zscaler-root.pem`** (reusable):
+Export the Zscaler root CA from the macOS System Keychain and append it to the runtime's trusted CA bundle:
 ```bash
+# Export the Zscaler root certificate
 security find-certificate -a -c "Zscaler" -p /Library/Keychains/System.keychain > ~/zscaler-root.pem
+
+# Create a combined certificate bundle
+cat "$(python3 -m certifi)" ~/zscaler-root.pem > ~/ca-bundle-zscaler.pem
+
+# Configure runtimes to use the custom bundle
+export SSL_CERT_FILE="$HOME/ca-bundle-zscaler.pem"
+export REQUESTS_CA_BUNDLE="$SSL_CERT_FILE"
+export AWS_CA_BUNDLE="$SSL_CERT_FILE"
+
 ```
+This creates a custom CA bundle containing both the standard trusted certificates and the Zscaler root CA, enabling Python, AWS SDKs, Node.js, Docker, and other runtimes that maintain their own trust stores to successfully establish TLS connections behind Zscaler.
 
 ## Python / httpx (Strands MCP clients, etc.)
 
