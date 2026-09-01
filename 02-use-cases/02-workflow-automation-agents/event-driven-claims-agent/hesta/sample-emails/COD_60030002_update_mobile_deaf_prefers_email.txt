@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : aisha.rahman@example.net
+member-number : 60030002
+name : Aisha Rahman
+phone : 0400 333 002
+reason-for-enquiry : Updating my account details
+message : I need to change my mobile number. I am Deaf and prefer to use email as my contact method rather than phone. Please update my details.

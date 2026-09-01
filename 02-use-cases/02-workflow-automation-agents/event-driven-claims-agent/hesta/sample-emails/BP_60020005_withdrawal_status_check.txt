@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : grace.mbeki@example.net
+member-number : 60020005
+name : Grace Mbeki
+phone : 0400 222 005
+reason-for-enquiry : Accessing super
+message : I submitted an application to withdraw some money about two weeks ago and I still haven't heard back. Has it been processed yet? Member number 60020005.

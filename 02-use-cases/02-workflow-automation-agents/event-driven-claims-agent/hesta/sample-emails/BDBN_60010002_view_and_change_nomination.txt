@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : james.nguyen@example.net
+member-number : 60010002
+name : James Nguyen
+phone : 0400 111 002
+reason-for-enquiry : My online account
+message : Hi, I want to see who I have nominated on my account and change my non-binding nomination to add my daughter as a 50% beneficiary. Please advise how.

@@ -25,6 +25,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -42,6 +43,8 @@ export class InfraConstruct extends Construct {
   public readonly cognitoDiscoveryUrl: string;
   /** Cognito app client ID — read from env, used for Gateway allowedClients */
   public readonly cognitoClientId: string;
+  /** Bedrock Guardrail that denies personal financial advice (attached to the Writer model) */
+  public readonly adviceGuardrail: bedrock.CfnGuardrail;
 
   constructor(scope: Construct, id: string, props: InfraConstructProps = {}) {
     super(scope, id);
@@ -252,10 +255,41 @@ export class InfraConstruct extends Construct {
       targets: [new eventsTargets.LambdaFunction(this.triggerFn)],
     });
 
+    // ─── Bedrock Guardrail: deny personal financial advice ────────
+    // Platform control (showcase): a denied-topic guardrail attached to the Writer model
+    // so the agent cannot generate personal financial/product advice. Works together with
+    // the app-layer detection (AI-001) + routing + Reviewer checks.
+    this.adviceGuardrail = new bedrock.CfnGuardrail(this, 'AdviceGuardrail', {
+      name: `ClaimsAgent-${stack.stackName.split('-').pop() || 'dev'}-NoPersonalAdvice`,
+      description: 'Denies personal financial/investment/product advice; HESTA staff handle advice enquiries.',
+      blockedInputMessaging: 'This enquiry needs a HESTA team member — we can’t provide personal financial advice.',
+      blockedOutputsMessaging: '[GUARDRAIL_BLOCKED_ADVICE]',
+      topicPolicyConfig: {
+        topicsConfig: [
+          {
+            name: 'PersonalFinancialAdvice',
+            type: 'DENY',
+            definition:
+              'Personal financial or investment advice, or product/option recommendations, tailored to an '
+              + "individual member's own circumstances (what they personally should do with their super).",
+            // Bedrock allows at most 5 examples per topic.
+            examples: [
+              'Which super option is best for me?',
+              'Should I switch to the high growth option?',
+              'What should I invest my super in?',
+              'Is it a good idea for me to roll over my other fund for my situation?',
+              'Can you recommend the best investment choice for me?',
+            ],
+          },
+        ],
+      },
+    });
+
     // ─── Outputs ──────────────────────────────────────────────────
 
     new cdk.CfnOutput(this, 'InboxBucketName', { value: inboxBucket.bucketName });
     new cdk.CfnOutput(this, 'ReviewTopicArn', { value: reviewTopic.topicArn });
     new cdk.CfnOutput(this, 'TriggerDLQUrl', { value: triggerDlq.queueUrl });
+    new cdk.CfnOutput(this, 'AdviceGuardrailId', { value: this.adviceGuardrail.attrGuardrailId });
   }
 }

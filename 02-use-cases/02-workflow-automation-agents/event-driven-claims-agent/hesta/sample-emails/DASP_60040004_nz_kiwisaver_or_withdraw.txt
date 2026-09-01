@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : liam.obrien@example.com
+member-number : 60040004
+name : Liam O'Brien
+phone : +64 9 123 0004
+reason-for-enquiry : Accessing super
+message : I have moved to New Zealand. Can I transfer my HESTA super to KiwiSaver, or should I withdraw it? Member number 60040004. Please advise the options.

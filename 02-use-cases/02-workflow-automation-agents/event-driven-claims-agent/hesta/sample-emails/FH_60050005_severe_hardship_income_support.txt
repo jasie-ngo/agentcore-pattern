@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : craig.stewart@example.net
+member-number : 60050005
+name : Craig Stewart
+phone : 0400 555 005
+reason-for-enquiry : Accessing super
+message : I've been on income support for over 6 months and I'm in severe financial hardship. I need to withdraw from my super as soon as possible. Member number 60050005.

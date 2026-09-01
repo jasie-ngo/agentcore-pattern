@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : raj.patel@example.org
+member-number : 60070003
+name : Raj Patel
+phone : 0400 777 003
+reason-for-enquiry : Other
+message : I've made a $50,000 personal contribution using the bring-forward. I need the NOI documentation to claim the deduction on my tax return. Member number 60070003.

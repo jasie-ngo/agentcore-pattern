@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : chloe.martin@example.com
+member-number : 60030004
+name : Chloe Martin
+phone : 0400 333 004
+reason-for-enquiry : Updating my account details
+message : Please put my new mobile number above in the system as I'm unable to access my account.

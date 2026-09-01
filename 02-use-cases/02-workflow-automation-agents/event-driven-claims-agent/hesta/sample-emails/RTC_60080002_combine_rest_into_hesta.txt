@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : bruce.tan@example.net
+member-number : 60080002
+name : Bruce Tan
+phone : 0400 888 002
+reason-for-enquiry : Accessing super
+message : I'd like to combine my Rest super into my HESTA account to have everything in one place. What do I need to do? Member number 60080002.

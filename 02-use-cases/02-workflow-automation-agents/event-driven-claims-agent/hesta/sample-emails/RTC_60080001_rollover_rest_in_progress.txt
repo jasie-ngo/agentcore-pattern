@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : natalie.ward@example.com
+member-number : 60080001
+name : Natalie Ward
+phone : 0400 888 001
+reason-for-enquiry : Other
+message : Hi, I'm rolling over my Rest super into my HESTA account. Can you confirm it's in progress and how long it usually takes? Member number 60080001.

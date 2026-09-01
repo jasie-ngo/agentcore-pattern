@@ -1,0 +1,21 @@
+# Exclude the host-built virtualenv. The Docker builder stage creates its own
+# /app/.venv via `uv sync`. Without this ignore, `COPY . /app` copies the HOST
+# .venv over it, and the host venv's console-script shebangs point at host paths
+# (e.g. exec /Users/.../.venv/bin/python3) that don't exist in the container —
+# causing "python3: not found" and an HTTP 424 runtime start failure.
+.venv/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local env / secrets — provided at runtime via AgentCore envVars, not baked in
+.env
+.env.*
+
+# VCS / OS cruft
+.git/
+.gitignore
+.DS_Store

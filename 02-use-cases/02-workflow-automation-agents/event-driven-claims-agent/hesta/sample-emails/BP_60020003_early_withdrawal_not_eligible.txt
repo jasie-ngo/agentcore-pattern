@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : anthony.rossi@example.org
+member-number : 60020003
+name : Anthony Rossi
+phone : 0400 222 003
+reason-for-enquiry : Accessing super
+message : Hi, I need to withdraw some of my super to pay off credit card debt. I'm 34 and still working. Can I access it early? Member number 60020003.

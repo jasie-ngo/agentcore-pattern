@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : jason.reid@example.com
+member-number : 60050001
+name : Jason Reid
+phone : 0400 555 001
+reason-for-enquiry : Accessing super
+message : I'm in financial hardship and struggling to pay my rent. I'd like to apply for an early release of my super. What are the eligibility criteria and how do I apply? Member number 60050001.

@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : hannah.whitlock@example.net
+member-number : 60060005
+name : Hannah Whitlock
+phone : 0400 666 005
+reason-for-enquiry : Other
+message : My ex-partner's lawyer has contacted me about splitting my super in our divorce. What is the process from HESTA's side and what do you need from me? Member number 60060005.

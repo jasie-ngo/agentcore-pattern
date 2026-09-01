@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : kenji.sato@example.jp
+member-number : 60040002
+name : Kenji Sato
+phone : +81 3 1234 0002
+reason-for-enquiry : Accessing super
+message : I was a temporary resident and have departed Australia for Japan. How do I apply for the Departing Australia Superannuation Payment? Member number 60040002.

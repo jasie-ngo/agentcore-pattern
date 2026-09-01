@@ -4,11 +4,11 @@
   "managedBy": "CDK",
   "runtimes": [
     {
-      "name": "claimsagent",
+      "name": "hestaclaimsagent",
       "description": "Event-driven dual-agent claims processor with confidence-based routing",
       "build": "Container",
       "entrypoint": "main.py",
-      "codeLocation": "app/claimsagent",
+      "codeLocation": "app/hesta-claimsagent",
       "envVars": [
         {
           "name": "AGENT_OBSERVABILITY_ENABLED",
@@ -124,7 +124,7 @@
   "onlineEvalConfigs": [
     {
       "name": "ClaimsEvaluation",
-      "agent": "claimsagent",
+      "agent": "hestaclaimsagent",
       "evaluators": [
         "Builtin.Helpfulness",
         "Builtin.Correctness",

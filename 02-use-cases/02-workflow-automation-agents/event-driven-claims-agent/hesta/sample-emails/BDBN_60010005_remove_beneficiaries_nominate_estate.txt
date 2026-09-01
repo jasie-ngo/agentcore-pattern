@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : mei.lin@example.net
+member-number : 60010005
+name : Mei Lin
+phone : 0400 111 005
+reason-for-enquiry : Other
+message : I would like to remove the beneficiaries currently on my account and instead nominate my legal personal representative (my estate). Please let me know the steps.

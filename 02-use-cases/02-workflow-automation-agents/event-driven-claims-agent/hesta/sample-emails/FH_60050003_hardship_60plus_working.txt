@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : wayne.djarra@example.org
+member-number : 60050003
+name : Wayne Djarra
+phone : 0400 555 003
+reason-for-enquiry : Accessing super
+message : I'm over 60, Aboriginal, and still working full time but my bills are piling up. Can I access $10,000 under financial hardship? Member number 60050003.

@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : natalie.ward@example.com
+member-number : 60080001
+name : Natalie Ward
+phone : 0400 888 001
+reason-for-enquiry : Other
+message : Hi, I'm 40 and trying to decide what to do with my super. Which HESTA investment option is best for me - should I switch to High Growth, and is it a good idea for me to roll my Rest super in given my situation? What would you recommend I do? Member number 60080001.
