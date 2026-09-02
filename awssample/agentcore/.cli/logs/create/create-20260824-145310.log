@@ -1,0 +1,80 @@
+================================================================================
+AGENTCORE CREATE LOG
+Started: 2026-08-24T04:53:10.544Z
+================================================================================
+
+[14:53:10] Starting project creation: awssample
+[14:53:10] Project root: /Users/lngo/ai initiatives/aws-agentcore/agentcore-pattern/awssample
+
+[14:53:10] STEP: Create project directory and config files
+[14:53:10]   - Creating project directory...
+[14:53:10]   - Initializing config directory...
+[14:53:10]   - Creating .gitignore...
+[14:53:10]   - Creating .env file...
+[14:53:10]   - Creating agentcore.json...
+[14:53:10]   - Creating aws-targets.json...
+[14:53:10]   - Creating deployed-state.json...
+[14:53:10] Status: SUCCESS
+[14:53:10] Duration: 203ms
+
+[14:53:10] STEP: Add agent to project
+[14:53:10]   - Adding agent: TestAgent
+[14:53:10]   - Type: byo, Language: Python
+[14:53:10]   - Writing BYO agent config to project...
+[14:53:10] Status: SUCCESS
+[14:53:10] Duration: 211ms
+
+[14:53:10] STEP: Prepare agentcore/ directory (CDK project)
+[14:53:10]   - Copying CDK project template...
+[14:53:11]   - CDK template copied
+[14:53:11]   - Copying AGENTS.md template...
+[14:53:11]   - AGENTS.md copied
+[14:53:11]   - Copying README.md template...
+[14:53:11]   - README.md copied
+[14:53:11]   - Writing LLM context files...
+[14:53:11]   - LLM context files written
+[14:53:11]   - Running npm install (this may take a while)...
+[14:53:11]   Running: npm install
+[14:53:36]     > added 320 packages, and audited 340 packages in 24s
+[14:53:36]     > 
+[14:53:36]     > 37 packages are looking for funding
+[14:53:36]     >   run `npm fund` for details
+[14:53:36]     > 
+[14:53:36]     > 1 high severity vulnerability
+[14:53:36]     > 
+[14:53:36]     > To address all issues, run:
+[14:53:36]     >   npm audit fix
+[14:53:36]     > 
+[14:53:36]     > Run `npm audit` for details.
+[14:53:36]     > npm warn deprecated inflight@1.0.6: This module is not supported, and leaks memory. Do not use it. Check out lru-cache if you want a good and tested way to coalesce async requests by a key value, which is much more comprehensive and powerful.
+[14:53:36]     > npm warn deprecated glob@7.2.3: Old versions of glob are not supported, and contain widely publicized security vulnerabilities, which have been fixed in the current version. Please update. Support for old versions may be purchased (at exorbitant rates) by contacting i@izs.me
+[14:53:36]   - npm install completed (25.2s)
+[14:53:36]   - Running npm run format...
+[14:53:36]   Running: npm run format
+[14:53:37]     > > agentcore-cdk-app@0.1.0 format
+[14:53:37]     > > prettier --write .
+[14:53:37]     > 
+[14:53:37]     > .prettierrc 78ms (unchanged)
+[14:53:37]     > bin/cdk.ts 132ms
+[14:53:37]     > cdk.json 5ms (unchanged)
+[14:53:37]     > jest.config.js 3ms (unchanged)
+[14:53:37]     > lib/cdk-stack.ts 19ms (unchanged)
+[14:53:37]     > package-lock.json 42ms (unchanged)
+[14:53:37]     > package.json 1ms (unchanged)
+[14:53:37]     > README.md 453ms (unchanged)
+[14:53:37]     > test/cdk.test.ts 3ms (unchanged)
+[14:53:37]     > tsconfig.json 1ms (unchanged)
+[14:53:37]   - Formatting completed
+[14:53:37] Status: SUCCESS
+[14:53:37] Duration: 26.9s
+
+[14:53:37] STEP: Initialize git repository
+[14:53:37]   - Running git init...
+[14:53:37] Warning: already in a git repository
+[14:53:37] Status: WARNING
+[14:53:37] Duration: 89ms
+
+================================================================================
+COMPLETED SUCCESSFULLY
+Total Duration: 27.4s
+================================================================================
