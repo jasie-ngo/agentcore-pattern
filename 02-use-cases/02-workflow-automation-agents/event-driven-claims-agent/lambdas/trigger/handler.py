@@ -27,8 +27,11 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 s3 = boto3.client("s3")
 
 # Environment variables (set by CDK)
-RUNTIME_ARN = os.environ.get("AGENTCORE_RUNTIME_ARN", "")
-REGION = os.environ.get("AWS_REGION", "us-west-2")
+RUNTIME_ARN = os.environ.get(
+    "AGENTCORE_RUNTIME_ARN",
+    "arn:aws:bedrock-agentcore:ap-southeast-2:975050098174:runtime/ClaimsAgent_hestaclaimsagent-BNZ7CEF7an",
+)
+REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 
 
 def invoke_runtime_async(payload_dict):
@@ -62,7 +65,6 @@ def invoke_runtime_async(payload_dict):
         data=payload,
         headers=dict(aws_request.headers),
     )
-
     # Fire-and-forget: open the connection, confirm HTTP 200, read first few
     # lines to verify the agent started, then close without waiting for completion.
     # Timeout covers the Runtime cold start (~30-60s on first invocation).
@@ -70,6 +72,8 @@ def invoke_runtime_async(payload_dict):
         raise ValueError(f"Only HTTPS URLs are permitted: {url}")
 
     with urllib.request.urlopen(req, timeout=65) as resp:  # nosec B310  # 65s covers cold start
+        print("STATUS:", resp.status)
+        print("HEADERS:", dict(resp.headers))
         status = resp.status
         # Read up to 5 lines to confirm the agent started streaming
         preview_lines = []
@@ -99,8 +103,28 @@ def parse_email(content):
     return headers, body
 
 
+def parse_hesta_form(content):
+    """Parse Hesta form-based email format into structured fields."""
+    fields = {}
+    lines = content.split("\n")
+
+    for line in lines:
+        if " : " in line:
+            key, value = line.split(" : ", 1)
+            key = key.strip().lower()
+            value = value.strip()
+            fields[key] = value
+
+    return fields
+
+
+def is_hesta_form_format(content):
+    """Check if content is a Hesta form-based email."""
+    return "form based mail" in content.lower() and "Values:" in content
+
+
 def is_email_format(content):
-    """Check if content looks like an email (has From: or Subject: headers)."""
+    """Check if content looks like a traditional email (has From: or Subject: headers)."""
     return bool(re.match(r"^(From|Subject):", content, re.IGNORECASE | re.MULTILINE))
 
 
@@ -109,6 +133,7 @@ def handler(event, context):
     bucket = detail.get("bucket", {}).get("name", "")
     key = detail.get("object", {}).get("key", "")
 
+
     if not bucket or not key:
         return {"statusCode": 400, "body": "Missing S3 event details"}
 
@@ -116,7 +141,12 @@ def handler(event, context):
     content = obj["Body"].read().decode("utf-8")
 
     # Determine format and extract claim info
-    if is_email_format(content):
+    if is_hesta_form_format(content):
+        fields = parse_hesta_form(content)
+        prompt = f"Process this HESTA member enquiry:\n\nMember: {fields.get('name', 'Unknown')}\nMember Number: {fields.get('member-number', '')}\nPhone: {fields.get('phone', '')}\nEnquiry Type: {fields.get('reason-for-enquiry', '')}\n\nMessage: {fields.get('message', '')}"
+        claimant_email = fields.get("email-address", "")
+        source = f"hesta-form:{fields.get('member-number', 'unknown')}"
+    elif is_email_format(content):
         headers, body = parse_email(content)
         prompt = f"Process this insurance claim from email:\n\n{body}"
         claimant_email = headers.get("from", "")

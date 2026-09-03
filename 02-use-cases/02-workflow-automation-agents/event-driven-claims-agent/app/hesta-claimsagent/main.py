@@ -25,6 +25,8 @@ import re
 import uuid
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import SpanKind
 from config import ENABLE_HITL_RECORD
 from ingestion.email_normalizer import normalize_email
 from intents import taxonomy
@@ -34,10 +36,8 @@ from tools import gateway
 
 from agents import (
     attachment_validation,
-    case_status,
     context_manager,
     empathy as empathy_agent,
-    identity_profiling,
     intent_identifier,
     reviewer_editor,
     writer as writer_agent,
@@ -45,6 +45,10 @@ from agents import (
 
 app = BedrockAgentCoreApp()
 log = app.logger
+
+# Scope name must start with "opentelemetry.instrumentation." — AgentCore Evaluation's
+# generic-framework support only reads spans under that prefix (or "openinference.instrumentation.").
+_tracer = otel_trace.get_tracer("opentelemetry.instrumentation.hesta_claims_agent")
 
 
 # ─── Payload parsing (handles agentcore dev wrapping + S3 trigger payload) ────
@@ -110,14 +114,35 @@ def _fmt_summary(summary) -> str:
     )
 
 
-def _fmt_status(status) -> str:
-    lines = ["### 📁 Existing cases (list_pending_claims)\n", f"- {status.note}"]
-    for c in status.member_pending:
-        lines.append(
-            f"  - `{c.get('claim_id', '?')}` · {c.get('category', 'n/a')} · pending_review"
-            f" · created {c.get('created_at', 'n/a')}"
+def _fmt_identity(identity) -> str:
+    if identity.error:
+        return f"### 🪪 Identity (AI-002: member_lookup)\n\n- ⚠️ {identity.error}\n\n"
+    return (
+        "### 🪪 Identity (AI-002: member_lookup)\n\n"
+        f"- **Member ID:** {identity.member_id or '—'}\n"
+        f"- **Email:** {identity.email or '—'}\n"
+        f"- **Name:** {identity.name or '—'}\n"
+        f"- **Status:** {identity.status or '—'}\n\n"
+    )
+
+
+def _fmt_cases(cases) -> str:
+    if cases.error:
+        return f"### 📁 Cases (AI-002: case_lookup_creation)\n\n- ⚠️ {cases.error}\n\n"
+    if cases.status == "existing_cases_found":
+        lines = [f"### 📁 Existing cases (case_lookup_creation)\n"]
+        for c in cases.cases:
+            lines.append(f"  - Case ID: `{c.get('case_id', '?')}` · Status: {c.get('status', 'n/a')}")
+        return "\n".join(lines) + "\n\n"
+    elif cases.status == "new_case_created":
+        new = cases.new_case or {}
+        return (
+            "### 📁 New case created (case_lookup_creation)\n\n"
+            f"- **Case ID:** `{new.get('case_id', '?')}`\n"
+            f"- **Member ID:** {new.get('member_id', '?')}\n"
+            f"- **Status:** {new.get('status', 'Open')}\n\n"
         )
-    return "\n".join(lines) + "\n\n"
+    return ""
 
 
 def _fmt_profile(profile) -> str:
@@ -188,58 +213,81 @@ def _fmt_review(review) -> str:
     return "\n".join(out) + "\n\n"
 
 
+# ─── Convert identity info to MemberProfile for routing/writer ──────────────────
+
+
+def _convert_identity_to_profile(identity, inbound, intent_result):
+    """Convert IdentityInfo from member_lookup into MemberProfile for routing."""
+    from models import MemberProfile
+
+    if identity.error:
+        return MemberProfile(
+            member_number=inbound.member_number_for_lookup,
+            matched=False,
+            verification_level="unverified",
+            verification_required=True,
+            notes=identity.error,
+        )
+
+    return MemberProfile(
+        member_number=identity.member_id,
+        matched=True if identity.member_id else False,
+        match_key="member_id" if identity.member_id else None,
+        factors_matched=[k for k in ["member_id", "email"] if getattr(identity, k)],
+        account_type=None,
+        member_status=identity.status,
+        verification_level="verified" if identity.status == "active" else "unverified",
+        verification_required=False if identity.status == "active" else True,
+        notes=f"Member lookup found: {identity.member_id}",
+    )
+
+
 # ─── Human-in-the-loop: write a record to DynamoDB via the MCP Gateway ────────
 
 
-async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft) -> str:
-    """Reuse create_claim + request_human_review to persist the case for a human.
+async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, cases) -> str:
+    """Write draft for human review via email_review tool.
 
-    This is the pilot's human hand-off — a DynamoDB record via the existing Gateway
-    tools. No new tables/tools. Non-fatal: surfaces the real Gateway error if it fails.
+    Gets the case_id from case_lookup_creation result (in cases), then calls
+    email_review to create a review record in the human review table.
+    Non-fatal: surfaces the real Gateway error if it fails.
     """
-    description = (inbound.latest_message or "").strip()[:1000] or draft.subject
-    claim = await gateway.call_tool(
-        mcp,
-        "create_claim",
-        {
-            "policy_number": profile.member_number or "UNKNOWN",
-            "description": description,
-            "estimated_amount": 0,
-            "category": intent_result.primary_intent_id,
-            "status": "pending_review",
-            "decision": "escalated",
-        },
-    )
-    # Gateway/transport failure (auth, connection, Cedar deny surfaced as an exception).
-    if isinstance(claim, dict) and "_gateway_error" in claim:
-        return f"⚠️ Could not write the case record (Gateway error): {claim['_gateway_error']}\n\n"
-    # The create_claim Lambda returns {"error": "..."} for validation/DDB failures.
-    if isinstance(claim, dict) and claim.get("error"):
-        return f"⚠️ create_claim returned an error: {claim['error']}\n\n"
+    # Get case_id from case_lookup_creation result
+    case_id = None
+    if cases.status == "existing_cases_found" and cases.cases:
+        case_id = cases.cases[0].get("case_id")
+    elif cases.status == "new_case_created" and cases.new_case:
+        case_id = cases.new_case.get("case_id")
 
-    claim_id = claim.get("claim_id") if isinstance(claim, dict) else None
-    if not claim_id:
-        # Don't claim success we can't confirm — show exactly what came back.
-        return f"⚠️ create_claim did not return a claim_id (record not confirmed). Raw response: {json.dumps(claim)[:600]}\n\n"
-
-    lines = [f"📋 Case record written to DynamoDB (Claims): `{claim_id}`"]
+    if not case_id:
+        return "⚠️ No case_id available for email review (case lookup failed).\n\n"
 
     review = await gateway.call_tool(
         mcp,
-        "request_human_review",
+        "email_review",
         {
-            "claim_id": claim_id,
-            "reason": "; ".join(decision.reasons) or "Manual review required",
-            "estimated_amount": 0,
+            "case_id": case_id,
+            "draft_subject": draft.subject,
+            "draft_body": draft.body,
+            "escalation_reasons": "; ".join(decision.reasons) or "Manual review required",
         },
     )
+
     if isinstance(review, dict) and "_gateway_error" in review:
-        lines.append(f"⚠️ Review record not written (Gateway error): {review['_gateway_error']}")
-    elif isinstance(review, dict) and review.get("error"):
-        lines.append(f"⚠️ request_human_review returned an error: {review['error']}")
-    else:
-        lines.append("🔍 Review record written to DynamoDB (Reviews) — case is queued for a human.")
-    return "\n".join(lines) + "\n\n"
+        return f"⚠️ Could not write review record (Gateway error): {review['_gateway_error']}\n\n"
+    if isinstance(review, dict) and review.get("error"):
+        return f"⚠️ email_review returned an error: {review['error']}\n\n"
+
+    review_id = review.get("review_id") if isinstance(review, dict) else None
+    if not review_id:
+        return f"⚠️ email_review did not return a review_id. Raw response: {json.dumps(review)[:600]}\n\n"
+
+    return (
+        f"📧 Draft queued for human review\n\n"
+        f"- **Case ID:** `{case_id}`\n"
+        f"- **Review ID:** `{review_id}`\n"
+        f"- **Escalation reasons:** {'; '.join(decision.reasons) or 'Manual review required'}\n\n"
+    )
 
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
@@ -247,6 +295,32 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
 
 @app.entrypoint
 async def invoke(payload, context):
+    """Entrypoint wrapper: opens the session's one required `invoke_agent` span.
+
+    AgentCore Evaluation needs exactly one span per session tagged
+    gen_ai.operation.name=invoke_agent to know what to evaluate. _run_pipeline's sub-agents
+    only ever emit execute_structured_output spans (Agent.structured_output_async), so
+    without this wrapper no session ever has an invoke_agent span and every evaluator fails
+    with "no spans to evaluate".
+    """
+    raw = _parse_payload(payload).get("prompt", "") or ""
+    output_chunks: list[str] = []
+    with _tracer.start_as_current_span(
+        "invoke_agent",
+        kind=SpanKind.SERVER,
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "HestaMemberEmailAgent",
+            "gen_ai.task.input": raw,
+        },
+    ) as agent_span:
+        async for chunk in _run_pipeline(payload, context):
+            output_chunks.append(chunk)
+            yield chunk
+        agent_span.set_attribute("gen_ai.task.output", "".join(output_chunks))
+
+
+async def _run_pipeline(payload, context):
     """Run the HESTA member-email pipeline over one inbound email and stream the result."""
     payload = _parse_payload(payload)
     raw = payload.get("prompt", "") or ""
@@ -295,9 +369,11 @@ async def invoke(payload, context):
         yield "## 1 · Understand\n\n"
         intent_result = await intent_identifier.identify(inbound)
         yield _fmt_intents(intent_result)
-        # AI-002 uses AgentCore Memory (when available) to recall this member's prior contacts.
-        summary = await context_manager.summarize(inbound, session_manager=memory_session)
+        # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
+        summary = await context_manager.summarize(inbound, mcp=mcp, session_manager=memory_session)
         yield _fmt_summary(summary)
+        yield _fmt_identity(summary.identity)
+        yield _fmt_cases(summary.cases)
         if memory_session is not None:
             # Explicitly persist this contact (structured_output doesn't fire the session
             # manager's write hooks), so SEMANTIC/SUMMARIZATION records actually populate.
@@ -307,17 +383,12 @@ async def invoke(payload, context):
                 f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
             )
 
-        # For status/progress enquiries, pull the member's existing pending cases
-        # (reuses the list_pending_claims Gateway tool) so the Writer can be specific.
-        status_ctx = None
-        if case_status.is_status_query(inbound, summary, intent_result):
-            status_ctx = await case_status.lookup_pending(mcp, inbound)
-            yield _fmt_status(status_ctx)
+        status_ctx = summary.cases
 
         # ── DECIDE ──────────────────────────────────────────────────────────
         yield "## 2 · Decide\n\n"
-        # AI-003 reuses the existing lookup_policy Gateway tool on the started client.
-        profile = await identity_profiling.profile(mcp, inbound, intent_result)
+        # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
+        profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
         yield _fmt_profile(profile)
         attach = attachment_validation.assess(inbound, intent_result)
         yield _fmt_attach(attach)
@@ -338,11 +409,11 @@ async def invoke(payload, context):
         review = await reviewer_editor.review(draft, intent_result, profile)
         yield _fmt_review(review)
 
-        # Human-in-the-loop hand-off = write a record to DynamoDB via the MCP Gateway.
+        # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
         if decision.escalate_to_human:
             yield "### 👤 Human-in-the-loop\n\n"
             if ENABLE_HITL_RECORD:
-                yield await _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft)
+                yield await _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, status_ctx)
             else:
                 yield (
                     "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "

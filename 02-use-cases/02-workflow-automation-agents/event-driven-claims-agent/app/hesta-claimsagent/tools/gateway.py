@@ -70,6 +70,9 @@ GATEWAY_TOOL_NAMES = {
     "send_notification": "notification___send_notification",
     "list_pending_claims": "list-pending-claims___list_pending_claims",
     "resolve_claim": "resolve-claim___resolve_claim",
+    "member_lookup": "member-lookup___member_lookup",
+    "case_lookup_creation": "case-lookup-creation___case_lookup_creation",
+    "email_review": "email-review___email_review",
 }
 
 # Why the last build attempt failed (surfaced to the user by AI-003 / HITL).

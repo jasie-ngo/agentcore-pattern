@@ -44,14 +44,35 @@ class IntentResult(BaseModel):
 # ─── AI-002 Conversation Context Manager ─────────────────────────────────────
 
 
+class IdentityInfo(BaseModel):
+    """Member identity data from member_lookup."""
+
+    member_id: str | None = Field(default=None, description="Member ID from lookup.")
+    email: str | None = Field(default=None, description="Member email from lookup.")
+    name: str | None = Field(default=None, description="Member name from lookup.")
+    status: str | None = Field(default=None, description="Member status (active, etc.).")
+    error: str | None = Field(default=None, description="Error message if lookup failed.")
+
+
+class CaseInfo(BaseModel):
+    """Case data from case_lookup_creation."""
+
+    status: str = Field(description="existing_cases_found | new_case_created")
+    cases: list[dict] = Field(default_factory=list, description="Existing cases, if any.")
+    new_case: dict | None = Field(default=None, description="Newly created case, if applicable.")
+    error: str | None = Field(default=None, description="Error message if lookup failed.")
+
+
 class CaseSummary(BaseModel):
-    """AI-002 output: an operational summary of the (possibly threaded) email."""
+    """AI-002 output: an operational summary + identity + cases."""
 
     summary: str = Field(description="Concise operational summary of the case for a HESTA agent.")
     conversation_state: str = Field(
         description="e.g. new_request | awaiting_identity_verification | chasing_update | providing_info"
     )
     outstanding_items: list[str] = Field(default_factory=list, description="What is still needed to progress.")
+    identity: IdentityInfo = Field(default_factory=IdentityInfo, description="Member identity from member_lookup.")
+    cases: CaseInfo = Field(default_factory=CaseInfo, description="Existing/new cases from case_lookup_creation.")
 
 
 # ─── AI-003 Identity & Profiling (deterministic — reuses lookup_policy) ───────

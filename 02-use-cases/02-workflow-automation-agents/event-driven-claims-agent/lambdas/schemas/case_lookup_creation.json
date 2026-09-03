@@ -1,0 +1,1 @@
+[{"name": "case_lookup_creation", "description": "Look up existing cases for a member or create a new case if none exist", "inputSchema": {"type": "object", "properties": {"member_id": {"type": "string", "description": "The member identifier"}}, "required": ["member_id"]}}]
