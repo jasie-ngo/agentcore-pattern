@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from config import INTENT_CONFIDENCE_THRESHOLD
 from intents import taxonomy
-from models import EmpathyAssessment, IntentResult, MemberProfile, RoutingDecision
+from models import AttachmentAssessment, EmpathyAssessment, IntentResult, MemberProfile, RoutingDecision
 
 
 def _primary_confidence(intent_result: IntentResult) -> int:
@@ -32,6 +32,7 @@ def decide(
     intent_result: IntentResult,
     profile: MemberProfile,
     empathy: EmpathyAssessment,
+    attach: AttachmentAssessment,
 ) -> RoutingDecision:
     reasons: list[str] = []
     primary = intent_result.primary_intent_id
@@ -61,5 +62,10 @@ def decide(
     if empathy.vulnerability_flags or empathy.priority in ("high", "urgent"):
         flags = ", ".join(empathy.vulnerability_flags) or empathy.priority
         reasons.append(f"vulnerability/priority ({flags})")
+
+    # A required document was expected but not detected — a human must chase it up
+    # rather than the case silently proceeding as if nothing were missing.
+    if attach.status == "missing":
+        reasons.append(f"missing expected attachment ({attach.expected_document})")
 
     return RoutingDecision(escalate_to_human=bool(reasons), reasons=reasons, regulated=regulated)

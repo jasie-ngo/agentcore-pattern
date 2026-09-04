@@ -323,7 +323,7 @@ async def invoke(payload, context):
         yield _fmt_attach(attach)
         emp = await empathy_agent.assess(inbound)
         yield _fmt_empathy(emp)
-        decision = decide(intent_result, profile, emp)
+        decision = decide(intent_result, profile, emp, attach)
         yield _fmt_decision(decision)
 
         # ── EXECUTE ─────────────────────────────────────────────────────────
