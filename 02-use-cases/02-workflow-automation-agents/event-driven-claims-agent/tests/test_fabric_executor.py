@@ -160,6 +160,38 @@ class GraphExecutorTests(unittest.TestCase):
         asyncio.run(GraphExecutor(config).run({}, on_step=on_step))
         self.assertEqual(seen, ["a"])
 
+    def test_downstream_node_runs_after_skipped_predecessor(self):
+        order = []
+
+        async def root(state):
+            return {}
+
+        async def optional(state):
+            order.append("optional")
+            return {}
+
+        async def downstream(state):
+            order.append("downstream")
+            return {"reached": True}
+
+        self._node("root", root)
+        self._node("optional", optional)
+        self._node("downstream", downstream)
+        self._router("never", lambda state: False)
+        config = _config(
+            ["root", "optional", "downstream"],
+            [
+                {"source": "root", "target": "optional", "router": "never"},
+                {"source": "optional", "target": "downstream"},
+            ],
+            start="root",
+        )
+
+        state = asyncio.run(GraphExecutor(config).run({}))
+        self.assertNotIn("optional", order)
+        self.assertIn("downstream", order)
+        self.assertTrue(state.get("reached"))
+
 
 if __name__ == "__main__":
     unittest.main()
