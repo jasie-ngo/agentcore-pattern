@@ -1,4 +1,4 @@
-# Event-Driven Claims Agent — AI Coding Assistant Context
+# Event-Driven Claims Agent: AI Coding Assistant Context
 
 > **For humans:** This file provides context for AI coding assistants (Kiro, Cursor, Claude Code, GitHub Copilot). For the human-readable documentation, see [docs/](./docs/README.md), [README.md](./README.md), or [docs/tutorial.md](./docs/tutorial.md).
 
@@ -46,7 +46,7 @@ event-driven-claims-agent/
 │   ├── tools/structured_output.py     # @tool decorators: submit_decision, submit_validation
 │   └── pyproject.toml                 # Dependencies (uv-managed)
 ├── lambdas/                           # One directory per Gateway tool
-│   ├── schemas/                       # MCP tool schemas (JSON) — matched by CDK
+│   ├── schemas/                       # MCP tool schemas (JSON), matched by CDK
 │   ├── trigger/handler.py             # EventBridge → Runtime invocation (SigV4 auth)
 │   ├── create_claim/handler.py        # DDB put on ClaimsTable
 │   ├── policy_lookup/handler.py       # DDB get on PoliciesTable
@@ -58,7 +58,7 @@ event-driven-claims-agent/
 │   ├── agentcore.json                 # Declarative AgentCore resources (Runtime/Gateway/Memory/PolicyEngine/Eval)
 │   ├── aws-targets.json               # Deployment targets (account + region)
 │   └── cdk/lib/
-│       ├── infra-construct.ts         # Supplementary AWS infra (DynamoDB, S3, SNS, EventBridge, Lambdas — Cognito is script-managed)
+│       ├── infra-construct.ts         # Supplementary AWS infra (DynamoDB, S3, SNS, EventBridge, Lambdas; Cognito is script-managed)
 │       └── cdk-stack.ts               # Integration: wires infra ARNs + JWT authorizer + runtime env vars
 ├── scripts/
 │   ├── deploy.sh                      # Deploy helper
@@ -147,14 +147,14 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 
 ## Key Invariants
 
-1. **Lambda handlers return `json.dumps({...})` directly** — no `{statusCode, body}` envelope. The Gateway strips the HTTP wrapper.
-2. **Agent routing controls claim status** — the `create_claim` Lambda accepts `status` and `decision` as optional parameters from the agent. Do not add routing logic to the Lambda itself.
-3. **Tool schemas live in `lambdas/schemas/`** — each file maps to a Gateway target in the CDK stack via the `toolSchemaFile` field in `agentcore.json`. Keep schemas in sync with Lambda parameters.
-4. **Container build, not CodeZip** — runtime deps go in `app/claimsagent/pyproject.toml` (managed by `uv`). The Dockerfile runs `uv sync --frozen`.
+1. **Lambda handlers return `json.dumps({...})` directly**: no `{statusCode, body}` envelope. The Gateway strips the HTTP wrapper.
+2. **Agent routing controls claim status**: the `create_claim` Lambda accepts `status` and `decision` as optional parameters from the agent. Do not add routing logic to the Lambda itself.
+3. **Tool schemas live in `lambdas/schemas/`**: each file maps to a Gateway target in the CDK stack via the `toolSchemaFile` field in `agentcore.json`. Keep schemas in sync with Lambda parameters.
+4. **Container build, not CodeZip**: runtime deps go in `app/claimsagent/pyproject.toml` (managed by `uv`). The Dockerfile runs `uv sync --frozen`.
 5. **`agentcore/agentcore.json` is the source of truth for AgentCore resources** (Runtime, Gateway, Memory, PolicyEngine, OnlineEval). Supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`; `cdk-stack.ts` wires the two together (patches Lambda ARNs + the Gateway CUSTOM_JWT authorizer discovery URL, injects runtime env vars). Don't hand-edit generated CDK output.
-6. **Two auth paths:** Inbound to Runtime uses AWS_IAM (SigV4) — CDK grants `runtime.grantInvoke()` to the Trigger Lambda. Outbound from Runtime to Gateway uses Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` — secrets live in AgentCore Identity vault, not env vars.
-7. **Structured output tools** (`tools/structured_output.py`) — the agent calls `submit_decision` and `submit_validation` to produce machine-parseable results. When agents fail to call these tools, routing defaults to safe fallbacks (REJECT for missing decision, HUMAN_REVIEW for missing validation).
-8. **Phase 3 is deterministic (no LLM call)** — once routing is resolved, tool calls are made directly via `MCPClient.call_tool_async()` using structured data from Phase 1/2. This saves one Sonnet invocation per request. All Phase 3 actions are non-fatal (log + continue on failure).
+6. **Two auth paths:** Inbound to Runtime uses AWS_IAM (SigV4); CDK grants `runtime.grantInvoke()` to the Trigger Lambda. Outbound from Runtime to Gateway uses Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")`; secrets live in AgentCore Identity vault, not env vars.
+7. **Structured output tools** (`tools/structured_output.py`): the agent calls `submit_decision` and `submit_validation` to produce machine-parseable results. When agents fail to call these tools, routing defaults to safe fallbacks (REJECT for missing decision, HUMAN_REVIEW for missing validation).
+8. **Phase 3 is deterministic (no LLM call)**: once routing is resolved, tool calls are made directly via `MCPClient.call_tool_async()` using structured data from Phase 1/2. This saves one Sonnet invocation per request. All Phase 3 actions are non-fatal (log + continue on failure).
 
 ---
 
@@ -166,11 +166,11 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 | `AGENTCORE_GATEWAY_URL` | MCP Gateway HTTPS endpoint |
 | `AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER` | Identity credential provider name (no secrets) |
 | `AGENTCORE_GATEWAY_OAUTH_SCOPES` | `agentcore/invoke` |
-| `AGENT_OBSERVABILITY_ENABLED` | `true` — enables OTEL instrumentation |
-| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `true` — captures LLM messages in traces |
+| `AGENT_OBSERVABILITY_ENABLED` | `true`, which enables OTEL instrumentation |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `true`, which captures LLM messages in traces |
 | `AGENT_MODEL_ID` | `global.anthropic.claude-sonnet-4-6` |
-| `FAST_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0` — used by Validation Agent (Phase 2) |
-| `AUTO_APPROVE_THRESHOLD` | `80` — confidence threshold for auto-approval |
+| `FAST_MODEL_ID` | `us.anthropic.claude-haiku-4-5-20251001-v1:0`, used by Validation Agent (Phase 2) |
+| `AUTO_APPROVE_THRESHOLD` | `80`, the confidence threshold for auto-approval |
 
 ### Lambda functions (set by CDK)
 | Variable | Lambda(s) | Value |
@@ -202,7 +202,7 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 ## Cedar Policies
 
 Two policies (in `agentcore/agentcore.json` under `policyEngines`) enforce authorization at the Gateway:
-- **AllowAllTools** — `permit(principal, action, resource is AgentCore::Gateway)`
-- **BlockExcessiveClaims** — `forbid` when `context.toolName == "create-claim"` and `context.input.estimated_amount >= 100000`
+- **AllowAllTools**: `permit(principal, action, resource is AgentCore::Gateway)`
+- **BlockExcessiveClaims**: `forbid` when `context.toolName == "create-claim"` and `context.input.estimated_amount >= 100000`
 
 Both use `IGNORE_ALL_FINDINGS` validation mode (required for the permit-all policy).

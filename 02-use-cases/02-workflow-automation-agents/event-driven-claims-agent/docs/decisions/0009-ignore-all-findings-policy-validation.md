@@ -15,7 +15,7 @@ Both Cedar policies use `validationMode: "IGNORE_ALL_FINDINGS"`.
 
 This mode is the right fit for a sample built around runtime-resolved policies:
 
-- The `AllowAllTools` policy (`permit(principal, action, resource is AgentCore::Gateway)`) is intentionally broad — it lets any authenticated agent call any tool on this gateway, the classic starting point for the "allow-all, then add targeted denies" pattern.
+- The `AllowAllTools` policy (`permit(principal, action, resource is AgentCore::Gateway)`) is intentionally broad: it lets any authenticated agent call any tool on this gateway, the classic starting point for the "allow-all, then add targeted denies" pattern.
 - The `BlockExcessiveClaims` policy reads `context.input.estimated_amount`, a value the agent supplies at invocation time.
 
 `IGNORE_ALL_FINDINGS` lets these intentional patterns deploy cleanly while the Policy Engine enforces both policies at runtime exactly as written. AgentCore still validates policy syntax in this mode, so genuine typos are caught at deploy.
@@ -27,4 +27,4 @@ This mode is the right fit for a sample built around runtime-resolved policies:
 
 ## Consequences
 
-The sample deploys with the broad allow-all pattern in place. As you add or tighten policies, move to `STRICT` mode with an entity schema for full static guarantees — a one-line change to each policy's `validationMode`.
+The sample deploys with the broad allow-all pattern in place. As you add or tighten policies, move to `STRICT` mode with an entity schema for full static guarantees, a one-line change to each policy's `validationMode`.

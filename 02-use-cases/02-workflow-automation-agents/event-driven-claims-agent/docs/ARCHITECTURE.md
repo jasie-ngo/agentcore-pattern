@@ -5,11 +5,11 @@
 The Event-Driven Claims Agent is an insurance claims processor built on Amazon Bedrock AgentCore. It accepts claim submissions via email (through S3/EventBridge) or direct API invocation, processes them through a dual-agent pipeline, and routes outcomes to auto-approval or human review.
 
 This document explains:
-- **Components** — what each piece does and how they connect
-- **Data flows** — how a claim moves from submission to resolution
-- **Authentication** — how services authenticate to each other (Cognito M2M, JWT)
-- **Tool architecture** — how the agent calls Lambda tools via the MCP Gateway
-- **Memory and evaluation** — how the system remembers and monitors quality
+- **Components**: what each piece does and how they connect
+- **Data flows**: how a claim moves from submission to resolution
+- **Authentication**: how services authenticate to each other (Cognito M2M, JWT)
+- **Tool architecture**: how the agent calls Lambda tools via the MCP Gateway
+- **Memory and evaluation**: how the system remembers and monitors quality
 
 ## Architecture Diagrams
 
@@ -33,11 +33,11 @@ This document explains:
 
 - **Build type:** Container (ARM64/Graviton, Python 3.12)
 - **Framework:** Strands Agents SDK
-- **Auth (inbound):** AWS_IAM (SigV4) — callers sign requests with AWS credentials (Lambda execution role or IAM user)
-- **Auth (outbound to Gateway):** Cognito M2M JWT via `@requires_access_token` decorator — secrets managed by AgentCore Identity vault (no env vars)
+- **Auth (inbound):** AWS_IAM (SigV4), where callers sign requests with AWS credentials (Lambda execution role or IAM user)
+- **Auth (outbound to Gateway):** Cognito M2M JWT via `@requires_access_token` decorator, with secrets managed by AgentCore Identity vault (no env vars)
 - **Entrypoint:** `app/claimsagent/main.py`
 - **Agents:** Two `Agent` instances (Claims Processor, Validation Agent), lazily initialized as module-level singletons
-- **Model (cost routing):** Claims Processor and Executor use `global.anthropic.claude-sonnet-4-6` (complex reasoning + tool use); Validation Agent uses `FAST_MODEL_ID` (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) — classification task with no external tools, ~5x cheaper and 3–8s faster
+- **Model (cost routing):** Claims Processor and Executor use `global.anthropic.claude-sonnet-4-6` (complex reasoning + tool use); Validation Agent uses `FAST_MODEL_ID` (`us.anthropic.claude-haiku-4-5-20251001-v1:0`), a classification task with no external tools, ~5x cheaper and 3–8s faster
 - **Co-located tools:** `submit_decision`, `submit_validation` (Strands `@tool` decorators for structured output)
 
 ### AgentCore Gateway
@@ -57,7 +57,7 @@ Two policies are enforced at the Gateway level:
 | `AllowAllTools` | permit | Any authenticated principal, any tool, on this gateway |
 | `BlockExcessiveClaims` | forbid | `create-claim` when `context.input.estimated_amount >= 100000` |
 
-Policy Engine operates in `ENFORCE` mode — blocked tool calls return an authorization error to the agent.
+Policy Engine operates in `ENFORCE` mode, so blocked tool calls return an authorization error to the agent.
 
 ### Lambda Tool Functions
 
@@ -66,11 +66,11 @@ Policy Engine operates in `ENFORCE` mode — blocked tool calls return an author
 | `lookup_policy` | `ClaimsAgent-PolicyLookup` | PoliciesTable (read) | Returns policy details or "not found" |
 | `create_claim` | `ClaimsAgent-CreateClaim` | ClaimsTable (write) | Agent passes `status` + `decision` |
 | `request_human_review` | `ClaimsAgent-HumanReview` | ReviewsTable (write) | Also publishes to SNS |
-| `send_notification` | `ClaimsAgent-Notification` | — | SES send email |
+| `send_notification` | `ClaimsAgent-Notification` | None | SES send email |
 | `list_pending_claims` | `ClaimsAgent-ListPending` | ClaimsTable (scan) | Filters `status=pending_review` |
 | `resolve_claim` | `ClaimsAgent-ResolveClaim` | ClaimsTable + ReviewsTable (update) | Human operator resolves |
 
-All handlers return `json.dumps({...})` directly — no HTTP envelope.
+All handlers return `json.dumps({...})` directly, with no HTTP envelope.
 
 ### Trigger Lambda
 
@@ -81,7 +81,7 @@ Handles the event-driven path from S3 → Runtime (fire-and-forget):
 4. Signs the request with SigV4 using the Lambda's execution role credentials (IAM auth)
 5. Invokes the Runtime via HTTPS POST to `/runtimes/{arn}/invocations`
 6. Confirms HTTP 200 and reads first few lines to verify the agent started streaming
-7. Closes the connection immediately — does NOT wait for the full response
+7. Closes the connection immediately, without waiting for the full response
 
 The agent processes the claim asynchronously after the Lambda returns. Results are written to DynamoDB by the agent's tool calls (`create_claim`, `request_human_review`, `send_notification`), not returned to this Lambda.
 
@@ -176,7 +176,7 @@ Both agents MUST call their respective structured-output tools (`submit_decision
 
 ### Phase 3: Deterministic Execution
 
-Phase 3 does **not** use an LLM call. Once routing is resolved (REJECT / AUTO_APPROVE / HUMAN_REVIEW), the execution is deterministic — we have all required data from the structured output tools and call Gateway tools directly via `MCPClient.call_tool_async()`. This eliminates one Sonnet invocation (~6–16s and ~$0.01 per request).
+Phase 3 does **not** use an LLM call. Once routing is resolved (REJECT / AUTO_APPROVE / HUMAN_REVIEW), the execution is deterministic: we have all required data from the structured output tools and call Gateway tools directly via `MCPClient.call_tool_async()`. This eliminates one Sonnet invocation (~6–16s and ~$0.01 per request).
 
 All Phase 3 tool calls are non-fatal: if any fails, the agent logs a warning and continues. The primary response stream is never interrupted by secondary action failures.
 
@@ -184,8 +184,8 @@ All Phase 3 tool calls are non-fatal: if any fails, the agent logs a warning and
 
 ## Memory Strategy
 
-- **SEMANTIC** — stores and retrieves facts about claims and policies across sessions
-- **SUMMARIZATION** — compresses session history for repeat claimants
+- **SEMANTIC**: stores and retrieves facts about claims and policies across sessions
+- **SUMMARIZATION**: compresses session history for repeat claimants
 - Expiration: 90 days
 - Graceful degradation: if Memory is not deployed or throws `ResourceNotFoundException`, the agent continues without memory (no crash)
 

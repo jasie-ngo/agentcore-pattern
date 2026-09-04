@@ -33,3 +33,8 @@ build/
 # Editor / OS
 .idea/
 *.swp
+
+docs/
+
+# Subagent-driven-development scratch workspace (ledgers, briefs, review packages)
+.superpowers/

@@ -17,7 +17,7 @@ AgentCore Runtime supports both modes so you can pick the best fit per workload.
 
 ## Alternatives Considered
 
-**CodeZip** is a great fit for lightweight, fast-iterating agents — it skips the image build for the quickest path to deploy. Container is the better match here precisely because this sample leans on a longer, multi-step pipeline and a controlled dependency set.
+**CodeZip** is a great fit for lightweight, fast-iterating agents, since it skips the image build for the quickest path to deploy. Container is the better match here precisely because this sample leans on a longer, multi-step pipeline and a controlled dependency set.
 
 ## Consequences
 

@@ -3,7 +3,7 @@
 Reuses the existing `Policies` table (PK `policy_number` = member number). Send test emails **from the member's email** and reference the **member number** (e.g. "member number 60010001") so AI-003 verifies them.
 
 
-## BDBN — Death Benefit / Binding Death Benefit Nomination
+## BDBN: Death Benefit / Binding Death Benefit Nomination
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -13,7 +13,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60010004 | David Okafor | david.okafor@example.com | super_accumulation | active | 1982-01-30 | $62,300 | nomination_type=binding_lapsing, nomination_expiry=2024-05-01, beneficiaries=[{'name': 'Ad… |
 | 60010005 | Mei Lin | mei.lin@example.net | transition_to_retirement | active | 1963-09-15 | $298,000 | nomination_type=binding, beneficiaries=[{'name': 'Estate', 'relationship': 'legal_personal… |
 
-## BP — Withdrawal / Benefit Payment
+## BP: Withdrawal / Benefit Payment
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -23,7 +23,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60020004 | Susan Beckett | susan.beckett@example.com | income_stream | inactive | 1957-12-01 | $88,000 | preservation_age_reached=True, condition_of_release=retired |
 | 60020005 | Grace Mbeki | grace.mbeki@example.net | super_accumulation | active | 1968-06-14 | $133,000 | preservation_age_reached=True, pending_withdrawal=True |
 
-## COD — Change of Personal Details
+## COD: Change of Personal Details
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -33,7 +33,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60030004 | Chloe Martin | chloe.martin@example.com | super_accumulation | active | 1995-03-08 | $39,000 | mol_access=False, mobile_update_needed=True |
 | 60030005 | Hassan Ali | hassan.ali@example.net | super_accumulation | active | 1974-11-22 | $92,000 | email_change_requested=True |
 
-## DASP — Departing Australia Superannuation Payment
+## DASP: Departing Australia Superannuation Payment
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -43,7 +43,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60040004 | Liam O'Brien | liam.obrien@example.com | super_accumulation | active | 1990-12-19 | $34,000 | residency_status=temporary_resident, country_of_residence=New Zealand, kiwisaver_transfer_… |
 | 60040005 | Priya Sharma | priya.sharma@example.in | super_accumulation | closed | 1997-04-02 | $9,800 | residency_status=temporary_resident, country_of_residence=India, dasp_paid=True |
 
-## FH — Financial Hardship
+## FH: Financial Hardship
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -53,7 +53,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60050004 | Fatima Noor | fatima.noor@example.com | super_accumulation | active | 1991-11-27 | $7,300 | hardship_eligible=True, document_upload_pending=True |
 | 60050005 | Craig Stewart | craig.stewart@example.net | super_accumulation | active | 1987-03-17 | $5,100 | hardship_eligible=True, on_income_support=True |
 
-## FLS — Family Law Split
+## FLS: Family Law Split
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -63,7 +63,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60060004 | Andrew Blackwood | andrew.blackwood@example.com | super_accumulation | active | 1978-07-24 | $87,000 | family_law_flag=True, procedural_fairness_stage=True |
 | 60060005 | Hannah Whitlock | hannah.whitlock@example.net | super_accumulation | active | 1983-12-11 | $199,000 | family_law_flag=True, family_law_status=information_requested |
 
-## NOI — Notice of Intent to Claim a Tax Deduction
+## NOI: Notice of Intent to Claim a Tax Deduction
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|
@@ -73,7 +73,7 @@ Reuses the existing `Policies` table (PK `policy_number` = member number). Send 
 | 60070004 | Karen Mitchell | karen.mitchell@example.com | super_accumulation | active | 1970-06-16 | $73,000 | personal_contributions_fy=10000, noi_lodged=True, noi_received_date=2026-05-28 |
 | 60070005 | Simon Clarke | simon.clarke@example.net | super_accumulation | active | 1989-09-02 | $55,000 | personal_contributions_fy=8000, noi_submission_issue=True |
 
-## RTC — Rollover / Transfer / Combine Accounts
+## RTC: Rollover / Transfer / Combine Accounts
 
 | Member # | Name | Email | Product | Status | DOB | Balance | Scenario notes |
 |---|---|---|---|---|---|---|---|

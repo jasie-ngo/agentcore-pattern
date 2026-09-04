@@ -11,15 +11,15 @@ An earlier version of this sample injected the secret directly as a Runtime envi
 
 ## Decision
 
-Register the Cognito client secret in the **AgentCore Identity token vault** using `agentcore add credential`. At runtime, the `@requires_access_token` decorator fetches tokens from the vault — no secret appears in env vars, CDK templates, or code.
+Register the Cognito client secret in the **AgentCore Identity token vault** using `agentcore add credential`. At runtime, the `@requires_access_token` decorator fetches tokens from the vault, so no secret appears in env vars, CDK templates, or code.
 
 ## Reasoning
 
 AgentCore Identity is the purpose-built credential management service for agents. Using it:
-- **Eliminates secret exposure** — the client secret lives only in the Secrets Manager-backed token vault, not in CloudFormation or environment variables
-- **Demonstrates the production pattern** — `@requires_access_token` is the recommended decorator for Gateway auth, and using Identity shows the full intended workflow
-- **Handles token lifecycle** — Identity manages token acquisition, caching, and refresh automatically
-- **Stays educational** — the `agentcore add credential` CLI command is one line in the deploy script, keeping the sample approachable
+- **Eliminates secret exposure**: the client secret lives only in the Secrets Manager-backed token vault, not in CloudFormation or environment variables
+- **Demonstrates the production pattern**: `@requires_access_token` is the recommended decorator for Gateway auth, and using Identity shows the full intended workflow
+- **Handles token lifecycle**: Identity manages token acquisition, caching, and refresh automatically
+- **Stays educational**: the `agentcore add credential` CLI command is one line in the deploy script, keeping the sample approachable
 
 ## Alternatives Considered
 
@@ -30,7 +30,7 @@ AgentCore Identity is the purpose-built credential management service for agents
 ## Consequences
 
 - `deploy.sh` runs `agentcore add credential --name cognito-gateway-m2m --type oauth ...` to register the secret once.
-- The Runtime receives only the **credential provider name** (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER=cognito-gateway-m2m`) as an env var — never the secret itself.
+- The Runtime receives only the **credential provider name** (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER=cognito-gateway-m2m`) as an env var, never the secret itself.
 - The `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` decorator handles the full token lifecycle.
 - The Runtime's IAM role needs `bedrock-agentcore:GetResourceOauth2Token` and `secretsmanager:GetSecretValue` permissions on the token vault resources (granted by CDK).
 - If the Cognito pool is deleted and recreated, `agentcore add credential` must be re-run (the deploy script handles this idempotently).

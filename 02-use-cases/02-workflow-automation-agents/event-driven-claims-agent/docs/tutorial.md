@@ -30,11 +30,11 @@ The Gateway enforces Cedar policies before each tool call. If `create_claim` rec
 
 ## Experiment 1: Change the Confidence Threshold
 
-The simplest modification — change when claims are auto-approved vs. sent to human review. The threshold is a runtime configuration variable, so **no code change is needed**.
+The simplest modification: change when claims are auto-approved vs. sent to human review. The threshold is a runtime configuration variable, so **no code change is needed**.
 
 **Current behavior:** Claims with confidence ≥ 80 are auto-approved.
 
-**Goal:** Make the agent more conservative — require confidence ≥ 90 for auto-approval.
+**Goal:** Make the agent more conservative by requiring confidence ≥ 90 for auto-approval.
 
 ### Steps
 
@@ -55,7 +55,7 @@ The simplest modification — change when claims are auto-approved vs. sent to h
    agentcore deploy --target dev --yes
    ```
 
-4. Test — with the stricter threshold, borderline claims route to human review:
+4. Test the change. With the stricter threshold, borderline claims route to human review:
    ```bash
    python3 scripts/test_invoke.py --region us-west-2 \
      --prompt 'Policy POL-12345. Minor scratch on bumper. $500 repair.'
@@ -69,7 +69,7 @@ The simplest modification — change when claims are auto-approved vs. sent to h
 
 ## Experiment 2: Add a Cedar Policy
 
-Cedar policies enforce rules at the Gateway level — the agent cannot bypass them even if it wants to. Let's add a policy that blocks claims on inactive policies.
+Cedar policies enforce rules at the Gateway level, so the agent cannot bypass them even if it wants to. Let's add a policy that blocks claims on inactive policies.
 
 ### Steps
 
@@ -84,7 +84,7 @@ Cedar policies enforce rules at the Gateway level — the agent cannot bypass th
      --validation-mode IGNORE_ALL_FINDINGS
    ```
 
-   This updates `agentcore/agentcore.json` automatically — no hand-editing needed.
+   This updates `agentcore/agentcore.json` automatically, so no hand-editing is needed.
 
    > **Tip:** You can also generate policies from natural language using `--generate`:
    > ```bash
@@ -106,7 +106,7 @@ Cedar policies enforce rules at the Gateway level — the agent cannot bypass th
 
 > **Note:** This policy only works if the agent passes `policy_status` as an input to `create_claim`. You'd need to update the tool schema in `lambdas/schemas/create_claim.json` to accept this field and update the Lambda handler to include it. This demonstrates how Cedar policies, tool schemas, and Lambda logic need to stay in sync.
 
-**What you learned:** The `agentcore add policy` command is the standard way to add Cedar policies — it validates the engine name, writes the correct JSON structure, and avoids manual editing mistakes. Cedar policies are enforced at the Gateway before the Lambda runs — the agent gets an authorization error if a policy denies the call. Use `IGNORE_ALL_FINDINGS` validation mode for policies that reference runtime context values.
+**What you learned:** The `agentcore add policy` command is the standard way to add Cedar policies: it validates the engine name, writes the correct JSON structure, and avoids manual editing mistakes. Cedar policies are enforced at the Gateway before the Lambda runs, so the agent gets an authorization error if a policy denies the call. Use `IGNORE_ALL_FINDINGS` validation mode for policies that reference runtime context values.
 
 ---
 
@@ -119,11 +119,11 @@ python3 scripts/test_invoke.py --region us-west-2 \
   --prompt 'File a claim for POL-67890. Major house fire. $150,000 damage.'
 ```
 
-Watch the output — you'll see:
+Watch the output; you'll see:
 1. Phase 1 evaluates the claim and decides ACCEPT (policy has $250k coverage, fire is covered)
 2. Phase 2 assigns a confidence score
 3. Phase 3 tries to call `create_claim` with `estimated_amount: 150000`
-4. The Gateway **denies** the call — Cedar policy returns an authorization error
+4. The Gateway **denies** the call, since the Cedar policy returns an authorization error
 5. The agent adapts and routes to human review instead
 
 This shows Cedar acting as a guardrail that the agent cannot override, even though its logic says the claim should be approved.
@@ -249,13 +249,13 @@ agentcore validate
 agentcore deploy --target dev --yes
 ```
 
-**What you learned:** Adding a tool requires four coordinated changes: Lambda handler, JSON schema, CDK infrastructure, and Gateway target registration. The CLI commands (`agentcore add gateway-target`) handle the `agentcore.json` changes — you just provide the target name, gateway, and schema file. CDK handles creating the Lambda and wiring its ARN. The agent discovers the tool automatically via semantic search (because `enableSemanticSearch: true` is configured on the Gateway).
+**What you learned:** Adding a tool requires four coordinated changes: Lambda handler, JSON schema, CDK infrastructure, and Gateway target registration. The CLI commands (`agentcore add gateway-target`) handle the `agentcore.json` changes, so you just provide the target name, gateway, and schema file. CDK handles creating the Lambda and wiring its ARN. The agent discovers the tool automatically via semantic search (because `enableSemanticSearch: true` is configured on the Gateway).
 
 ---
 
 ## Adapt to a Different Domain
 
-The insurance domain is just one example. Here's how to adapt this sample to a different use case — say, **loan application processing**.
+The insurance domain is just one example. Here's how to adapt this sample to a different use case, such as **loan application processing**.
 
 ### What to change
 
@@ -289,17 +289,17 @@ Before touching any code, review what's configurable via environment variables a
 
 ### Steps
 
-1. **Tune configuration first** — set `AUTO_APPROVE_THRESHOLD`, model IDs, and memory tuning in `.env` for your domain's needs.
+1. **Tune configuration first**: set `AUTO_APPROVE_THRESHOLD`, model IDs, and memory tuning in `.env` for your domain's needs.
 
-2. **Update agent prompts** in `app/claimsagent/main.py` — rewrite `PROCESSOR_PROMPT` and `VALIDATOR_PROMPT` for your domain. Keep the same output format (DECISION/CONFIDENCE/ROUTING) so the routing logic still works.
+2. **Update agent prompts** in `app/claimsagent/main.py`: rewrite `PROCESSOR_PROMPT` and `VALIDATOR_PROMPT` for your domain. Keep the same output format (DECISION/CONFIDENCE/ROUTING) so the routing logic still works.
 
-3. **Update DynamoDB tables** in `agentcore/cdk/lib/infra-construct.ts` — change table names, partition keys, and sort keys for your data model.
+3. **Update DynamoDB tables** in `agentcore/cdk/lib/infra-construct.ts`: change table names, partition keys, and sort keys for your data model.
 
-4. **Rewrite Lambda handlers** in `lambdas/` — each tool becomes domain-specific. Keep the same interface pattern (receive JSON params, return `json.dumps({...})`).
+4. **Rewrite Lambda handlers** in `lambdas/`: each tool becomes domain-specific. Keep the same interface pattern (receive JSON params, return `json.dumps({...})`).
 
-5. **Update tool schemas** in `lambdas/schemas/` — change property names, descriptions, and required fields.
+5. **Update tool schemas** in `lambdas/schemas/`: change property names, descriptions, and required fields.
 
-6. **Update Cedar policies** — use `agentcore add policy` to add domain-specific authorization rules:
+6. **Update Cedar policies**: use `agentcore add policy` to add domain-specific authorization rules:
    ```bash
    agentcore add policy \
      --name BlockHighRiskLoans \
@@ -308,9 +308,9 @@ Before touching any code, review what's configurable via environment variables a
      --validation-mode IGNORE_ALL_FINDINGS
    ```
 
-7. **Update seed data** in `scripts/seed_dynamodb.py` — populate with test records for your domain.
+7. **Update seed data** in `scripts/seed_dynamodb.py`: populate with test records for your domain.
 
-8. **Update tests** in `scripts/test_e2e.py` — write scenarios that exercise your domain's routing paths.
+8. **Update tests** in `scripts/test_e2e.py`: write scenarios that exercise your domain's routing paths.
 
 **What you learned:** The architecture is domain-agnostic. The dual-agent pattern, event-driven trigger, Gateway + Cedar enforcement, cost routing, and confidence-based routing all transfer directly. Start with configuration (env vars), then modify prompts, then tools and schemas. Only the domain-specific logic needs rewriting.
 
@@ -331,7 +331,7 @@ You don't need to redeploy for every code change. Here's how to iterate locally:
 | Cognito auth | **Cloud** (needs deployed stack) | Cloud |
 | Cedar policies | **Cloud** (enforced at Gateway) | Cloud |
 
-**Key insight:** Local dev still calls cloud resources for tools and auth. You're running only the agent logic locally — everything else is the deployed stack.
+**Key insight:** Local dev still calls cloud resources for tools and auth. You're running only the agent logic locally; everything else is the deployed stack.
 
 ### Setup
 
@@ -381,7 +381,7 @@ The fastest feedback loop for prompt engineering:
 5. Repeat until satisfied
 6. Deploy: `agentcore deploy --target dev --yes`
 
-No container rebuild needed during local dev — only when you deploy.
+No container rebuild is needed during local dev, only when you deploy.
 
 ---
 
@@ -389,6 +389,6 @@ No container rebuild needed during local dev — only when you deploy.
 
 - Read [docs/ARCHITECTURE.md](ARCHITECTURE.md) for the full component breakdown and data flow diagrams
 - Browse the [decision records](decisions/README.md) to understand why each architectural choice was made
-- Check [docs/CONFIGURATION.md](CONFIGURATION.md) for every configurable parameter — start here before modifying code
-- Look at `app/claimsagent/main.py` — the entire agent logic is in one file (~200 lines of orchestration code)
-- Review `app/claimsagent/config.py` — the single source of truth for all environment-driven configuration
+- Check [docs/CONFIGURATION.md](CONFIGURATION.md) for every configurable parameter; start here before modifying code
+- Look at `app/claimsagent/main.py`: the entire agent logic is in one file (~200 lines of orchestration code)
+- Review `app/claimsagent/config.py`: the single source of truth for all environment-driven configuration

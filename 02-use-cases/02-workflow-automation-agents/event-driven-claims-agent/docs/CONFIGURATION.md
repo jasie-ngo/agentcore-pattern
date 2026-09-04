@@ -1,6 +1,6 @@
 # Configuration Reference
 
-AgentCore resources are declared in `agentcore/agentcore.json`; supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`. The deployed CloudFormation stack is named **`AgentCore-ClaimsAgent-dev`**. None of these are required to change for a basic deploy — defaults work out of the box.
+AgentCore resources are declared in `agentcore/agentcore.json`; supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`. The deployed CloudFormation stack is named **`AgentCore-ClaimsAgent-dev`**. None of these are required to change for a basic deploy, since defaults work out of the box.
 
 ## Deploy-time Parameters
 
@@ -9,7 +9,7 @@ AgentCore resources are declared in `agentcore/agentcore.json`; supplementary AW
 | `SENDER_EMAIL` | `export SENDER_EMAIL=...` before deploy | `noreply@example.com` | SES verified sender for notifications. `infra-construct.ts` reads `process.env.SENDER_EMAIL` at synth. Must be SES-verified or emails are logged as drafts, not sent. |
 | Region | `./deploy.sh <region>` | `us-west-2` | Sets `AWS_REGION`/`CDK_DEFAULT_REGION`. |
 | Model | `AGENT_MODEL_ID` runtime env | `global.anthropic.claude-sonnet-4-6` | Primary model for Claims Processor (Phase 1) and Executor (Phase 3). |
-| Fast model | `FAST_MODEL_ID` runtime env | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Fast/cheap model for the Validation Agent (Phase 2). Classification task — no tool use needed. |
+| Fast model | `FAST_MODEL_ID` runtime env | `us.anthropic.claude-haiku-4-5-20251001-v1:0` | Fast/cheap model for the Validation Agent (Phase 2). Classification task, requiring no tool use. |
 | Auto-approve threshold | `AUTO_APPROVE_THRESHOLD` runtime env | `80` | Confidence score (0-100) at or above which claims are auto-approved. |
 | Memory top_k | `MEMORY_RETRIEVAL_TOP_K` runtime env | `5` | Number of prior facts/sessions retrieved per invocation. |
 | Memory relevance | `MEMORY_RETRIEVAL_RELEVANCE` runtime env | `0.5` | Minimum relevance score (0.0-1.0) for memory results. |
@@ -166,7 +166,7 @@ Then `agentcore validate && agentcore deploy --target dev --yes`.
 
 ### Policy Engine Mode
 
-The gateway references the policy engine via `policyEngineConfiguration.mode` (set to `ENFORCE` in `agentcore.json`). In `ENFORCE` mode, Cedar denials block the tool call before it runs. Switch `mode` to `MONITOR` to observe and log policy decisions without blocking — handy while authoring new policies.
+The gateway references the policy engine via `policyEngineConfiguration.mode` (set to `ENFORCE` in `agentcore.json`). In `ENFORCE` mode, Cedar denials block the tool call before it runs. Switch `mode` to `MONITOR` to observe and log policy decisions without blocking, which is handy while authoring new policies.
 
 ---
 
@@ -174,11 +174,11 @@ The gateway references the policy engine via `policyEngineConfiguration.mode` (s
 
 Cognito is used **exclusively for Runtime → MCP Gateway authentication**. The Runtime uses the `@requires_access_token` decorator to obtain tokens from the AgentCore Identity vault (no secrets in env vars).
 
-Cognito is managed **outside CDK** — created by `scripts/setup_cognito.sh` (runs during `deploy.sh` if needed) and destroyed by `scripts/teardown_cognito.sh` (runs during `scripts/destroy.sh` if script-created).
+Cognito is managed **outside CDK**: created by `scripts/setup_cognito.sh` (runs during `deploy.sh` if needed) and destroyed by `scripts/teardown_cognito.sh` (runs during `scripts/destroy.sh` if script-created).
 
 A `.cognito-state.json` file tracks whether the script created the User Pool, so teardown only deletes what the script created (preserves manually-created pools).
 
-Callers of the Runtime (Trigger Lambda, test scripts) use **AWS_IAM (SigV4)** authentication instead — they do NOT need Cognito tokens.
+Callers of the Runtime (Trigger Lambda, test scripts) use **AWS_IAM (SigV4)** authentication instead, so they do NOT need Cognito tokens.
 
 ### User Pool: Script-Managed
 
@@ -225,7 +225,7 @@ agentcore add credential \
   --scopes "agentcore/invoke"
 ```
 
-The Runtime references this credential provider by name (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER=cognito-gateway-m2m`) — no secrets in CloudFormation or env vars.
+The Runtime references this credential provider by name (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER=cognito-gateway-m2m`), so no secrets live in CloudFormation or env vars.
 
 ---
 
@@ -274,9 +274,9 @@ This scopes permissions to identities in the deploying account, not `*`.
 
 Full observability is enabled automatically by `deploy.sh` via `scripts/enable_observability.py`:
 
-1. **CloudWatch Transaction Search** — enabled for the account/region
-2. **TRACES delivery** — creates CloudWatch Log deliveries for Gateway and Memory traces
-3. **LOGS delivery** — creates CloudWatch Log deliveries for Gateway and Memory application logs
+1. **CloudWatch Transaction Search**: enabled for the account/region
+2. **TRACES delivery**: creates CloudWatch Log deliveries for Gateway and Memory traces
+3. **LOGS delivery**: creates CloudWatch Log deliveries for Gateway and Memory application logs
 
 These are automatically cleaned up by `scripts/destroy.sh` via `scripts/disable_observability.py`.
 
@@ -293,7 +293,7 @@ The Runtime's `agentcore.json` includes environment variables:
 | `AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER` | `cognito-gateway-m2m` | Identity credential provider name |
 | `AGENTCORE_GATEWAY_OAUTH_SCOPES` | `agentcore/invoke` | OAuth scopes for Gateway auth |
 
-The following OTEL variables are **auto-configured** by the Runtime when `instrumentation.enableOtel: true` is set — you do not need to set them manually:
+The following OTEL variables are **auto-configured** by the Runtime when `instrumentation.enableOtel: true` is set, so you do not need to set them manually:
 - `_AWS_XRAY_DAEMON_ADDRESS`
 - `_AWS_XRAY_TRACING_ENABLED`
 - `OTEL_METRICS_EXPORTER`
@@ -383,7 +383,7 @@ Memory is declared in `agentcore/agentcore.json` under `memories`:
 
 ### Disabling Memory
 
-Remove the `memories` entry (or unset `MEMORY_ID`). The Runtime degrades gracefully — `app/claimsagent/memory/session.py` returns `None` when `MEMORY_ID` is unset, and `main.py` wraps the session manager in try/except.
+Remove the `memories` entry (or unset `MEMORY_ID`). The Runtime degrades gracefully: `app/claimsagent/memory/session.py` returns `None` when `MEMORY_ID` is unset, and `main.py` wraps the session manager in try/except.
 
 ---
 
@@ -407,7 +407,7 @@ A custom LLM-as-judge evaluator (`ClaimsQualityEvaluator`) is also declared unde
 |---------|-------|-------|
 | Sampling | 100% | Every invocation is evaluated. Reduce for cost savings in production. |
 | Built-in metrics | 3 | Helpfulness, Correctness, Tool Selection Accuracy |
-| Custom evaluator | LLM-as-judge | Defined separately (`ClaimsQualityEvaluator`). Use for on-demand evaluation only — requires reference inputs not available online. |
+| Custom evaluator | LLM-as-judge | Defined separately (`ClaimsQualityEvaluator`). Use for on-demand evaluation only, since it requires reference inputs not available online. |
 
 ### Valid Built-in Evaluator IDs
 
@@ -418,7 +418,7 @@ A custom LLM-as-judge evaluator (`ClaimsQualityEvaluator`) is also declared unde
 | `TOOL_SELECTION_ACCURACY` | Whether the right tools were chosen at the right time |
 | `GOAL_SUCCESS_RATE` | Whether the agent achieved its stated goal |
 
-**Tip:** Use the exact IDs above — the tool-selection metric is `ToolSelectionAccuracy`.
+**Tip:** Use the exact IDs above; the tool-selection metric is `ToolSelectionAccuracy`.
 
 ### Prerequisites
 

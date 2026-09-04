@@ -12,7 +12,7 @@ Without externalized configuration, several operational parameters would be hard
 - SNS topic name, S3 inbox prefix, destroy-on-delete behavior
 - Memory retrieval parameters (`top_k`, `relevance_score`)
 
-This made it impossible to tune behavior per-deployment without code changes. For a reference sample, users should be able to customize the agent for their domain by changing environment variables alone — before needing to touch code.
+This made it impossible to tune behavior per-deployment without code changes. For a reference sample, users should be able to customize the agent for their domain by changing environment variables alone, before needing to touch code.
 
 ## Decision
 
@@ -37,10 +37,10 @@ Externalize all operational knobs to environment variables read via `config.py` 
 
 ## Reasoning
 
-1. **Configuration-first customization** — users can adapt behavior without understanding the code. Lower barrier to "make it your own".
-2. **Per-environment tuning** — dev vs. staging vs. production can have different thresholds without code branches.
-3. **Cost routing** — `FAST_MODEL_ID` enables significant cost savings (Haiku is ~10x cheaper than Sonnet) for low-stakes claims without sacrificing quality on complex ones.
-4. **Safe defaults** — every variable has a sensible default matching the sample's standard behavior. Deploying without overriding any variable produces the documented default behavior.
+1. **Configuration-first customization**: users can adapt behavior without understanding the code. Lower barrier to "make it your own".
+2. **Per-environment tuning**: dev vs. staging vs. production can have different thresholds without code branches.
+3. **Cost routing**: `FAST_MODEL_ID` enables significant cost savings (Haiku is ~10x cheaper than Sonnet) for low-stakes claims without sacrificing quality on complex ones.
+4. **Safe defaults**: every variable has a sensible default matching the sample's standard behavior. Deploying without overriding any variable produces the documented default behavior.
 
 ## Alternatives Considered
 
@@ -56,6 +56,6 @@ Externalize all operational knobs to environment variables read via `config.py` 
 ## Consequences
 
 - **Positive:** Users can customize the sample by editing `.env` alone. Tutorial and documentation reference env vars as the primary customization mechanism.
-- **Positive:** `config.py` becomes the single source of truth for all runtime configuration — easy to audit.
+- **Positive:** `config.py` becomes the single source of truth for all runtime configuration, making it easy to audit.
 - **Negative:** More env vars to document. Mitigated by `.env.example` with descriptions and the CONFIGURATION.md reference.
 - **Watch:** If the number of env vars grows past ~20, consider grouping into a config file loaded at startup. Currently at 12 (manageable).

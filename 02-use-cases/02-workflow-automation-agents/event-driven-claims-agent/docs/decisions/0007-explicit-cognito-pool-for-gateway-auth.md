@@ -5,7 +5,7 @@
 
 ## Context
 
-AgentCore is flexible about identity: the Gateway can provision a Cognito pool for you, or you can bring your own. This sample needs M2M (`client_credentials`) auth in two places — callers reaching the Runtime, and the Runtime reaching the Gateway — so it's a good opportunity to show a clean, unified identity setup.
+AgentCore is flexible about identity: the Gateway can provision a Cognito pool for you, or you can bring your own. This sample needs M2M (`client_credentials`) auth in two places, callers reaching the Runtime, and the Runtime reaching the Gateway, so it's a good opportunity to show a clean, unified identity setup.
 
 ## Decision
 
@@ -16,10 +16,10 @@ Create one explicit `cognito.UserPool` in the infra construct and use it for bot
 Sharing one pool gives the sample a single, easy-to-follow identity model:
 
 - **One M2M client, one token.** The same `client_credentials` token works for both hops, so the auth flow is easy to trace end to end.
-- **Fewer moving parts.** One user pool, one resource server, one app client — less to reason about when learning the pattern.
+- **Fewer moving parts.** One user pool, one resource server, one app client, so there's less to reason about when learning the pattern.
 - **Full control.** Defining the pool explicitly lets the sample wire its client ID into the Gateway authorizer (`allowedClients`) and inject the same credentials into the Runtime, all from one place in `infra-construct.ts`.
 
-This showcases that AgentCore Gateway accepts any standards-compliant OIDC provider via its JWT authorizer — you're free to plug in your organization's existing identity provider the same way.
+This showcases that AgentCore Gateway accepts any standards-compliant OIDC provider via its JWT authorizer, so you're free to plug in your organisation's existing identity provider the same way.
 
 ## Alternatives Considered
 

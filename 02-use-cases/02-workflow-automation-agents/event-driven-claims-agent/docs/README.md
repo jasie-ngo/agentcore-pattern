@@ -1,4 +1,4 @@
-# Event-Driven Claims Agent — Documentation
+# Event-Driven Claims Agent: Documentation
 
 The Event-Driven Claims Agent is an insurance claims processor built on Amazon Bedrock AgentCore. It demonstrates a dual-agent architecture where a Claims Processor evaluates submissions, a Validation Agent reviews decisions, and the system routes outcomes to auto-approval or human review based on confidence scoring.
 

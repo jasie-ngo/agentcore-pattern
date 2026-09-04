@@ -3,7 +3,7 @@
 > [!IMPORTANT]
 > The examples provided in this repository are for experimental and educational purposes only. They demonstrate concepts and techniques but are not intended for direct use in production environments.
 
-An event-driven insurance claims processing system built on **Amazon Bedrock AgentCore**. Claims arrive via email, are processed by a dual-agent architecture (Claims Processor + Validation Agent), and are automatically routed based on confidence scoring — all deployed with a single command.
+An event-driven insurance claims processing system built on **Amazon Bedrock AgentCore**. Claims arrive via email, are processed by a dual-agent architecture (Claims Processor + Validation Agent), and are automatically routed based on confidence scoring, all deployed with a single command.
 
 | | |
 |---|---|
@@ -18,11 +18,11 @@ This sample teaches you how to build a production-realistic agent system on Agen
 
 | Concept | What it demonstrates |
 |---------|---------------------|
-| **Dual-agent orchestration** | Two Strands agents in sequence — a Claims Processor makes a decision, then a Validation Agent independently reviews it to reduce bias |
+| **Dual-agent orchestration** | Two Strands agents in sequence: a Claims Processor makes a decision, then a Validation Agent independently reviews it to reduce bias |
 | **Event-driven triggers** | S3 → EventBridge → Lambda → AgentCore Runtime pipeline for asynchronous processing |
 | **MCP Gateway + Lambda tools** | Tools deployed as Lambda functions behind the Model Context Protocol Gateway, discoverable via semantic search |
 | **Cedar policy enforcement** | A Policy Engine that blocks tool calls at runtime (e.g., claims ≥$100k are denied before execution) |
-| **AgentCore Identity for auth** | `@requires_access_token` decorator manages OAuth tokens via Identity vault — no secrets in env vars |
+| **AgentCore Identity for auth** | `@requires_access_token` decorator manages OAuth tokens via Identity vault; no secrets in env vars |
 | **Agent memory** | SEMANTIC + SUMMARIZATION strategies for cross-session recall of repeat claimants |
 | **Online evaluation** | Built-in quality metrics (Helpfulness, Correctness, Tool Selection Accuracy) running on every invocation |
 | **Full observability automation** | CloudWatch Transaction Search + TRACES/LOGS delivery for Gateway/Memory enabled via scripts |
@@ -43,6 +43,61 @@ The system has three layers:
 </details>
 
 See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full component diagrams, data flows, and details.
+
+## What's New: Config-Driven Agent Fabric
+
+`app/hesta-claimsagent` (the HESTA member-email pilot, and what `agentcore.json` currently
+deploys as the `hestaclaimsagent` runtime) no longer hard-codes its pipeline in Python. The
+UNDERSTAND → DECIDE → EXECUTE flow is now a declarative graph made up of `agents:` (named, reusable
+agent definitions: model, guardrails) + `workflow:` (a node/edge graph), loaded from
+`app/hesta-claimsagent/workflows/hesta.workflow.yaml` and executed by a small "agent fabric"
+package. Agent prompts and business logic are unchanged; only the orchestration layer moved
+out of code and into config.
+
+| File | Responsibility |
+|------|----------------|
+| `app/hesta-claimsagent/fabric/schema.py` | Config dataclasses + validation, including a compliance gate: any agent identified as member-facing (`writer`, `reviewer_editor`, or tagged `role: member_facing_writer`) must have a Bedrock Guardrail attached (`guarded: true`), enforced whether or not the config remembers to say so |
+| `app/hesta-claimsagent/fabric/registry.py` | Binds the loaded config at cold start; each agent resolves its own model/guardrail overrides via `registry.spec_for(name)`, falling back to safe defaults if unbound |
+| `app/hesta-claimsagent/fabric/loader.py` | Parses and validates the YAML into a `FabricConfig` |
+| `app/hesta-claimsagent/fabric/adapters.py` / `fabric/routers.py` | Glue between graph nodes/edges and the existing agent/deterministic Python functions; no agent logic changed |
+| `app/hesta-claimsagent/fabric/executor.py` | `GraphExecutor`: runs the graph in topological waves (independent nodes run concurrently; this workflow is a strict chain today, for deterministic streaming order) |
+| `scripts/validate_fabric_config.py` | CI/CD gate: fails a deploy if a workflow YAML has an unguarded member-facing agent, or a node/edge that references an implementation or router nothing registers |
+
+This also closed a real pre-existing gap: previously only the Writer agent had a guardrail
+attached; the Reviewer & Editor agent, which also produces member-facing text, did not.
+Both are guarded by default now.
+
+To add a new deterministic step or agent to the pipeline: register it once in
+`fabric/adapters.py` (and `fabric/routers.py` if it gates an edge), then reference it from
+`workflows/hesta.workflow.yaml`. No changes to `main.py` are needed.
+
+**Out of scope for this round** (tracked as follow-on work): resuming a paused workflow
+after a human approval via Step Functions, per-client AgentCore Memory isolation, and
+multi-client workflow configs with tenant-isolated Cedar policies.
+
+### Spin up the HESTA agent locally
+
+```bash
+cd app/hesta-claimsagent
+source .venv/bin/activate      # created by the AgentCore CLI when the project was configured
+agentcore dev                  # starts a local server on 0.0.0.0:8080
+```
+
+In a second terminal:
+
+```bash
+agentcore invoke --dev "Hi, I haven't heard back about my withdrawal request."
+```
+
+Before deploying a change to the workflow graph, validate it (this is the same check CI runs):
+
+```bash
+python3 scripts/validate_fabric_config.py app/hesta-claimsagent/workflows/hesta.workflow.yaml
+```
+
+Deploy for real with `agentcore deploy` from `app/hesta-claimsagent`, or via this repo's
+top-level `./deploy.sh us-west-2`, which provisions the same `agentcore.json` stack (the
+`hestaclaimsagent` runtime already points its `codeLocation` at `app/hesta-claimsagent`).
 
 ## Quick Start
 
@@ -87,7 +142,7 @@ Expected output:
 ## Phase 2: Validation & Routing
 CONFIDENCE: 92
 ROUTING: AUTO_APPROVE
-[Validator confirms decision is sound — clear-cut case]
+[Validator confirms decision is sound, a clear-cut case]
 
 ---
 ## Phase 3: Execution
@@ -157,15 +212,21 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 
 ```
 event-driven-claims-agent/
-├── app/claimsagent/           # Agent runtime (Strands SDK, dual-agent logic)
+├── app/claimsagent/           # Original dual-agent demo (Strands SDK)
 │   ├── main.py                # Entrypoint: prompts, agents, routing, Identity-managed Gateway OAuth
 │   ├── config.py              # Centralized env var reads
 │   ├── Dockerfile             # Container image (Python 3.12, multi-stage)
 │   ├── memory/session.py      # AgentCore Memory (graceful degradation)
 │   └── tools/                 # Co-located tools (structured output)
+├── app/hesta-claimsagent/     # HESTA member-email pilot: config-driven agent fabric (see above)
+│   ├── main.py                # Entrypoint: loads workflows/hesta.workflow.yaml, drives GraphExecutor
+│   ├── fabric/                # schema, registry, loader, adapters, routers, executor
+│   ├── workflows/hesta.workflow.yaml  # Declarative agents:+workflow: graph
+│   ├── agents/                # Per-agent prompts/logic (unchanged by the fabric refactor)
+│   └── hitl.py                # Human-in-the-loop DynamoDB write (via MCP Gateway)
 ├── agentcore/
 │   ├── agentcore.json         # AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, Eval)
-│   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge — NO Cognito)
+│   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge; NO Cognito)
 ├── lambdas/                   # One Lambda per Gateway tool
 │   ├── schemas/               # MCP tool schemas (JSON)
 │   ├── trigger/               # EventBridge → Runtime invocation (SigV4 auth)

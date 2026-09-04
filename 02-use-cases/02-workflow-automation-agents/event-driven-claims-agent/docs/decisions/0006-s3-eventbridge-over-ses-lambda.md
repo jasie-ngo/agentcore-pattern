@@ -13,7 +13,7 @@ SES delivers emails to S3; EventBridge triggers the Trigger Lambda. Not SES → 
 
 ## Reasoning
 
-S3 provides a durable audit trail — every claim submission is stored as a file. EventBridge enables fan-out (multiple consumers can react to new claims without modifying the SES rule). The S3 object also allows the Trigger Lambda to handle large email payloads that exceed SES → Lambda's 256KB direct event limit.
+S3 provides a durable audit trail: every claim submission is stored as a file. EventBridge enables fan-out (multiple consumers can react to new claims without modifying the SES rule). The S3 object also allows the Trigger Lambda to handle large email payloads that exceed SES → Lambda's 256KB direct event limit.
 
 ## Alternatives Considered
 

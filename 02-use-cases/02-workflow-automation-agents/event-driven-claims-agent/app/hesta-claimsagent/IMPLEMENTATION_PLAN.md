@@ -1,16 +1,16 @@
-# HESTA Member-Email Agentic Platform — Implementation Plan
+# HESTA Member-Email Agentic Platform: Implementation Plan
 
-> **Status:** DRAFT for review — **no code has been changed yet.** This document is the
+> **Status:** DRAFT for review; **no code has been changed yet.** This document is the
 > agreed blueprint we will implement against, inside
 > `02-use-cases/02-workflow-automation-agents/event-driven-claims-agent/app/hesta-claimsagent`.
 >
-> **This is a PILOT — and it implements the full agent pipeline** (all agents in §2/§5:
+> **This is a PILOT, and it implements the full agent pipeline** (all agents in §2/§5:
 > AI-001 Intent, AI-002 Context, AI-003 Identity, AI-004 Attachment Validation, AI-005 Empathy,
 > AI-011 Writer, AI-012 Reviewer/Editor). To move fast, three things **reuse existing primitives**
 > rather than new build: **(1)** identity/verification uses the existing **DynamoDB `lookup_policy`**
-> check; **(2)** human-in-the-loop stays exactly as today — **persist a case/review record to
+> check; **(2)** human-in-the-loop stays exactly as today: **persist a case/review record to
 > DynamoDB through the MCP Gateway** (`request_human_review` / `create_claim`); **(3)** the **Writer
-> displays the draft reply email as its output** to the current user — nothing is auto-sent.
+> displays the draft reply email as its output** to the current user, so nothing is auto-sent.
 > **§0 records these reuse decisions; §5 is the pipeline we build.**
 >
 > **Sources analysed:** `hesta/Hesta-POC.pptx` (proposed capabilities & future-state
@@ -23,9 +23,9 @@
 
 ## 0. Pilot scope & reuse decisions (READ FIRST)
 
-**The pilot implements the full agent pipeline** — every processing agent in §2/§5
+**The pilot implements the full agent pipeline**: every processing agent in §2/§5
 (AI-001 Intent, AI-002 Context, AI-003 Identity, AI-004 Attachment Validation, AI-005 Empathy,
-AI-011 Writer, AI-012 Reviewer/Editor) — running end-to-end over each inbound "email" (any file
+AI-011 Writer, AI-012 Reviewer/Editor), running end-to-end over each inbound "email" (any file
 dropped in the S3 inbox). **§5 is the pipeline; §8 is the build order.** What makes it a *pilot* is
 three deliberate **reuse decisions** that avoid new infrastructure:
 
@@ -35,12 +35,12 @@ three deliberate **reuse decisions** that avoid new infrastructure:
    store and **the table structure is not changed**. It reuses the current `lookup_policy` Gateway tool +
    `PoliciesTable` **exactly as they are** (see §6.1): look the record up by its existing key
    (policy/member number), then **verify by comparing the sender email and account/policy type against
-   that record** to derive a verification level. **No new GSI in the pilot** — reverse-lookup by email
+   that record** to derive a verification level. **No new GSI in the pilot**: reverse-lookup by email
    (which would need an index) is post-pilot only.
 
 2. **Human-in-the-loop → exactly as implemented today: write a record to DynamoDB via the MCP Gateway.**
    When a case needs a human (regulated intent, unverified client, or low confidence), the pipeline
-   **persists a record through the existing MCP Gateway tools** — `request_human_review` (writes the
+   **persists a record through the existing MCP Gateway tools**: `request_human_review` (writes the
    **Reviews** table) and/or `create_claim` (writes the **Claims** table). **That DynamoDB record *is*
    the hand-off.** No new human console, queue, or workflow is built in the pilot; a human reads the
    record out-of-band. This reuses today's Phase-2 routing (`resolve_routing`/`decide_action`) and the
@@ -48,29 +48,29 @@ three deliberate **reuse decisions** that avoid new infrastructure:
 
 3. **Writer output → the draft email is displayed to the current user, never sent.** AI-011 renders a
    full HESTA-voice reply and **`yield`s it as the agent's streamed output**. **No SES / `send_notification`**
-   in the pilot — a human copies/edits/sends it.
+   in the pilot, so a human copies/edits/sends it.
 
 Everything else (Memory, Identity, Gateway, cost-based model routing, graceful degradation) is reused
 unchanged. **AI-013 (Human Feedback Learning)** and the **AI Dashboard** are cross-cutting foundations,
-not per-email agents — in the pilot they are satisfied by **reusing existing primitives only**
+not per-email agents; in the pilot they are satisfied by **reusing existing primitives only**
 (capture human edits/corrections to **Memory**; observability via the already-enabled OTEL/traces), not
 new build.
 
-### AWS resources — UNCHANGED in the pilot
+### AWS resources: UNCHANGED in the pilot
 
 **No AWS infrastructure is created or altered.** The pilot changes only **application code** inside
-`app/hesta-claimsagent` (the agent container) — which is rebuilt and redeployed to the existing Runtime.
+`app/hesta-claimsagent` (the agent container), which is rebuilt and redeployed to the existing Runtime.
 
 | Resource | Pilot impact |
 |---|---|
-| **AgentCore Memory** | **Unchanged** — reused as-is (same memory resource, same namespaces) |
-| **DynamoDB** (Policies / Claims / Reviews) | **No structure change** — same tables, keys, GSIs. We only **read** Policies and **write items** to Claims/Reviews via existing tools. Seeding sample records with `seed_dynamodb.py` is **data, not schema.** |
-| **S3 → EventBridge → Trigger Lambda** | **Unchanged** — same bucket, same rule, same Trigger Lambda. Email normalisation happens **inside the agent**, not in the trigger. |
-| **Gateway / Identity / Cognito / Cedar / SES** | **Unchanged** — reuse existing tools & auth; SES simply isn't called (no send) |
-| **Runtime container** | Code changes are deployed here (expected — this *is* the agent we're building) |
+| **AgentCore Memory** | **Unchanged**: reused as-is (same memory resource, same namespaces) |
+| **DynamoDB** (Policies / Claims / Reviews) | **No structure change**: same tables, keys, GSIs. We only **read** Policies and **write items** to Claims/Reviews via existing tools. Seeding sample records with `seed_dynamodb.py` is **data, not schema.** |
+| **S3 → EventBridge → Trigger Lambda** | **Unchanged**: same bucket, same rule, same Trigger Lambda. Email normalisation happens **inside the agent**, not in the trigger. |
+| **Gateway / Identity / Cognito / Cedar / SES** | **Unchanged**: reuse existing tools & auth; SES simply isn't called (no send) |
+| **Runtime container** | Code changes are deployed here (expected, since this *is* the agent we're building) |
 
 > If we later want reverse-lookup by sender email, a proper `MembersTable`, or dedicated
-> `create_case`/`kb_search` tools, those **are** infra changes — explicitly **post-pilot** (§5/§8).
+> `create_case`/`kb_search` tools, those **are** infra changes, explicitly **post-pilot** (§5/§8).
 
 ### Pipeline at a glance (full detail in §5)
 
@@ -90,12 +90,12 @@ S3 object → Trigger Lambda (unchanged) → Runtime:
 
 ### Writer (AI-011) specifics
 
-- Drafts in HESTA's house style — the outbound samples give the exact voice:
+- Drafts in HESTA's house style; the outbound samples give the exact voice:
   *"Thank you for contacting HESTA / Hi [MEMBER NAME] … We're here to help, The team at HESTA"* + legal
   footer. "Approved knowledge" for the pilot = a **small inline per-intent snippet set** lifted from the
   real outbound replies (**no Bedrock Knowledge Base needed yet**).
 - Adapts to verification state: **unverified →** draft the identity-verification request (member number,
-  full name, DOB, address — as the samples do); **verified →** draft an intent-appropriate
+  full name, DOB, address, as the samples do); **verified →** draft an intent-appropriate
   acknowledgement / next-steps reply. **AI-012** then validates tone/accuracy/compliance of that draft.
 - **Output = the email text, displayed** via `yield` (same mechanism as today's phase output).
 
@@ -105,9 +105,9 @@ S3 object → Trigger Lambda (unchanged) → Runtime:
 
 Today `app/hesta-claimsagent` is a **generic "SecureGuard Insurance" dual-agent claims demo**:
 
-- **Phase 1 — Claims Processor** (Sonnet): extracts claim, calls `lookup_policy`, decides `ACCEPT`/`REJECT`.
-- **Phase 2 — Validation Agent** (Haiku): scores `CONFIDENCE` 0–100, routes `AUTO_APPROVE`/`HUMAN_REVIEW`.
-- **Phase 3 — Deterministic Execution** (no LLM): `create_claim` / `request_human_review` / `send_notification`.
+- **Phase 1: Claims Processor** (Sonnet): extracts claim, calls `lookup_policy`, decides `ACCEPT`/`REJECT`.
+- **Phase 2: Validation Agent** (Haiku): scores `CONFIDENCE` 0–100, routes `AUTO_APPROVE`/`HUMAN_REVIEW`.
+- **Phase 3: Deterministic Execution** (no LLM): `create_claim` / `request_human_review` / `send_notification`.
 
 We are **repurposing this scaffold** into HESTA's **member-email agentic operations platform**. The
 business does **not** want auto-approval of regulated decisions; it wants AI to **understand, prepare,
@@ -139,23 +139,23 @@ Trigger Lambda → AgentCore Runtime.
 
 ## 2. Proposed Capabilities (from Hesta-POC.pptx)
 
-The deck defines a logical business flow — **UNDERSTAND → DECIDE → EXECUTE → LEARN** — supported by
+The deck defines a logical business flow, **UNDERSTAND → DECIDE → EXECUTE → LEARN**, supported by
 these capabilities (IDs are HESTA's):
 
 | ID | Capability | Flow stage | Pilot? | Role in our pipeline |
 |---|---|---|---|---|
 | **AI-001** | **Intent Identifier & Attachment Detection** | UNDERSTAND | ✅ **pilot** | Why is the member contacting us (one or more reasons)? Business scenario + **confidence**; detect attachments |
 | **AI-002** | Conversation Context Manager | UNDERSTAND | ✅ **pilot** | Reconstruct the thread; produce a concise operational case summary |
-| **AI-003** | Identity & Profiling Agent | DECIDE | ✅ **pilot** (reuse DynamoDB) | Verify a valid client via the **existing `lookup_policy` DynamoDB check** (member/policy no., type, sender email) — see §0 & §6.1 |
+| **AI-003** | Identity & Profiling Agent | DECIDE | ✅ **pilot** (reuse DynamoDB) | Verify a valid client via the **existing `lookup_policy` DynamoDB check** (member/policy no., type, sender email); see §0 & §6.1 |
 | **AI-004** | Attachment Validation Agent | DECIDE | ✅ **pilot** | Identify document type, assess completeness, highlight missing/invalid info |
 | **AI-005** | Empathy Agent | DECIDE | ✅ **pilot** | Detect vulnerability, complaint indicators, sentiment, operational priority; recommend attention level |
 | **AI-011** | Writer | EXECUTE | ✅ **pilot** (draft shown, not sent) | Draft a HESTA-voice reply email, **displayed as agent output** for staff to review/send |
 | **AI-012** | Reviewer & Editor | EXECUTE | ✅ **pilot** | Validate accuracy, tone, completeness, compliance of the draft before a human sends |
-| **AI-013** | Human Feedback Learning | LEARN (cross-cutting) | ◐ pilot (reuse Memory only) | Capture human corrections to **Memory** — no new build |
-| **AI Dashboard** | Platform capability | LEARN (cross-cutting) | ◐ pilot (reuse observability) | Reuse already-enabled OTEL traces/metrics — no new build |
-| **(reuse)** | **Human-in-the-loop = DynamoDB record via MCP** | DECIDE/EXECUTE | ✅ **pilot** (reuse) | Existing Phase-2 routing + `request_human_review`/`create_claim` **write a record to DynamoDB** — that record is the human hand-off |
+| **AI-013** | Human Feedback Learning | LEARN (cross-cutting) | ◐ pilot (reuse Memory only) | Capture human corrections to **Memory**; no new build |
+| **AI Dashboard** | Platform capability | LEARN (cross-cutting) | ◐ pilot (reuse observability) | Reuse already-enabled OTEL traces/metrics; no new build |
+| **(reuse)** | **Human-in-the-loop = DynamoDB record via MCP** | DECIDE/EXECUTE | ✅ **pilot** (reuse) | Existing Phase-2 routing + `request_human_review`/`create_claim` **write a record to DynamoDB**: that record is the human hand-off |
 
-**Early release focus (deck slides 2–3):** the **Financial Hardship (FH)** journey — coordinated
+**Early release focus (deck slides 2–3):** the **Financial Hardship (FH)** journey: coordinated
 AI assistance with **human oversight for the regulated decision**.
 
 **KPIs to instrument** (deck): Executive → member experience, first-contact resolution.
@@ -180,16 +180,16 @@ directly from the sample content.
 | **FLS** | `family_law_split` | Family Law Split | **solicitor/law-firm sender**, "family law", "superannuation split", "procedural fairness", "court date" | Info request; procedural fairness; document exchange | Yes |
 | **NOI** | `notice_of_intent_tax_deduction` | Notice of Intent to Claim a Tax Deduction | "notice of intent", "NOI", "claim a tax deduction", "personal/concessional contribution", ATO NOI form | How to lodge; confirm receipt; submission issue | Yes |
 | **RTC** | `rollover_transfer_combine` | Rollover / Transfer / Combine Accounts | "roll over", "transfer/combine my super", "consolidate", other-fund names (Rest, KiwiSaver), "funds not showing after transfer" | How to roll over; combine accounts; transfer status chase | No (but ID-verify) |
-| — | `other_unknown` | (fallback) | none of the above / ambiguous / general enquiry | General enquiry; misc | n/a → human triage |
+| N/A | `other_unknown` | (fallback) | none of the above / ambiguous / general enquiry | General enquiry; misc | n/a → human triage |
 
 ### Taxonomy rules the Intent Identifier must follow
 
-1. **Multi-intent** is real — e.g. a member updating their address **and** asking about departing
+1. **Multi-intent** is real, e.g. a member updating their address **and** asking about departing
    Australia (DASP+COD). Return a **list** of intents, each with its own confidence.
 2. **DASP vs BP** overlap: DASP is a *specific* withdrawal for departing temporary residents. Prefer
    DASP when residency/departure signals are present; otherwise BP.
-3. **Sender type** matters: `member`, `non_member` (prospective — seen in RTC), `solicitor/third_party`
-   (seen in FLS). Capture it — it changes routing and verification.
+3. **Sender type** matters: `member`, `non_member` (prospective, seen in RTC), `solicitor/third_party`
+   (seen in FLS). Capture it, since it changes routing and verification.
 4. **Confidence** is mandatory (0–100) per intent; **low confidence or `other_unknown` → human triage**,
    never a regulated action.
 5. **Conversation state** (not an intent): identity-verification sub-flows appear across categories.
@@ -202,7 +202,7 @@ directly from the sample content.
 The samples show **two inbound shapes** plus heavy noise. A normalisation step must run **before**
 any agent sees the text.
 
-**Shape A — Contact-Us web form** (structured):
+**Shape A: Contact-Us web form** (structured):
 ```
 You've received a new form based mail from https://www.hesta.com.au/.../contact-us.html
 Values: enquiry-sent-from : A member | email-address : [MEMBER EMAIL] | member-number : [MEMBER NUMBER]
@@ -210,13 +210,13 @@ Values: enquiry-sent-from : A member | email-address : [MEMBER EMAIL] | member-n
         message : <the actual ask>
 ```
 `reason-for-enquiry` is a **coarse hint only** (values seen: *Accessing super, Updating my account
-details, My online account, Other*) — never trust it as the final intent.
+details, My online account, Other*), so never trust it as the final intent.
 
-**Shape B — Direct/threaded email**: leading `WARNING: This email originated from outside…` banner,
+**Shape B: Direct/threaded email**: leading `WARNING: This email originated from outside…` banner,
 `[ATTACHMENT FILENAME]` markers, quoted `From:/Sent:/To:/Subject:` history, and a long
 `Issued by H.E.S.T. Australia Ltd …` legal footer.
 
-**Normalisation output — a canonical `InboundEmail` envelope:**
+**The normalisation output is a canonical `InboundEmail` envelope:**
 
 ```jsonc
 {
@@ -247,7 +247,7 @@ markers and a count. This is deterministic Python (regex), **not** an LLM call.
 
 ## 5. Target architecture & pipeline (the pilot pipeline)
 
-> **This is what the pilot builds.** All agents run; the **§0 reuse decisions** apply — identity reuses
+> **This is what the pilot builds.** All agents run; the **§0 reuse decisions** apply: identity reuses
 > the DynamoDB `lookup_policy` check, human-in-the-loop is a **DynamoDB record written via the MCP
 > Gateway**, and the Writer's draft is **displayed, not sent**. Each capability is an isolated,
 > independently testable module.
@@ -277,7 +277,7 @@ S3 object (any file) → EventBridge → Trigger Lambda (UNCHANGED)
 
 **Human-in-the-loop is the default for regulated intents** (BDBN, BP, DASP, FH, FLS, NOI). AI prepares
 the case and drafts the reply; the **hand-off to a human is a DynamoDB record written via the MCP
-Gateway** (`request_human_review` → Reviews table, and/or `create_claim` → Claims table) — reusing
+Gateway** (`request_human_review` → Reviews table, and/or `create_claim` → Claims table), reusing
 today's mechanism unchanged. **Nothing is auto-sent in the pilot**: the Writer's draft is displayed to
 the current user, and a human reviews the record + draft out-of-band before sending. Non-regulated
 informational replies (e.g. RTC/COD status updates) are handled the same draft-for-human-review way in
@@ -286,7 +286,7 @@ the pilot.
 ### Model routing (reuse the existing cheap/strong split)
 
 - **Cheap/fast model** (Haiku, `FAST_MODEL_ID`): AI-001 intent classification, AI-005 empathy,
-  AI-004 attachment typing — classification-style tasks.
+  AI-004 attachment typing; classification-style tasks.
 - **Strong model** (Sonnet, `AGENT_MODEL_ID`): AI-002 summarisation, AI-011 Writer, AI-012 Reviewer.
 
 ---
@@ -321,28 +321,28 @@ app/hesta-claimsagent/
 └── memory/session.py            # KEEP: reuse; key actor on member_number when available
 ```
 
-**Gateway tools — pilot reuses existing ones; no new Lambdas required:**
+**Gateway tools: pilot reuses existing ones; no new Lambdas required:**
 - **Identity (AI-003):** reuse **`lookup_policy`** + `PoliciesTable` as-is (§0/§6.1). **No GSI / no
-  schema change in the pilot** — verify by comparing sender email + type against the resolved record.
+  schema change in the pilot**: verify by comparing sender email + type against the resolved record.
 - **Human-in-the-loop:** reuse **`request_human_review`** (writes Reviews table) and **`create_claim`**
-  (writes Claims table) — the DynamoDB record is the hand-off. No `create_case`/`update_case` needed yet.
-- **Writer knowledge (AI-011):** inline `knowledge/hesta_snippets.py` for the pilot — **no `kb_search`
+  (writes Claims table); the DynamoDB record is the hand-off. No `create_case`/`update_case` needed yet.
+- **Writer knowledge (AI-011):** inline `knowledge/hesta_snippets.py` for the pilot, meaning **no `kb_search`
   Lambda / Bedrock KB** yet.
-- **Not used in the pilot:** `send_notification` (SES) — nothing is auto-sent.
+- **Not used in the pilot:** `send_notification` (SES), since nothing is auto-sent.
 - Existing **Cedar policies** continue to forbid autonomous regulated actions.
 
 *(Post-pilot, these graduate to dedicated tools: `lookup_member`, `create_case`/`update_case`,
-`get_case_context`, `kb_search` — see §5/§8 roadmap.)*
+`get_case_context`, `kb_search`; see §5/§8 roadmap.)*
 
 ---
 
 ## 6.1 Reusing today's DynamoDB verification for AI-003 (Identity & Profiling)
 
 > **Pilot vs. graduation:** in the **pilot** we reuse `lookup_policy` + `PoliciesTable` **exactly as they
-> are — no rename, no GSI, no schema change** (§0). The table further below (`MembersTable`, `email-index`
+> are: no rename, no GSI, no schema change** (§0). The table further below (`MembersTable`, `email-index`
 > GSI, `lookup_member`) is the **post-pilot graduation** and is included only to show where this grows.
 
-**Yes — the verification already in the code is the right foundation for AI-003 and we should reuse it.**
+**Yes, the verification already in the code is the right foundation for AI-003 and we should reuse it.**
 
 ### What exists today
 
@@ -361,10 +361,10 @@ record up by email** (no GSI).
 
 > Terminology: don't confuse this with the Phase-2 **Validation Agent**, which scores *decision
 > confidence*, not identity. The identity/verification mechanism this request refers to is
-> **`lookup_policy`** — and it maps directly onto **AI-003** and the deck's "human verification before
+> **`lookup_policy`**, and it maps directly onto **AI-003** and the deck's "human verification before
 > regulated actions" gate.
 
-### Fit for HESTA — reuse verdict
+### Fit for HESTA: reuse verdict
 
 The whole pattern (Gateway tool → Lambda → DynamoDB `get_item`, **agent-must-verify-first**, **safe
 fallback on miss**, deterministic execution, Cedar enforcement) maps 1:1 to *"confirm a valid member
@@ -378,26 +378,26 @@ before any regulated action."* We keep the mechanism and adapt the data model.
 | `email` present but **unused** | AI-003 **cross-checks sender email** vs record `email` as a verification factor |
 | miss → REJECT | miss / insufficient identifiers → `verification_required = true` → identity sub-flow / human |
 
-### Concrete, minimal changes (design only — no code yet)
+### Concrete, minimal changes (design only, no code yet)
 
 1. **Rename/duplicate the tool:** `lookup_policy` → **`lookup_member`** (Lambda + `schemas/lookup_member.json`).
    Input widens from `{policy_number}` to **`{member_number?, email?, full_name?, dob?}`**.
-2. **Add one GSI** (`email-index`) to the members table so the **sender's From address** — the most
-   reliable inbound signal — resolves a member even when the member number is missing or buried in the body.
+2. **Add one GSI** (`email-index`) to the members table so the **sender's From address**, the most
+   reliable inbound signal, resolves a member even when the member number is missing or buried in the body.
 3. **Return the match + which identifiers matched**, so AI-003 can compute a *verification level* rather
    than a bare found/not-found.
-4. **Keep the safe-fallback posture verbatim:** never act on an unmatched/unverified member — escalate to
+4. **Keep the safe-fallback posture verbatim:** never act on an unmatched/unverified member: escalate to
    a human. (This is already how the code treats a failed lookup.)
 5. **Reuse `seed_dynamodb.py`** to seed synthetic members that mirror the sample scenarios.
 
 ### The request's three factors → a verification level
 
-Using the requested signals — **policy/member number, policy/account type, and sender email** — plus the
+Using the requested signals: **policy/member number, policy/account type, and sender email**, plus the
 name/DOB the samples show HESTA asking for:
 
-- **`verified`** — enough factors match (e.g. `member_number` + `email`, or `name`+`dob`+`address`):
+- **`verified`**: enough factors match (e.g. `member_number` + `email`, or `name`+`dob`+`address`):
   AI may assemble the profile and prepare/draft. **A human still approves every regulated action.**
-- **`partial` / `unverified`** — triggers the **identity-verification sub-flow** the samples repeatedly
+- **`partial` / `unverified`**: triggers the **identity-verification sub-flow** the samples repeatedly
   show (request member number, full name, DOB, address). Modelled as conversation state
   `awaiting_identity_verification` (see AI-002), **not** a new intent.
 
@@ -489,18 +489,18 @@ class ReviewResult(BaseModel):
 > throughout**: identity reuses `lookup_policy`/DynamoDB (don't build a new store), human-in-the-loop is
 > a DynamoDB record written via the MCP Gateway (`request_human_review`/`create_claim`), and the Writer
 > **displays** its draft (no SES). The dedicated tools mentioned below (`lookup_member`, `create_case`,
-> `kb_search`) are the **post-pilot** graduation of those reused pieces — not pilot work.
+> `kb_search`) are the **post-pilot** graduation of those reused pieces, not pilot work.
 
 Ordered so the **Intent Identifier ships first** and each later phase is independently valuable.
 
-### Phase 0 — Foundations (prereq for everything)
+### Phase 0: Foundations (prereq for everything)
 - `ingestion/email_normalizer.py` (InboundEmail), `intents/taxonomy.py`, `models.py`.
 - Normalisation runs **inside the agent entrypoint** (`main.py`) on the content the existing Trigger
-  Lambda already forwards — **the Trigger Lambda is not modified** (handle contact-form text, threaded
+  Lambda already forwards; **the Trigger Lambda is not modified** (handle contact-form text, threaded
   email, plain text, JSON there).
 - **Eval fixtures**: export the 23 samples to fixture files; folder name = ground-truth label.
 
-### Phase 1 — AI-001 Intent Identifier + Attachment Detection ← **first deliverable**
+### Phase 1: AI-001 Intent Identifier + Attachment Detection ← **first deliverable**
 - `agents/intent_identifier.py` + `submit_intent` tool + `IntentResult`.
 - Prompt built from `intents/taxonomy.py` (signals + few-shot from real samples).
 - Attachment detection from `[ATTACHMENT FILENAME]` markers (+ inferred type).
@@ -509,29 +509,29 @@ Ordered so the **Intent Identifier ships first** and each later phase is indepen
 - **Acceptance:** intent-accuracy eval vs the 8 folder labels; multi-intent and attachment cases
   detected; every output has a confidence and a rationale.
 
-### Phase 2 — UNDERSTAND completion
+### Phase 2: UNDERSTAND completion
 - AI-002 Conversation Context Manager (thread reconstruction + operational summary).
-- AI-003 Identity & Profiling (identifier match; `verification_required` gate) — **pilot reuses
+- AI-003 Identity & Profiling (identifier match; `verification_required` gate): **pilot reuses
   `lookup_policy` + `PoliciesTable` AS-IS** (§0/§6.1): match on policy/member number, account/policy
   type, and sender email; seed synthetic records with `seed_dynamodb.py`. (Renaming to `lookup_member`
   / a `MembersTable` / an `email` GSI is the post-pilot graduation, not pilot work.)
 
-### Phase 3 — DECIDE support
-- AI-004 Attachment Validation (document type/completeness — e.g. Binding Death Nomination form present
+### Phase 3: DECIDE support
+- AI-004 Attachment Validation (document type/completeness, e.g. Binding Death Nomination form present
   & legible? bank statement attached for FH?).
-- AI-005 Empathy (vulnerability/complaint/priority — FH financial distress, COD accessibility need,
+- AI-005 Empathy (vulnerability/complaint/priority: FH financial distress, COD accessibility need,
   BDBN bereavement, FLS legal urgency).
 - Deterministic **governance gate** in `routing.py`: regulated intent → `HUMAN_REQUIRED`.
 
-### Phase 4 — EXECUTE (Writer + Reviewer; Financial Hardship first)
-- AI-011 Writer — drafts from **inline `knowledge/hesta_snippets.py`** (pilot; no `kb_search`) and
-  **`yield`s the `DraftEmail` as agent output — displayed, not sent**. AI-012 Reviewer & Editor checks
+### Phase 4: EXECUTE (Writer + Reviewer; Financial Hardship first)
+- AI-011 Writer: drafts from **inline `knowledge/hesta_snippets.py`** (pilot; no `kb_search`) and
+  **`yield`s the `DraftEmail` as agent output, displayed, not sent**. AI-012 Reviewer & Editor checks
   accuracy/tone/compliance of that draft.
 - Human-in-the-loop = **write a record to DynamoDB via the MCP Gateway** (`request_human_review` /
   `create_claim`) for regulated/unverified/low-confidence cases. **No SES send.**
 - Exercise the **FH journey end-to-end** first (deck's early release), then the other intents.
 
-### Phase 5 — LEARN (cross-cutting)
+### Phase 5: LEARN (cross-cutting)
 - AI-013 Human Feedback Learning: capture human edits/overrides as structured records
   (Memory + a feedback store) to improve prompts/few-shots.
 - AI Dashboard: emit metrics/traces (reuse existing observability) mapped to the deck KPIs
@@ -547,39 +547,39 @@ Ordered so the **Intent Identifier ships first** and each later phase is indepen
   per intent, multi-intent handling, and confidence calibration. Track accuracy as prompts evolve.
 - **Scenario tests:** identity-verification sub-flow; solicitor (FLS) sender; non-member (RTC);
   DASP-vs-BP disambiguation; attachments-present-but-unreadable (BDBN).
-- **Guardrail test:** regulated intents can **never** reach an autonomous send/approve — always gated
+- **Guardrail test:** regulated intents can **never** reach an autonomous send/approve; always gated
   to a human (Cedar policy + routing test).
 
 ---
 
 ## 10. Open questions / assumptions for sign-off
 
-1. **Scope:** confirmed — the pilot implements **all agents** (AI-001..AI-005, AI-011, AI-012), with the
+1. **Scope:** confirmed; the pilot implements **all agents** (AI-001..AI-005, AI-011, AI-012), with the
    §0 reuse decisions (DynamoDB identity, HITL-as-DynamoDB-record-via-MCP, Writer draft displayed).
    AI-013 + Dashboard are reuse-only (Memory / existing observability).
-2. **Human-in-the-loop:** confirmed — **no autonomous send** in the pilot. The hand-off is a **DynamoDB
+2. **Human-in-the-loop:** confirmed; **no autonomous send** in the pilot. The hand-off is a **DynamoDB
    record written via the MCP Gateway**; the Writer's draft is displayed for a human to send.
 3. **Early-release journey:** confirm **Financial Hardship (FH)** is the first end-to-end vertical.
    *(Assumed yes, per slides 2–3.)*
 4. **Rename vs fork:** implement in place in `hesta-claimsagent` (rename "claim" concepts to "case"),
    or keep `claimsagent` untouched as reference and evolve only `hesta-claimsagent`? *(Assumed: evolve
    `hesta-claimsagent`; leave `app/claimsagent` as the original demo.)*
-5. **Knowledge source for the Writer (AI-011):** where does "approved HESTA knowledge" live — a curated
+5. **Knowledge source for the Writer (AI-011):** where does "approved HESTA knowledge" live: a curated
    KB / Bedrock Knowledge Base / doc set? Needed before Phase 4.
 6. **Attachments in the POC:** samples only carry `[ATTACHMENT FILENAME]` markers (no bytes). Confirm
    AI-004 works on **metadata/markers** for the POC, with real document parsing deferred.
 7. **Data handling:** samples are de-identified; confirm production PII handling / retention approach
    before real mailbox integration.
 8. **Member data source for AI-003 (§6.1):** for the pilot we seed **synthetic records into the existing
-   `PoliciesTable`** (via `seed_dynamodb.py`) — no new table. Confirm that's acceptable vs. pointing at a
+   `PoliciesTable`** (via `seed_dynamodb.py`), meaning no new table. Confirm that's acceptable vs. pointing at a
    read-only HESTA member dataset/API later. *(Assumed: synthetic seed into the existing table.)*
 9. **Verification factors & thresholds:** confirm which identifier combinations count as `verified`
    vs `partial` (proposed default: `member_number`+`email`, **or** `name`+`dob`+`address`). The samples
-   show HESTA asking for member number + full name + DOB + address — is that the bar to codify?
+   show HESTA asking for member number + full name + DOB + address, so is that the bar to codify?
 
 ---
 
-## Appendix A — Folder ↔ intent quick reference
+## Appendix A: Folder ↔ intent quick reference
 
 | Folder | Samples | Intent | Regulated | First-phase target |
 |---|---|---|---|---|
@@ -594,8 +594,8 @@ Ordered so the **Intent Identifier ships first** and each later phase is indepen
 
 \* still requires identity verification before changes.
 
-## Appendix B — Volumes (from `Cognizant Emails.xlsx` → "Volumes")
+## Appendix B: Volumes (from `Cognizant Emails.xlsx` → "Volumes")
 
 ~**8,400–8,600 emails/month** total (May: 8,597; June: 8,403), roughly **~4,500 inbound** + ~4,000
-outbound per month. This is the scale intent-routing accuracy and AHT reductions apply to — the basis
+outbound per month. This is the scale intent-routing accuracy and AHT reductions apply to: the basis
 for the dashboard's cost-to-serve and repeat-enquiry KPIs.

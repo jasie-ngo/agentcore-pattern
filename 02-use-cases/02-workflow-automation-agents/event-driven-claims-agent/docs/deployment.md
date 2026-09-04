@@ -8,7 +8,7 @@
 
 This runs all steps below automatically:
 1. Configures deployment target (auto-detects account ID, generates `aws-targets.json`)
-2. Checks/creates Cognito User Pool for Gateway auth (interactive — auto-creates if needed)
+2. Checks/creates Cognito User Pool for Gateway auth (interactive, auto-creates if needed)
 3. Registers OAuth credential with AgentCore Identity (`agentcore add credential`)
 4. Installs CDK dependencies (`npm install`)
 5. Installs agent Python dependencies (`uv sync`)
@@ -28,7 +28,7 @@ When complete, you'll see:
 🛡️  Test Cedar policy (should block $100k+ claims):
    python3 scripts/test_invoke.py --region us-west-2 --prompt 'File a claim for POL-12345. Car totaled. $150000 damage.'
 
-🔭 Enable full observability (optional — adds Gateway/Memory trace + log delivery):
+🔭 Enable full observability (optional, adds Gateway/Memory trace + log delivery):
    python3 scripts/enable_observability.py --region us-west-2 --stack-name AgentCore-ClaimsAgent-dev
 
 🧹 Teardown:
@@ -137,10 +137,10 @@ python3 scripts/seed_dynamodb.py --region us-west-2
 ```
 
 Creates four test policies:
-- `POL-12345` — John Smith, auto, $50,000 coverage
-- `POL-67890` — Jane Doe, home, $250,000 coverage
-- `POL-11111` — Bob Johnson, auto, $75,000 coverage
-- `POL-99999` — Alice Williams, auto, $100,000 coverage (expired)
+- `POL-12345`: John Smith, auto, $50,000 coverage
+- `POL-67890`: Jane Doe, home, $250,000 coverage
+- `POL-11111`: Bob Johnson, auto, $75,000 coverage
+- `POL-99999`: Alice Williams, auto, $100,000 coverage (expired)
 
 ### 9. Verify Deployment
 
@@ -183,9 +183,9 @@ ROUTING: AUTO_APPROVE
 ━━━━━━━━━━━━━━━━━━━━━
 ```
 
-> **Note:** Phase 3 is deterministic — it does not use an LLM call. Tool calls are made directly via MCPClient based on the routing decision from Phase 2. The exact wording of Phase 1/2 varies between runs (LLM output is non-deterministic), but the structure (3 phases, DECISION, CONFIDENCE, ROUTING) is consistent.
+> **Note:** Phase 3 is deterministic: it does not use an LLM call. Tool calls are made directly via MCPClient based on the routing decision from Phase 2. The exact wording of Phase 1/2 varies between runs (LLM output is non-deterministic), but the structure (3 phases, DECISION, CONFIDENCE, ROUTING) is consistent.
 
-**Test Cedar policy enforcement (should block — $150k exceeds the $100k threshold):**
+**Test Cedar policy enforcement (should block because $150k exceeds the $100k threshold):**
 
 ```bash
 python3 scripts/test_invoke.py --region us-west-2 --prompt 'File a claim for POL-12345. Car totaled. $150000 damage.'
@@ -206,11 +206,11 @@ python3 scripts/test_e2e.py --region us-west-2
 ```
 
 This runs 5 test scenarios:
-1. Auto-approved claim (high confidence) — expects `create_claim` called successfully
-2. Cedar-blocked claim (>=$100k) — expects authorization denied on `create_claim`
-3. Human review claim (low confidence) — expects `request_human_review` called
-4. Rejected claim (policy not found) — expects `send_notification` with rejection
-5. Email-format claim (S3 + EventBridge path) — expects full event-driven pipeline
+1. Auto-approved claim (high confidence): expects `create_claim` called successfully
+2. Cedar-blocked claim (>=$100k): expects authorization denied on `create_claim`
+3. Human review claim (low confidence): expects `request_human_review` called
+4. Rejected claim (policy not found): expects `send_notification` with rejection
+5. Email-format claim (S3 + EventBridge path): expects full event-driven pipeline
 
 Run a single test:
 
@@ -270,13 +270,13 @@ Run the agent locally while tools, auth, and data stay in the cloud.
 
 | Component | Local | Cloud |
 |-----------|-------|-------|
-| Agent logic (main.py) | ✅ Local process on :8080 | — |
-| MCP Gateway + Cedar | — | ✅ Deployed stack |
-| Lambda tools | — | ✅ Deployed stack |
-| DynamoDB tables | — | ✅ Deployed stack |
-| Cognito auth | — | ✅ Deployed stack |
+| Agent logic (main.py) | ✅ Local process on :8080 | N/A |
+| MCP Gateway + Cedar | N/A | ✅ Deployed stack |
+| Lambda tools | N/A | ✅ Deployed stack |
+| DynamoDB tables | N/A | ✅ Deployed stack |
+| Cognito auth | N/A | ✅ Deployed stack |
 
-**Key insight:** You must deploy the stack first. Local dev runs only your agent code — tool calls still go to the cloud Gateway.
+**Key insight:** You must deploy the stack first. Local dev runs only your agent code; tool calls still go to the cloud Gateway.
 
 ### Setup
 
@@ -351,24 +351,24 @@ The fastest way to tune agent behavior without redeploying:
 5. Repeat until satisfied
 6. When ready, deploy: `agentcore deploy --target dev --yes`
 
-No container rebuild needed during local dev — only when deploying to the cloud.
+No container rebuild needed during local dev, only when deploying to the cloud.
 
 ### When to redeploy vs. iterate locally
 
 | Change | Local iteration | Requires redeploy |
 |--------|----------------|-------------------|
-| Agent prompts | ✅ | — |
-| Routing logic (main.py) | ✅ | — |
-| New Python dependency | — | ✅ (Dockerfile rebuild) |
-| New Lambda tool | — | ✅ (CDK creates Lambda) |
-| Cedar policy change | — | ✅ (agentcore.json) |
-| DynamoDB schema change | — | ✅ (CDK infra) |
+| Agent prompts | ✅ | N/A |
+| Routing logic (main.py) | ✅ | N/A |
+| New Python dependency | N/A | ✅ (Dockerfile rebuild) |
+| New Lambda tool | N/A | ✅ (CDK creates Lambda) |
+| Cedar policy change | N/A | ✅ (agentcore.json) |
+| DynamoDB schema change | N/A | ✅ (CDK infra) |
 
 ---
 
 ## Troubleshooting
 
-### agentcore validate — schema errors after CLI upgrade
+### agentcore validate: schema errors after CLI upgrade
 
 If `agentcore validate` reports errors like:
 - `memories[0].type: expected "AgentCoreMemory"`
@@ -376,8 +376,8 @@ If `agentcore validate` reports errors like:
 
 This means the CLI version has been upgraded and expects new schema fields. Common fixes:
 
-1. **Memories** — add `"type": "AgentCoreMemory"` to each memory object in `agentcore.json`
-2. **Credentials** — remove the `credentials` array entirely (credentials are managed via `agentcore add credential` CLI command, not the JSON file)
+1. **Memories**: add `"type": "AgentCoreMemory"` to each memory object in `agentcore.json`
+2. **Credentials**: remove the `credentials` array entirely (credentials are managed via `agentcore add credential` CLI command, not the JSON file)
 
 After fixing:
 ```bash
@@ -449,7 +449,7 @@ Failed to fetch discovery document from:
 https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/openid-configuration
 ```
 
-**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but `agentcore add credential` is **idempotent** — since the provider already exists, the `add` is a no-op and the stale discovery URL is never updated. The Runtime can't fetch a Gateway token, so `get_mcp_client()` returns `None` and no Gateway tools load (the co-located `submit_decision` tool still works, so the agent runs but can't verify policies).
+**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but `agentcore add credential` is **idempotent**: since the provider already exists, the `add` becomes a no-op and the stale discovery URL is never updated. The Runtime can't fetch a Gateway token, so `get_mcp_client()` returns `None` and no Gateway tools load (the co-located `submit_decision` tool still works, so the agent runs but can't verify policies).
 
 **Diagnose:**
 ```bash
@@ -467,7 +467,7 @@ grep COGNITO_DISCOVERY_URL .env
 ./scripts/fix_credential_region.sh <region>
 ```
 
-Then invoke with a **fresh session** — the Runtime caches the MCP client as a module-level singleton, so a warm session keeps the old failure; a new cold session picks up the corrected token.
+Then invoke with a **fresh session**: the Runtime caches the MCP client as a module-level singleton, so a warm session keeps the old failure; a new cold session picks up the corrected token.
 
 ### `agentcore deploy` fails: Gateway `DiscoveryUrl: failed validation` / PLACEHOLDER in synth
 
@@ -491,7 +491,7 @@ agentcore deploy --target dev --yes
 
 **Symptom:** You upload an email to `s3://claims-inbox-.../claims-inbox/` but no claim shows up.
 
-**Cause / expected behavior:** The Trigger Lambda is **fire-and-forget** — it invokes the Runtime and returns in a few seconds without waiting for the full dual-agent pipeline (~60–90s). Results are written to DynamoDB by the agent's tool calls *after* the Lambda returns.
+**Cause / expected behavior:** The Trigger Lambda is **fire-and-forget**: it invokes the Runtime and returns in a few seconds without waiting for the full dual-agent pipeline (~60–90s). Results are written to DynamoDB by the agent's tool calls *after* the Lambda returns.
 
 **Diagnose:**
 ```bash
