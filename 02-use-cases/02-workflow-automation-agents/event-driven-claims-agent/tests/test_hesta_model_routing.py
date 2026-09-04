@@ -89,12 +89,20 @@ class ResolveModelVariantWithTableTests(unittest.TestCase):
             self.assertEqual(variant, "primary")
 
 
+def tearDownModule():
+    """Restore config to sys.modules after test module completes.
+
+    This function is called by unittest after all tests in this module have run,
+    regardless of how the tests are invoked (directly, via unittest discover, etc.).
+    Without this, sys.modules["config"] would be left pointing at app/hesta-claimsagent
+    for downstream tests, causing silent import errors if values diverge from
+    app/claimsagent/config.
+    """
+    if _saved_config is not None:
+        sys.modules["config"] = _saved_config
+    elif "config" in sys.modules:
+        sys.modules.pop("config", None)
+
+
 if __name__ == "__main__":
-    # Restore config to sys.modules if it was there before (to avoid polluting other tests)
-    try:
-        unittest.main()
-    finally:
-        if _saved_config is not None:
-            sys.modules["config"] = _saved_config
-        elif "config" in sys.modules:
-            sys.modules.pop("config", None)
+    unittest.main()
