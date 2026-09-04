@@ -33,3 +33,11 @@ build/
 # Editor / OS
 .idea/
 *.swp
+
+docs/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# Local git worktrees
+.worktrees/
