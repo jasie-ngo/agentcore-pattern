@@ -36,3 +36,22 @@ In a new terminal, you can invoke that server with:
 After providing credentials, `agentcore deploy` will deploy your project into Amazon Bedrock AgentCore.
 
 Use `agentcore invoke` to invoke your deployed agent.
+
+## Agent fabric (ADR-0015)
+
+The pipeline is defined declaratively in `workflows/hesta.workflow.yaml` (an `agents:` +
+`workflow:` graph) and executed by `fabric/executor.py`'s `GraphExecutor`. `main.py` loads
+this file once at cold start and drives the graph via an `on_step` hook that streams the
+same incremental markdown output the pipeline has always produced.
+
+- `fabric/schema.py` — config dataclasses + validation (including the guardrail-role gate)
+- `fabric/registry.py` — binds the loaded config; agents resolve their own model/guardrail
+  overrides via `registry.spec_for(name)`
+- `fabric/adapters.py` / `fabric/routers.py` — glue between the graph and the existing
+  agent/deterministic Python functions (no agent logic changed)
+- `scripts/validate_fabric_config.py` — CI/CD gate: fails if a `role: member_facing_writer`
+  agent lacks a guardrail
+
+To add a new deterministic step or agent to the pipeline, register it in
+`fabric/adapters.py` (and `fabric/routers.py` if it gates an edge) and reference it from
+`workflows/hesta.workflow.yaml` — no changes to `main.py` are needed.
