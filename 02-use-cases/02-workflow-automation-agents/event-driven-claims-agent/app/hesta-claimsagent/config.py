@@ -109,23 +109,22 @@ def resolve_model_variant(role: str, seed: str) -> tuple[str, str]:
 
     try:
         item = _get_model_routing_item(role)
-    except Exception as exc:  # noqa: BLE001 — routing override is best-effort
-        _model_routing_log.warning("Model routing lookup failed for role=%s (using default): %s", role, exc)
-        return default_id, "primary"
+        if not item:
+            return default_id, "primary"
 
-    if not item:
-        return default_id, "primary"
+        primary_id = item.get("primaryModelId") or default_id
+        canary_id = item.get("canaryModelId")
+        canary_pct = int(item.get("canaryPercent", 0) or 0)
 
-    primary_id = item.get("primaryModelId") or default_id
-    canary_id = item.get("canaryModelId")
-    canary_pct = int(item.get("canaryPercent", 0) or 0)
+        if not canary_id or canary_pct <= 0:
+            return primary_id, "primary"
+        if canary_pct >= 100:
+            return canary_id, "canary"
 
-    if not canary_id or canary_pct <= 0:
+        bucket = int(hashlib.sha256(f"{role}:{seed}".encode()).hexdigest(), 16) % 100
+        if bucket < canary_pct:
+            return canary_id, "canary"
         return primary_id, "primary"
-    if canary_pct >= 100:
-        return canary_id, "canary"
-
-    bucket = int(hashlib.sha256(f"{role}:{seed}".encode()).hexdigest(), 16) % 100
-    if bucket < canary_pct:
-        return canary_id, "canary"
-    return primary_id, "primary"
+    except Exception as exc:  # noqa: BLE001 — routing override is best-effort
+        _model_routing_log.warning("Model routing lookup or parsing failed for role=%s (using default): %s", role, exc)
+        return default_id, "primary"
