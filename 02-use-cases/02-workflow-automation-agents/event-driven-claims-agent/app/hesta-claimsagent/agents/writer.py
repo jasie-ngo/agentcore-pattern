@@ -12,6 +12,7 @@ import logging
 
 import config
 from agents.base import build_agent
+from fabric import registry
 from intents import taxonomy
 from knowledge import hesta_snippets
 from models import DraftEmail
@@ -47,7 +48,8 @@ def _get():
     # Guarded: the Bedrock Guardrail (no personal advice) is attached to the Writer model.
     global _agent
     if _agent is None:
-        _agent = build_agent(_SYSTEM_PROMPT, fast=False, guarded=True)
+        spec = registry.spec_for("writer", default_fast=False, default_guarded=True)
+        _agent = build_agent(_SYSTEM_PROMPT, fast=spec.fast, guarded=spec.guarded)
     return _agent
 
 

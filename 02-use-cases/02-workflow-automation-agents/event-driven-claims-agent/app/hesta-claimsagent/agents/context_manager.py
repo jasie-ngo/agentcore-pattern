@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from agents.base import build_agent
+from fabric import registry
 from models import CaseSummary
 
 log = logging.getLogger(__name__)
@@ -34,11 +35,12 @@ def _get(session_manager=None):
     # With AgentCore Memory: build a fresh per-invocation agent bound to this member's
     # session so it records the contact and recalls the member's prior contacts.
     # Without memory (session_manager is None): reuse the cached stateless singleton.
+    spec = registry.spec_for("context_manager", default_fast=False)
     if session_manager is not None:
-        return build_agent(_SYSTEM_PROMPT, fast=False, session_manager=session_manager)
+        return build_agent(_SYSTEM_PROMPT, fast=spec.fast, guarded=spec.guarded, session_manager=session_manager)
     global _agent
     if _agent is None:
-        _agent = build_agent(_SYSTEM_PROMPT, fast=False)
+        _agent = build_agent(_SYSTEM_PROMPT, fast=spec.fast, guarded=spec.guarded)
     return _agent
 
 

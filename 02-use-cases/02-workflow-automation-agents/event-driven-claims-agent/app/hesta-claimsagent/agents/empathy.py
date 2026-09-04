@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 
 from agents.base import build_agent
+from fabric import registry
 from models import EmpathyAssessment
 
 log = logging.getLogger(__name__)
@@ -35,7 +36,8 @@ _agent = None
 def _get():
     global _agent
     if _agent is None:
-        _agent = build_agent(_SYSTEM_PROMPT, fast=True)
+        spec = registry.spec_for("empathy", default_fast=True)
+        _agent = build_agent(_SYSTEM_PROMPT, fast=spec.fast, guarded=spec.guarded)
     return _agent
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 
 from agents.base import build_agent
+from fabric import registry
 from intents import taxonomy
 from models import ReviewResult
 
@@ -40,7 +41,10 @@ _agent = None
 def _get():
     global _agent
     if _agent is None:
-        _agent = build_agent(_SYSTEM_PROMPT, fast=False)
+        # ADR-0015 decision 7: guardrail defaults ON for BOTH member-facing-text agents
+        # (Writer and Reviewer & Editor) — previously only the Writer was guarded.
+        spec = registry.spec_for("reviewer_editor", default_fast=False, default_guarded=True)
+        _agent = build_agent(_SYSTEM_PROMPT, fast=spec.fast, guarded=spec.guarded)
     return _agent
 
 
