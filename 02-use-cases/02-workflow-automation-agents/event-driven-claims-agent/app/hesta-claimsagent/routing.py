@@ -11,7 +11,8 @@ Escalate when ANY of:
   - the client is not verified,
   - intent confidence is low / intent is other_unknown / the identifier flagged triage,
   - more than one confident intent was detected,
-  - the empathy agent flags vulnerability or high/urgent priority.
+  - the empathy agent flags vulnerability or high/urgent priority,
+  - an expected attachment was not detected (attachment status is "missing").
 """
 
 from __future__ import annotations

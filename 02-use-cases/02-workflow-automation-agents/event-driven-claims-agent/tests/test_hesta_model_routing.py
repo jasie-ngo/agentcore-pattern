@@ -90,13 +90,15 @@ class ResolveModelVariantWithTableTests(unittest.TestCase):
 
 
 def tearDownModule():
-    """Restore config to sys.modules after test module completes.
+    """Restore config to sys.modules after this module completes.
 
-    This function is called by unittest after all tests in this module have run,
-    regardless of how the tests are invoked (directly, via unittest discover, etc.).
-    Without this, sys.modules["config"] would be left pointing at app/hesta-claimsagent
-    for downstream tests, causing silent import errors if values diverge from
-    app/claimsagent/config.
+    `unittest discover` imports every test module up front while building the suite,
+    before any test or teardown runs — so the pop-before-import at the top of this file
+    is what prevents this module from picking up a cached config from another test
+    (e.g., app/claimsagent) during discovery. This function does not undo any
+    contamination from discovery (that already happened, if it was going to); its only
+    job is to restore whatever was previously in sys.modules so it doesn't leak into
+    whichever test module happens to run or import next.
     """
     if _saved_config is not None:
         sys.modules["config"] = _saved_config

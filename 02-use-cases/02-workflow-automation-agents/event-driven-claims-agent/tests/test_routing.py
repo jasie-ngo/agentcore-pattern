@@ -12,6 +12,14 @@ import os
 import sys
 import unittest
 
+# Clean up module cache BEFORE importing to ensure we get the app/claimsagent version,
+# not a cached version from another test (e.g., app/hesta-claimsagent). routing.py here
+# transitively imports `from config import AUTO_APPROVE_THRESHOLD`, so config must be
+# popped too. This allows test_hesta_routing.py (for app/hesta-claimsagent) and this test
+# to import their own fresh versions.
+_saved_routing = sys.modules.pop("routing", None)
+_saved_config = sys.modules.pop("config", None)
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "claimsagent"))
 
 from routing import (  # noqa: E402
@@ -112,6 +120,28 @@ class EndToEndRoutingMatrixTests(unittest.TestCase):
     def test_threshold_enforcement_overrides_validator(self):
         # Validator says AUTO_APPROVE at confidence 70, but threshold is 80 → override.
         self.assertEqual(self._run("ACCEPT", 70, "AUTO_APPROVE"), HUMAN_REVIEW)
+
+
+def tearDownModule():
+    """Restore routing/config to sys.modules after this module completes.
+
+    `unittest discover` imports every test module up front while building the suite,
+    before any test or teardown runs — so the pop-before-import at the top of this file
+    (and of test_hesta_routing.py) is what prevents each module from picking up the
+    other's cached routing/config during discovery. This function does not undo any
+    contamination from discovery (that already happened, if it was going to); its only
+    job is to restore whatever was previously in sys.modules so it doesn't leak into
+    whichever test module happens to run or import next.
+    """
+    if _saved_routing is not None:
+        sys.modules["routing"] = _saved_routing
+    elif "routing" in sys.modules:
+        sys.modules.pop("routing", None)
+
+    if _saved_config is not None:
+        sys.modules["config"] = _saved_config
+    elif "config" in sys.modules:
+        sys.modules.pop("config", None)
 
 
 if __name__ == "__main__":

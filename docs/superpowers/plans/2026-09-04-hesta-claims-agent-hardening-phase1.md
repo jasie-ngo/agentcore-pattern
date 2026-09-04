@@ -23,6 +23,8 @@ This plan deliberately does **not** include: wiring per-case model-variant selec
 
 Also out of scope for this plan (separate future plans per the premortem remediation ordering): the batch-evaluation/DevOps gate build-out (no implementation exists yet in the repo), the identity post-pilot graduation (`MembersTable` rename + `email-index` GSI — infra change), and the AgentCore Memory user-preference strategy / case-type pseudo-actor correction writes.
 
+This plan also deliberately keys the model-routing override by **role** (`"fast"`/`"strong"`) rather than by individual agent name, diverging from `docs/hesta-claims-agent-spec.md` §3.9's per-agent-name design — this is because `agents/base.py`'s `_build_model` only distinguishes fast-vs-strong today, not individual agents, and this plan does not touch that caching/dispatch logic (see above). A follow-up wanting a true per-agent canary (e.g. canarying only the Writer) will need to change `resolve_model_variant`'s signature and the DynamoDB partition key, not just wire in the existing seam.
+
 ---
 
 ### Task 1: Wire attachment status into the routing gate
