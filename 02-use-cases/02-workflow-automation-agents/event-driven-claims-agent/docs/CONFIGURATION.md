@@ -213,17 +213,19 @@ https://claims-agent-{account}.auth.{region}.amazoncognito.com/oauth2/token
 
 ### AgentCore Identity Registration
 
-During `deploy.sh`, the Cognito client secret is registered with AgentCore Identity:
+`setup_cognito.sh` pushes the Cognito app client secret into Secrets Manager and writes its ARN to `.env` as `AGENTCORE_GATEWAY_CLIENT_SECRET_ARN`. It also still writes the plaintext value to `.env` as `AGENTCORE_GATEWAY_CLIENT_SECRET`, since `agentcore dev` (local development) reads that directly to register its own local workload identity. The deployed stack doesn't use the plaintext value: during `agentcore deploy`, the Cognito client is registered with AgentCore Identity as an ordinary CDK resource in `agentcore/cdk/lib/cdk-stack.ts`, reading the ARN instead:
 
-```bash
-agentcore add credential \
-  --name cognito-gateway-m2m \
-  --type oauth \
-  --discovery-url "$COGNITO_DISCOVERY_URL" \
-  --client-id "$AGENTCORE_GATEWAY_CLIENT_ID" \
-  --client-secret "$AGENTCORE_GATEWAY_CLIENT_SECRET" \
-  --scopes "agentcore/invoke"
+```typescript
+const gatewayCredential = OAuth2CredentialProvider.usingCognito(this, 'GatewayCredential', {
+  oAuth2CredentialProviderName: 'cognito-gateway-m2m',
+  clientId: process.env.AGENTCORE_GATEWAY_CLIENT_ID,
+  clientSecret: SecretValue.secretsManager(process.env.AGENTCORE_GATEWAY_CLIENT_SECRET_ARN),
+  issuer: cognitoDiscoveryUrl.replace(/\/\.well-known\/openid-configuration$/, ''),
+});
+gatewayCredential.grantUse(runtime.role);
 ```
+
+This synthesizes an `AWS::BedrockAgentCore::OAuth2CredentialProvider` resource whose `ClientSecret` property is a CloudFormation dynamic reference (`{{resolve:secretsmanager:...}}`), resolved by CloudFormation at deploy time, never written to the template in plaintext. It replaced an earlier `agentcore add credential` CLI step, which also meant a stale discovery URL after a cross-region redeploy needed a manual fix (`scripts/fix_credential_region.sh`, now a fallback rather than a required step); a normal `agentcore deploy`/`cdk deploy` now reconciles the discovery URL automatically since the resource is declarative.
 
 The Runtime references this credential provider by name (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER=cognito-gateway-m2m`), so no secrets live in CloudFormation or env vars.
 

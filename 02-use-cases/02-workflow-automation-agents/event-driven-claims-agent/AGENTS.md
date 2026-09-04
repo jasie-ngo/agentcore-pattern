@@ -25,7 +25,7 @@ S3 upload (claims-inbox/)
 
 **Auth (two separate paths):**
 - **Inbound to Runtime (Trigger Lambda → Runtime):** AWS_IAM (SigV4). The Trigger Lambda's execution role has `bedrock-agentcore:InvokeAgentRuntime` permission granted by CDK via `runtime.grantInvoke(triggerFn)`. No Cognito credentials needed.
-- **Outbound from Runtime to Gateway (Runtime → MCP Gateway):** Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` decorator. Secrets managed by AgentCore Identity vault (registered via `agentcore add credential`). The Gateway validates JWT via CUSTOM_JWT authorizer (Cognito OIDC discovery).
+- **Outbound from Runtime to Gateway (Runtime → MCP Gateway):** Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` decorator. Secrets managed by AgentCore Identity vault, registered as a CDK resource (`OAuth2CredentialProvider` in `agentcore/cdk/lib/cdk-stack.ts`, not the `agentcore add credential` CLI command). The Gateway validates JWT via CUSTOM_JWT authorizer (Cognito OIDC discovery).
 
 ---
 

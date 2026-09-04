@@ -1,6 +1,9 @@
 # ADR-0004: Hybrid Auth: SigV4 Inbound + Cognito M2M Outbound
 
-**Status:** Accepted  
+**Status:** Accepted. Note: as of 2026-09-04 the credential registration mechanism
+referenced below changed from the `agentcore add credential` CLI to a CDK resource; see
+[ADR-0010](0010-identity-token-vault-for-secrets.md#update-2026-09-04-registration-moved-from-cli-to-cdk).
+The auth model itself (hybrid SigV4 inbound + Cognito M2M outbound) is unaffected.  
 **Date:** 2025-06-24
 
 ## Context
@@ -38,5 +41,5 @@ It also demonstrates the **agent-as-principal** pattern: the Runtime itself obta
 
 - Trigger Lambda and test scripts use standard AWS credential chain, so no Cognito setup is needed for callers.
 - The Runtime → Gateway path uses `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")`, so secrets live in the AgentCore Identity vault, never in env vars or CloudFormation.
-- The deploy script (`deploy.sh`) handles Cognito provisioning interactively and registers the credential via `agentcore add credential`.
-- CDK only receives the credential provider name (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER`), so no client secrets flow through infrastructure-as-code.
+- The deploy script (`deploy.sh`) handles Cognito provisioning interactively (`scripts/setup_cognito.sh`); the credential provider itself is registered as a CDK resource during `agentcore deploy` (see ADR-0010).
+- CDK reads the credential provider name (`AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER`) and the client secret's Secrets Manager ARN, never the plaintext secret; the secret resolves via a CloudFormation dynamic reference, not a literal value in infrastructure-as-code.

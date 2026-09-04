@@ -5,7 +5,8 @@ import {
   type AgentCoreMcpSpec,
 } from '@aws/agentcore-cdk';
 import * as cdk from 'aws-cdk-lib';
-import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
+import { CfnOutput, SecretValue, Stack, type StackProps } from 'aws-cdk-lib';
+import { OAuth2CredentialProvider } from 'aws-cdk-lib/aws-bedrockagentcore';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import { InfraConstruct } from './infra-construct';
@@ -136,6 +137,43 @@ export class AgentCoreStack extends Stack {
     const credentialProvider = process.env.AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER || 'cognito-gateway-m2m';
     runtime.addEnvironmentVariable('AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER', credentialProvider);
     runtime.addEnvironmentVariable('AGENTCORE_GATEWAY_OAUTH_SCOPES', 'agentcore/invoke');
+
+    // ─── OAuth2 credential provider (replaces `agentcore add credential`) ──
+    // Registers the Cognito M2M client in the AgentCore Identity token vault as an
+    // ordinary CFN resource (AWS::BedrockAgentCore::OAuth2CredentialProvider), instead
+    // of the imperative `agentcore add credential` CLI step this deploy previously
+    // depended on. The Runtime's @requires_access_token decorator (tools/gateway.py)
+    // looks this credential up by name at runtime, so it doesn't need a CDK-level
+    // binding, only IAM permission to read it (granted via grantUse below).
+    //
+    // Cognito's issuer is per-user-pool: derive it from the discovery URL rather than
+    // requiring a second env var (the two must always agree; deriving keeps them from
+    // drifting apart).
+    const cognitoDiscoveryUrl = process.env.COGNITO_DISCOVERY_URL;
+    const cognitoClientId = process.env.AGENTCORE_GATEWAY_CLIENT_ID;
+    const cognitoClientSecretArn = process.env.AGENTCORE_GATEWAY_CLIENT_SECRET_ARN;
+    if (cognitoDiscoveryUrl && cognitoClientId && cognitoClientSecretArn) {
+      const issuer = cognitoDiscoveryUrl.replace(/\/\.well-known\/openid-configuration$/, '');
+      const gatewayCredential = OAuth2CredentialProvider.usingCognito(this, 'GatewayCredential', {
+        oAuth2CredentialProviderName: credentialProvider,
+        clientId: cognitoClientId,
+        clientSecret: SecretValue.secretsManager(cognitoClientSecretArn),
+        issuer,
+      });
+      gatewayCredential.grantUse(runtime.role);
+    } else {
+      // Falls back to whatever credential the Identity vault already has (e.g. one
+      // registered by the legacy `agentcore add credential` flow), so a partial
+      // .env (missing the new AGENTCORE_GATEWAY_CLIENT_SECRET_ARN) can still synth, rather
+      // than hard-failing every deploy that hasn't re-run setup_cognito.sh yet.
+      cdk.Annotations.of(this).addWarningV2(
+        'GatewayCredentialProvider:MissingConfig',
+        'COGNITO_DISCOVERY_URL / AGENTCORE_GATEWAY_CLIENT_ID / AGENTCORE_GATEWAY_CLIENT_SECRET_ARN not all set, ' +
+          'skipping OAuth2CredentialProvider creation. Run scripts/setup_cognito.sh to populate .env, or the ' +
+          `Runtime's @requires_access_token calls will fail unless '${credentialProvider}' already exists in the ` +
+          'Identity token vault from a prior deploy.'
+      );
+    }
 
     // Wire trigger Lambda → Runtime (grantInvoke adds the IAM permission).
     runtime.grantInvoke(this.infra.triggerFn);

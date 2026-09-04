@@ -21,6 +21,7 @@ fi
 REGION=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['region'])")
 USER_POOL_ID=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['user_pool_id'])")
 DOMAIN_PREFIX=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['domain_prefix'])")
+CLIENT_SECRET_ARN=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('client_secret_arn', ''))")
 
 echo "🗑️  Tearing down Cognito resources created by setup_cognito.sh..."
 echo "   Region: $REGION"
@@ -39,6 +40,15 @@ echo "   Deleting user pool: $USER_POOL_ID"
 aws cognito-idp delete-user-pool \
   --user-pool-id "$USER_POOL_ID" \
   --region "$REGION"
+
+# Delete the Secrets Manager secret holding the client secret, if one was created
+if [ -n "$CLIENT_SECRET_ARN" ]; then
+  echo "   Deleting client secret: $CLIENT_SECRET_ARN"
+  aws secretsmanager delete-secret \
+    --secret-id "$CLIENT_SECRET_ARN" \
+    --force-delete-without-recovery \
+    --region "$REGION" 2>/dev/null || true
+fi
 
 # Remove state file
 rm -f "$STATE_FILE"

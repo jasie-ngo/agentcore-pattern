@@ -1,8 +1,10 @@
 #!/bin/bash
-# Repair the cognito-gateway-m2m credential provider's discovery URL to match
-# the region where the stack is actually deployed. The provider is created once
-# and `agentcore add credential` is idempotent, so a region change leaves a
-# stale discovery URL pointing at the old region's Cognito pool.
+# Legacy fallback: the `cognito-gateway-m2m` credential provider is now a CDK-managed
+# OAuth2CredentialProvider resource (see agentcore/cdk/lib/cdk-stack.ts), so a normal
+# `agentcore deploy` / `cdk deploy` reconciles its discovery URL against the current
+# region automatically, and this script should no longer be needed in the ordinary case.
+# It's kept as a manual escape hatch for repairing a stale discovery URL directly via
+# the control-plane API, without waiting on a full stack deploy.
 #
 # Usage: ./scripts/fix_credential_region.sh [region]
 # Reads Cognito values from .env (COGNITO_DISCOVERY_URL, AGENTCORE_GATEWAY_CLIENT_ID,

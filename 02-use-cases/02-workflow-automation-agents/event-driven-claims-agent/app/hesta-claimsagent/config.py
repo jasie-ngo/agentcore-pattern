@@ -24,9 +24,11 @@ GATEWAY_URL = os.getenv(
 )
 GATEWAY_OAUTH_SCOPES = os.getenv("AGENTCORE_GATEWAY_OAUTH_SCOPES", "agentcore/invoke")
 
-# Identity credential provider — registered via `agentcore add credential`
-# during deploy. The @requires_access_token decorator uses this name to
-# fetch tokens from the AgentCore Identity token vault (Secrets Manager-backed).
+# Identity credential provider: registered as a CDK resource (OAuth2CredentialProvider
+# in agentcore/cdk/lib/cdk-stack.ts, AWS::BedrockAgentCore::OAuth2CredentialProvider),
+# not via the `agentcore add credential` CLI command. The @requires_access_token
+# decorator uses this name to fetch tokens from the AgentCore Identity token vault
+# (Secrets Manager-backed).
 GATEWAY_CREDENTIAL_PROVIDER = os.getenv("AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER", "cognito-gateway-m2m")
 
 # ─── Memory ─────────────────────────────────────────────────────────────────

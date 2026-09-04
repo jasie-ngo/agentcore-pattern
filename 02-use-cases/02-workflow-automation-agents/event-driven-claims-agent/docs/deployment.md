@@ -8,14 +8,13 @@
 
 This runs all steps below automatically:
 1. Configures deployment target (auto-detects account ID, generates `aws-targets.json`)
-2. Checks/creates Cognito User Pool for Gateway auth (interactive, auto-creates if needed)
-3. Registers OAuth credential with AgentCore Identity (`agentcore add credential`)
-4. Installs CDK dependencies (`npm install`)
-5. Installs agent Python dependencies (`uv sync`)
-6. Validates `agentcore.json`
-7. Bootstraps CDK (first-time only)
-8. Deploys via `agentcore deploy --target dev --yes`
-9. Seeds DynamoDB with test data (4 policies)
+2. Checks/creates Cognito User Pool for Gateway auth (interactive, auto-creates if needed; also pushes the app client secret into Secrets Manager)
+3. Installs CDK dependencies (`npm install`)
+4. Installs agent Python dependencies (`uv sync`)
+5. Validates `agentcore.json`
+6. Bootstraps CDK (first-time only)
+7. Deploys via `agentcore deploy --target dev --yes`, which creates the OAuth credential in AgentCore Identity as a CDK resource (`OAuth2CredentialProvider`), no longer a separate `agentcore add credential` step
+8. Seeds DynamoDB with test data (4 policies)
 
 When complete, you'll see:
 
@@ -377,7 +376,7 @@ If `agentcore validate` reports errors like:
 This means the CLI version has been upgraded and expects new schema fields. Common fixes:
 
 1. **Memories**: add `"type": "AgentCoreMemory"` to each memory object in `agentcore.json`
-2. **Credentials**: remove the `credentials` array entirely (credentials are managed via `agentcore add credential` CLI command, not the JSON file)
+2. **Credentials**: remove the `credentials` array entirely (the OAuth credential is managed as a CDK resource in `agentcore/cdk/lib/cdk-stack.ts`, not this JSON file)
 
 After fixing:
 ```bash
@@ -449,7 +448,7 @@ Failed to fetch discovery document from:
 https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/openid-configuration
 ```
 
-**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but `agentcore add credential` is **idempotent**: since the provider already exists, the `add` becomes a no-op and the stale discovery URL is never updated. The Runtime can't fetch a Gateway token, so `get_mcp_client()` returns `None` and no Gateway tools load (the co-located `submit_decision` tool still works, so the agent runs but can't verify policies).
+**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but nothing has re-run `agentcore deploy` yet to reconcile the credential provider (it's a CDK resource, `OAuth2CredentialProvider` in `agentcore/cdk/lib/cdk-stack.ts`, whose `issuer` property is derived from `COGNITO_DISCOVERY_URL` at synth time) against the new pool. The Runtime can't fetch a Gateway token, so `get_mcp_client()` returns `None` and no Gateway tools load (the co-located `submit_decision` tool still works, so the agent runs but can't verify policies).
 
 **Diagnose:**
 ```bash
@@ -462,7 +461,12 @@ aws bedrock-agentcore-control get-oauth2-credential-provider \
 grep COGNITO_DISCOVERY_URL .env
 ```
 
-**Fix:** Reconcile the credential provider with the current `.env` values (secret is sourced in-shell, never printed):
+**Fix:** Since the credential provider is now a declarative CDK resource, re-running the normal deploy reconciles it:
+```bash
+agentcore deploy --target dev --yes
+```
+
+For a faster fix without waiting on a full stack deploy, `scripts/fix_credential_region.sh` remains available as a manual escape hatch that patches the provider directly via the control-plane API (secret is sourced in-shell, never printed):
 ```bash
 ./scripts/fix_credential_region.sh <region>
 ```
@@ -542,7 +546,7 @@ agentcore deploy --target dev --yes
 
 **Note:** Ensure the Bedrock model (`global.anthropic.claude-sonnet-4-6`) is available in your target region. The global inference profile automatically routes to the nearest available region.
 
-**⚠️ Credential provider region caveat:** The `cognito-gateway-m2m` credential provider is created once and `agentcore add credential` is idempotent. When you deploy to a **different region** than a previous run, the provider keeps its old discovery URL and the agent will fail to load Gateway tools (see [Agent reports a Gateway tool is unavailable](#agent-reports-a-gateway-tool-is-unavailable-eg-lookup_policy-is-not-available)). After a cross-region redeploy, run:
+**⚠️ Credential provider region caveat:** The `cognito-gateway-m2m` credential provider is a CDK resource (`OAuth2CredentialProvider`), so a normal redeploy reconciles its discovery URL against whatever `COGNITO_DISCOVERY_URL` is in `.env` at synth time. If you deploy to a **different region** than a previous run and skip a full `agentcore deploy` (e.g. you only ran `setup_cognito.sh`), the provider keeps its old discovery URL and the agent will fail to load Gateway tools (see [Agent reports a Gateway tool is unavailable](#agent-reports-a-gateway-tool-is-unavailable-eg-lookup_policy-is-not-available)). After a cross-region redeploy, either re-run `agentcore deploy --target dev --yes`, or for a faster fix without a full stack deploy:
 
 ```bash
 ./scripts/fix_credential_region.sh <new-region>

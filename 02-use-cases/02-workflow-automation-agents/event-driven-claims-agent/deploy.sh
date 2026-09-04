@@ -115,26 +115,17 @@ fi
 echo "   ✓ Cognito configured (Client ID: ${AGENTCORE_GATEWAY_CLIENT_ID:0:8}...)"
 echo ""
 
-# ─── Step 2: Register credential with AgentCore Identity ──────────────────
-echo "🔑 Step 2: Registering OAuth credential with AgentCore Identity..."
 CREDENTIAL_NAME="${AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER:-cognito-gateway-m2m}"
 
-# agentcore add credential registers the secret in the Identity token vault.
-# If it already exists, this is a no-op (the CLI handles idempotency).
-agentcore add credential \
-  --name "$CREDENTIAL_NAME" \
-  --type oauth \
-  --discovery-url "$COGNITO_DISCOVERY_URL" \
-  --client-id "$AGENTCORE_GATEWAY_CLIENT_ID" \
-  --client-secret "$AGENTCORE_GATEWAY_CLIENT_SECRET" \
-  --scopes "${AGENTCORE_GATEWAY_OAUTH_SCOPES:-agentcore/invoke}" 2>/dev/null || {
-    echo "   ⚠️  Credential registration returned non-zero (may already exist). Continuing..."
-  }
-echo "   ✓ Credential provider: $CREDENTIAL_NAME"
-echo ""
+# NOTE: registering the OAuth credential used to be a separate imperative step here
+# (`agentcore add credential`), run before the CDK stack could reference its ARN. It's
+# now an ordinary CDK resource (OAuth2CredentialProvider in agentcore/cdk/lib/cdk-stack.ts,
+# CFN type AWS::BedrockAgentCore::OAuth2CredentialProvider) created as part of Step 6's
+# `agentcore deploy` below, so no separate CLI call, and no more stale-region drift (see
+# scripts/fix_credential_region.sh, now a fallback rather than a required workaround).
 
-# ─── Step 3: Install CDK dependencies ─────────────────────────────────────
-echo "📦 Step 3: Installing CDK dependencies..."
+# ─── Step 2: Install CDK dependencies ─────────────────────────────────────
+echo "📦 Step 2: Installing CDK dependencies..."
 cd agentcore/cdk
 if [ ! -d "node_modules" ]; then
   npm install --quiet
@@ -142,8 +133,8 @@ fi
 cd ../..
 echo ""
 
-# ─── Step 4: Install agent Python dependencies ────────────────────────────
-echo "🐍 Step 4: Installing agent dependencies..."
+# ─── Step 3: Install agent Python dependencies ────────────────────────────
+echo "🐍 Step 3: Installing agent dependencies..."
 cd app/claimsagent
 if [ ! -d ".venv" ]; then
   uv venv
@@ -152,29 +143,32 @@ uv sync --quiet 2>/dev/null || uv pip install -r requirements.txt --quiet
 cd ../..
 echo ""
 
-# ─── Step 5: Validate agentcore.json ──────────────────────────────────────
-echo "✅ Step 5: Validating configuration..."
+# ─── Step 4: Validate agentcore.json ──────────────────────────────────────
+echo "✅ Step 4: Validating configuration..."
 agentcore validate
 echo ""
 
-# ─── Step 6: Bootstrap CDK ────────────────────────────────────────────────
-echo "🏗️  Step 6: Checking CDK bootstrap..."
+# ─── Step 5: Bootstrap CDK ────────────────────────────────────────────────
+echo "🏗️  Step 5: Checking CDK bootstrap..."
 cdk bootstrap aws://$ACCOUNT_ID/$REGION --quiet 2>/dev/null || true
 echo ""
 
-# ─── Step 7: Deploy via AgentCore CLI ─────────────────────────────────────
-echo "🚀 Step 7: Deploying via agentcore deploy..."
-# Export Cognito values so CDK can read them during synthesis
+# ─── Step 6: Deploy via AgentCore CLI ─────────────────────────────────────
+echo "🚀 Step 6: Deploying via agentcore deploy..."
+# Export Cognito values so CDK can read them during synthesis. Note: the client
+# secret itself is never exported here, only its Secrets Manager ARN; CDK resolves
+# the actual value via SecretValue.secretsManager(...) at deploy time, not at synth.
 export COGNITO_DISCOVERY_URL="${COGNITO_DISCOVERY_URL}"
 export COGNITO_USER_POOL_ID="${COGNITO_USER_POOL_ID:-}"
 export AGENTCORE_GATEWAY_CLIENT_ID="${AGENTCORE_GATEWAY_CLIENT_ID}"
+export AGENTCORE_GATEWAY_CLIENT_SECRET_ARN="${AGENTCORE_GATEWAY_CLIENT_SECRET_ARN:-}"
 export AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER="${CREDENTIAL_NAME}"
 
 agentcore deploy --target dev --yes
 echo ""
 
-# ─── Step 8: Seed DynamoDB ─────────────────────────────────────────────────
-echo "🌱 Step 8: Seeding DynamoDB..."
+# ─── Step 7: Seed DynamoDB ─────────────────────────────────────────────────
+echo "🌱 Step 7: Seeding DynamoDB..."
 python3 scripts/seed_dynamodb.py --region "$REGION"
 echo ""
 

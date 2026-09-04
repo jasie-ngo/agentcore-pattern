@@ -233,7 +233,7 @@ flowchart LR
 | Runtime → MCP Gateway | Cognito M2M JWT | `@requires_access_token` decorator → Identity vault → `client_credentials` flow → `Authorization: Bearer {token}` |
 | Gateway → Lambda tools | IAM invoke | Gateway role has `lambda:InvokeFunction` on each tool function |
 
-The Cognito User Pool is managed by `scripts/setup_cognito.sh` (creates) and `scripts/teardown_cognito.sh` (destroys). The client secret is registered with AgentCore Identity during deploy via `agentcore add credential`. All callers of the Runtime (Trigger Lambda, test scripts) use IAM auth (SigV4). CDK grants invoke permissions via `runtime.grantInvoke()`.
+The Cognito User Pool is managed by `scripts/setup_cognito.sh` (creates) and `scripts/teardown_cognito.sh` (destroys); `setup_cognito.sh` also pushes the app client secret into Secrets Manager and writes its ARN to `.env`. The client secret is registered with AgentCore Identity as a CDK resource (`OAuth2CredentialProvider` in `agentcore/cdk/lib/cdk-stack.ts`, CloudFormation type `AWS::BedrockAgentCore::OAuth2CredentialProvider`) during `agentcore deploy`; the secret resolves via a CloudFormation dynamic reference to Secrets Manager, so it never appears in the template. This replaced an earlier `agentcore add credential` CLI step. All callers of the Runtime (Trigger Lambda, test scripts) use IAM auth (SigV4). CDK grants invoke permissions via `runtime.grantInvoke()`.
 
 ### Validating Authentication
 

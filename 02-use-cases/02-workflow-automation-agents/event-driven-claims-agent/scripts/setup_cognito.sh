@@ -95,6 +95,33 @@ CLIENT_SECRET=$(aws cognito-idp describe-user-pool-client \
   --region "$REGION" \
   --query 'UserPoolClient.ClientSecret' --output text)
 
+# Store the client secret in Secrets Manager so CDK can reference it by ARN
+# (SecretValue.secretsManager(...)) instead of embedding it as plaintext in the
+# CloudFormation template. This is what lets the OAuth2CredentialProvider CDK
+# resource in cdk-stack.ts replace the old `agentcore add credential` CLI step.
+SECRET_NAME="claims-agent/${CLIENT_NAME}-client-secret"
+echo "📝 Storing client secret in Secrets Manager: $SECRET_NAME"
+EXISTING_SECRET_ARN=$(aws secretsmanager describe-secret \
+  --secret-id "$SECRET_NAME" --region "$REGION" \
+  --query 'ARN' --output text 2>/dev/null || echo "None")
+
+if [ "$EXISTING_SECRET_ARN" != "None" ] && [ -n "$EXISTING_SECRET_ARN" ]; then
+  CLIENT_SECRET_ARN=$(aws secretsmanager put-secret-value \
+    --secret-id "$SECRET_NAME" \
+    --secret-string "$CLIENT_SECRET" \
+    --region "$REGION" \
+    --query 'ARN' --output text)
+  echo "   Updated existing secret: $CLIENT_SECRET_ARN"
+else
+  CLIENT_SECRET_ARN=$(aws secretsmanager create-secret \
+    --name "$SECRET_NAME" \
+    --description "Cognito M2M app client secret for the Claims Agent Gateway (managed by setup_cognito.sh)" \
+    --secret-string "$CLIENT_SECRET" \
+    --region "$REGION" \
+    --query 'ARN' --output text)
+  echo "   Created secret: $CLIENT_SECRET_ARN"
+fi
+
 # Compute endpoints
 TOKEN_ENDPOINT="https://${DOMAIN_PREFIX}.auth.${REGION}.amazoncognito.com/oauth2/token"
 DISCOVERY_URL="https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}/.well-known/openid-configuration"
@@ -109,7 +136,8 @@ cat > "$STATE_FILE" <<EOF
   "client_id": "$CLIENT_ID",
   "domain_prefix": "$DOMAIN_PREFIX",
   "token_endpoint": "$TOKEN_ENDPOINT",
-  "discovery_url": "$DISCOVERY_URL"
+  "discovery_url": "$DISCOVERY_URL",
+  "client_secret_arn": "$CLIENT_SECRET_ARN"
 }
 EOF
 
@@ -132,6 +160,11 @@ set_env_var() {
 
 set_env_var "AGENTCORE_GATEWAY_TOKEN_ENDPOINT" "$TOKEN_ENDPOINT" "$ENV_FILE"
 set_env_var "AGENTCORE_GATEWAY_CLIENT_ID" "$CLIENT_ID" "$ENV_FILE"
+set_env_var "AGENTCORE_GATEWAY_CLIENT_SECRET_ARN" "$CLIENT_SECRET_ARN" "$ENV_FILE"
+# Also write the raw secret: `agentcore dev` (local development, see docs/deployment.md
+# "Local Development") registers its own local workload identity directly from .env and
+# needs the actual value, separately from the deployed stack's CDK-managed
+# OAuth2CredentialProvider, which reads AGENTCORE_GATEWAY_CLIENT_SECRET_ARN instead.
 set_env_var "AGENTCORE_GATEWAY_CLIENT_SECRET" "$CLIENT_SECRET" "$ENV_FILE"
 set_env_var "AGENTCORE_GATEWAY_OAUTH_SCOPES" "${RESOURCE_SERVER_ID}/${SCOPE_NAME}" "$ENV_FILE"
 set_env_var "COGNITO_DISCOVERY_URL" "$DISCOVERY_URL" "$ENV_FILE"
@@ -140,10 +173,18 @@ set_env_var "COGNITO_USER_POOL_ID" "$USER_POOL_ID" "$ENV_FILE"
 echo ""
 echo "✅ Cognito setup complete!"
 echo ""
-echo "   User Pool ID:    $USER_POOL_ID"
-echo "   Client ID:       $CLIENT_ID"
-echo "   Token Endpoint:  $TOKEN_ENDPOINT"
-echo "   Discovery URL:   $DISCOVERY_URL"
+echo "   User Pool ID:      $USER_POOL_ID"
+echo "   Client ID:         $CLIENT_ID"
+echo "   Client Secret ARN: $CLIENT_SECRET_ARN"
+echo "   Token Endpoint:    $TOKEN_ENDPOINT"
+echo "   Discovery URL:     $DISCOVERY_URL"
 echo ""
 echo "   Values written to: .env"
 echo "   State saved to:    .cognito-state.json (used by teardown)"
+echo ""
+echo "   The client secret is stored in Secrets Manager ($SECRET_NAME) and also written"
+echo "   to .env as AGENTCORE_GATEWAY_CLIENT_SECRET (needed by 'agentcore dev' for local"
+echo "   workload identity). The deployed stack does not use that plaintext value:"
+echo "   cdk-stack.ts reads AGENTCORE_GATEWAY_CLIENT_SECRET_ARN via"
+echo "   SecretValue.secretsManager(...) to register the OAuth2CredentialProvider, so the"
+echo "   secret never appears in the CloudFormation template."
