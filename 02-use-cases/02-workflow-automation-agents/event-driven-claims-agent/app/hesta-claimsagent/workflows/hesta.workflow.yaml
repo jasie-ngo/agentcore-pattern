@@ -1,0 +1,49 @@
+# ADR-0015 decision 1: declarative agents: + workflow: graph for the HESTA pipeline.
+# Reproduces today's UNDERSTAND -> DECIDE -> EXECUTE flow exactly (see fabric/executor.py
+# and the note in the implementation plan about why case_status_lookup and
+# identity_profiling are chained rather than both hanging off context_manager).
+
+agents:
+  intent_identifier:
+    implementation: intent_identifier
+    fast: true
+  context_manager:
+    implementation: context_manager
+    fast: false
+  empathy:
+    implementation: empathy
+    fast: true
+  writer:
+    implementation: writer
+    fast: false
+    guarded: true
+    role: member_facing_writer
+  reviewer_editor:
+    implementation: reviewer_editor
+    fast: false
+    guarded: true
+    role: member_facing_writer
+
+workflow:
+  start: intent_identifier
+  nodes:
+    - {id: intent_identifier, type: agent, implementation: intent_identifier}
+    - {id: context_manager, type: agent, implementation: context_manager}
+    - {id: case_status_lookup, type: deterministic, implementation: case_status_lookup}
+    - {id: identity_profiling, type: deterministic, implementation: identity_profiling}
+    - {id: attachment_validation, type: deterministic, implementation: attachment_validation}
+    - {id: empathy, type: agent, implementation: empathy}
+    - {id: routing_decision, type: deterministic, implementation: routing_decision}
+    - {id: writer, type: agent, implementation: writer}
+    - {id: reviewer_editor, type: agent, implementation: reviewer_editor}
+    - {id: hitl_record, type: deterministic, implementation: hitl_record}
+  edges:
+    - {source: intent_identifier, target: context_manager}
+    - {source: context_manager, target: case_status_lookup, router: is_status_query}
+    - {source: case_status_lookup, target: identity_profiling}
+    - {source: identity_profiling, target: attachment_validation}
+    - {source: attachment_validation, target: empathy}
+    - {source: empathy, target: routing_decision}
+    - {source: routing_decision, target: writer}
+    - {source: writer, target: reviewer_editor}
+    - {source: reviewer_editor, target: hitl_record, router: escalate_to_human}
