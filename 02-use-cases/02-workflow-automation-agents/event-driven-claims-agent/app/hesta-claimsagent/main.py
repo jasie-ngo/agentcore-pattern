@@ -1,17 +1,12 @@
 """HESTA Member-Email Agentic Pilot — AgentCore Runtime entrypoint.
 
-Reworked from the original dual-agent claims demo into HESTA's member-email pipeline.
-It runs the full agent set over each inbound "email" (any file dropped in the S3 inbox),
-following the plan's UNDERSTAND → DECIDE → EXECUTE → LEARN flow:
-
-  UNDERSTAND  AI-001 Intent Identifier · AI-002 Conversation Context Manager
-  DECIDE      AI-003 Identity (REUSES lookup_policy/DynamoDB) · AI-004 Attachments · AI-005 Empathy
-              → routing gate (human-in-the-loop)
-  EXECUTE     AI-011 Writer → draft email DISPLAYED as output (never sent)
-              AI-012 Reviewer & Editor → checks the draft
-              → human-in-the-loop = WRITE a record to DynamoDB via the MCP Gateway
-                 (reuses create_claim + request_human_review)
-  LEARN       reuse existing Memory / observability (no new build)
+The pipeline (UNDERSTAND -> DECIDE -> EXECUTE -> LEARN) is declarative: the graph of
+agents/deterministic steps lives in workflows/hesta.workflow.yaml (ADR-0015 decision 1)
+and is executed by fabric.executor.GraphExecutor. This module wires the AgentCore
+Runtime entrypoint to that graph and renders the SAME streamed markdown output as
+before, via the executor's on_step hook. fabric/adapters.py and fabric/routers.py
+register the graph's node/router implementations — see
+docs/decisions/0015-config-driven-agent-fabric-orchestration.md.
 
 Reuse decisions (see app/hesta-claimsagent/IMPLEMENTATION_PLAN.md §0): identity reuses the
 existing DynamoDB check, the human hand-off is a DynamoDB record written via MCP, and the
@@ -20,31 +15,26 @@ Writer's draft is displayed — nothing is auto-sent. No AWS resources are creat
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import uuid
+from pathlib import Path
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
-from config import ENABLE_HITL_RECORD
+from fabric import adapters, registry, routers  # noqa: F401 — import registers node/router implementations
+from fabric.executor import GraphExecutor
+from fabric.loader import load_fabric_config
 from ingestion.email_normalizer import normalize_email
 from intents import taxonomy
-from memory.session import get_memory_session_manager, record_interaction
-from routing import decide
+from memory.session import get_memory_session_manager
 from tools import gateway
-
-from agents import (
-    attachment_validation,
-    case_status,
-    context_manager,
-    empathy as empathy_agent,
-    identity_profiling,
-    intent_identifier,
-    reviewer_editor,
-    writer as writer_agent,
-)
 
 app = BedrockAgentCoreApp()
 log = app.logger
+
+_FABRIC_CONFIG = load_fabric_config(Path(__file__).parent / "workflows" / "hesta.workflow.yaml")
+registry.bind(_FABRIC_CONFIG)
 
 
 # ─── Payload parsing (handles agentcore dev wrapping + S3 trigger payload) ────
@@ -188,58 +178,74 @@ def _fmt_review(review) -> str:
     return "\n".join(out) + "\n\n"
 
 
-# ─── Human-in-the-loop: write a record to DynamoDB via the MCP Gateway ────────
+# ─── Graph-step renderers (map a completed node id to markdown, ADR-0015) ─────
 
 
-async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft) -> str:
-    """Reuse create_claim + request_human_review to persist the case for a human.
+def _render_intent_identifier(state: dict) -> str:
+    return "## 1 · Understand\n\n" + _fmt_intents(state["intent_result"])
 
-    This is the pilot's human hand-off — a DynamoDB record via the existing Gateway
-    tools. No new tables/tools. Non-fatal: surfaces the real Gateway error if it fails.
-    """
-    description = (inbound.latest_message or "").strip()[:1000] or draft.subject
-    claim = await gateway.call_tool(
-        mcp,
-        "create_claim",
-        {
-            "policy_number": profile.member_number or "UNKNOWN",
-            "description": description,
-            "estimated_amount": 0,
-            "category": intent_result.primary_intent_id,
-            "status": "pending_review",
-            "decision": "escalated",
-        },
-    )
-    # Gateway/transport failure (auth, connection, Cedar deny surfaced as an exception).
-    if isinstance(claim, dict) and "_gateway_error" in claim:
-        return f"⚠️ Could not write the case record (Gateway error): {claim['_gateway_error']}\n\n"
-    # The create_claim Lambda returns {"error": "..."} for validation/DDB failures.
-    if isinstance(claim, dict) and claim.get("error"):
-        return f"⚠️ create_claim returned an error: {claim['error']}\n\n"
 
-    claim_id = claim.get("claim_id") if isinstance(claim, dict) else None
-    if not claim_id:
-        # Don't claim success we can't confirm — show exactly what came back.
-        return f"⚠️ create_claim did not return a claim_id (record not confirmed). Raw response: {json.dumps(claim)[:600]}\n\n"
+def _render_context_manager(state: dict) -> str:
+    out = _fmt_summary(state["summary"])
+    if state.get("memory_recorded") is not None:
+        status = "recorded" if state["memory_recorded"] else "not recorded"
+        out += f"_🧠 Memory active — actor `{state['actor_id']}` · session `{state['session_id']}` · turn {status}._\n\n"
+    return out
 
-    lines = [f"📋 Case record written to DynamoDB (Claims): `{claim_id}`"]
 
-    review = await gateway.call_tool(
-        mcp,
-        "request_human_review",
-        {
-            "claim_id": claim_id,
-            "reason": "; ".join(decision.reasons) or "Manual review required",
-            "estimated_amount": 0,
-        },
-    )
-    if isinstance(review, dict) and "_gateway_error" in review:
-        lines.append(f"⚠️ Review record not written (Gateway error): {review['_gateway_error']}")
-    elif isinstance(review, dict) and review.get("error"):
-        lines.append(f"⚠️ request_human_review returned an error: {review['error']}")
-    else:
-        lines.append("🔍 Review record written to DynamoDB (Reviews) — case is queued for a human.")
-    return "\n".join(lines) + "\n\n"
+def _render_case_status_lookup(state: dict) -> str:
+    return _fmt_status(state["status_ctx"])
+
+
+def _render_identity_profiling(state: dict) -> str:
+    return "## 2 · Decide\n\n" + _fmt_profile(state["profile"])
+
+
+def _render_attachment_validation(state: dict) -> str:
+    return _fmt_attach(state["attachments"])
+
+
+def _render_empathy(state: dict) -> str:
+    return _fmt_empathy(state["empathy"])
+
+
+def _render_routing_decision(state: dict) -> str:
+    return _fmt_decision(state["decision"])
+
+
+def _render_writer(state: dict) -> str:
+    draft = state["draft"]
+    out = [
+        "## 3 · Execute\n\n",
+        "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n",
+        f"**Subject:** {draft.subject}\n\n",
+        "```text\n" + draft.body + "\n```\n\n",
+    ]
+    if draft.assumptions:
+        out.append("_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n")
+    return "".join(out)
+
+
+def _render_reviewer_editor(state: dict) -> str:
+    return _fmt_review(state["review"])
+
+
+def _render_hitl_record(state: dict) -> str:
+    return "### 👤 Human-in-the-loop\n\n" + state["hitl_message"]
+
+
+_RENDER_AFTER = {
+    "intent_identifier": _render_intent_identifier,
+    "context_manager": _render_context_manager,
+    "case_status_lookup": _render_case_status_lookup,
+    "identity_profiling": _render_identity_profiling,
+    "attachment_validation": _render_attachment_validation,
+    "empathy": _render_empathy,
+    "routing_decision": _render_routing_decision,
+    "writer": _render_writer,
+    "reviewer_editor": _render_reviewer_editor,
+    "hitl_record": _render_hitl_record,
+}
 
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
@@ -290,65 +296,38 @@ async def invoke(payload, context):
             gateway.LAST_ERROR = f"could not start Gateway session: {exc!r}"
             mcp = None
 
+    state = {
+        "inbound": inbound,
+        "mcp": mcp,
+        "memory_session": memory_session,
+        "actor_id": actor_id,
+        "session_id": session_id,
+    }
+
     try:
-        # ── UNDERSTAND ──────────────────────────────────────────────────────
-        yield "## 1 · Understand\n\n"
-        intent_result = await intent_identifier.identify(inbound)
-        yield _fmt_intents(intent_result)
-        # AI-002 uses AgentCore Memory (when available) to recall this member's prior contacts.
-        summary = await context_manager.summarize(inbound, session_manager=memory_session)
-        yield _fmt_summary(summary)
-        if memory_session is not None:
-            # Explicitly persist this contact (structured_output doesn't fire the session
-            # manager's write hooks), so SEMANTIC/SUMMARIZATION records actually populate.
-            recorded = record_interaction(actor_id, session_id, inbound.latest_message, summary.summary)
-            status = "recorded" if recorded else "not recorded"
-            yield (
-                f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
-            )
+        # UNDERSTAND -> DECIDE -> EXECUTE run as the declarative graph in
+        # workflows/hesta.workflow.yaml; on_step streams each section as its node
+        # completes, matching the pre-fabric pipeline's incremental output exactly.
+        queue: asyncio.Queue = asyncio.Queue()
 
-        # For status/progress enquiries, pull the member's existing pending cases
-        # (reuses the list_pending_claims Gateway tool) so the Writer can be specific.
-        status_ctx = None
-        if case_status.is_status_query(inbound, summary, intent_result):
-            status_ctx = await case_status.lookup_pending(mcp, inbound)
-            yield _fmt_status(status_ctx)
+        async def _on_step(node_id: str, current_state: dict) -> None:
+            renderer = _RENDER_AFTER.get(node_id)
+            if renderer:
+                queue.put_nowait(renderer(current_state))
 
-        # ── DECIDE ──────────────────────────────────────────────────────────
-        yield "## 2 · Decide\n\n"
-        # AI-003 reuses the existing lookup_policy Gateway tool on the started client.
-        profile = await identity_profiling.profile(mcp, inbound, intent_result)
-        yield _fmt_profile(profile)
-        attach = attachment_validation.assess(inbound, intent_result)
-        yield _fmt_attach(attach)
-        emp = await empathy_agent.assess(inbound)
-        yield _fmt_empathy(emp)
-        decision = decide(intent_result, profile, emp)
-        yield _fmt_decision(decision)
+        async def _drive() -> None:
+            try:
+                await GraphExecutor(_FABRIC_CONFIG).run(state, on_step=_on_step)
+            finally:
+                queue.put_nowait(None)  # sentinel: no more sections
 
-        # ── EXECUTE ─────────────────────────────────────────────────────────
-        yield "## 3 · Execute\n\n"
-        draft = await writer_agent.write(inbound, intent_result, profile, summary, emp, status_ctx=status_ctx)
-        yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
-        yield f"**Subject:** {draft.subject}\n\n"
-        yield "```text\n" + draft.body + "\n```\n\n"
-        if draft.assumptions:
-            yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
-
-        review = await reviewer_editor.review(draft, intent_result, profile)
-        yield _fmt_review(review)
-
-        # Human-in-the-loop hand-off = write a record to DynamoDB via the MCP Gateway.
-        if decision.escalate_to_human:
-            yield "### 👤 Human-in-the-loop\n\n"
-            if ENABLE_HITL_RECORD:
-                yield await _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft)
-            else:
-                yield (
-                    "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
-                    + "; ".join(decision.reasons)
-                    + "_\n\n"
-                )
+        driver = asyncio.ensure_future(_drive())
+        while True:
+            chunk = await queue.get()
+            if chunk is None:
+                break
+            yield chunk
+        await driver  # re-raise any exception the graph run hit
 
         # ── LEARN ───────────────────────────────────────────────────────────
         yield "## 4 · Learn\n\n"
