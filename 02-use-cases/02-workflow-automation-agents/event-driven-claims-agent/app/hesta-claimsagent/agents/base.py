@@ -14,8 +14,8 @@ from strands import Agent
 from strands.models.bedrock import BedrockModel
 
 
-def _build_model(fast: bool, guarded: bool) -> BedrockModel:
-    model_id = FAST_MODEL_ID if fast else AGENT_MODEL_ID
+def _build_model(fast: bool, guarded: bool, model_id_override: str | None = None) -> BedrockModel:
+    model_id = model_id_override or (FAST_MODEL_ID if fast else AGENT_MODEL_ID)
     if guarded and GUARDRAIL_ID:
         # Attach the Bedrock Guardrail (no personal advice). Redacts blocked output to the
         # sentinel so the orchestrator can detect an intervention and fall back safely.
@@ -30,13 +30,23 @@ def _build_model(fast: bool, guarded: bool) -> BedrockModel:
     return BedrockModel(model_id=model_id)
 
 
-def build_agent(system_prompt: str, *, fast: bool = False, session_manager=None, guarded: bool = False) -> Agent:
+def build_agent(
+    system_prompt: str,
+    *,
+    fast: bool = False,
+    session_manager=None,
+    guarded: bool = False,
+    model_id_override: str | None = None,
+) -> Agent:
     """Build a Strands agent.
 
     guarded=True attaches the Bedrock Guardrail (when GUARDRAIL_ID is configured) — used by
     the Writer so it cannot emit personal financial advice.
+
+    model_id_override, if given, takes precedence over the fast/strong env-var default —
+    the seam a per-case canary-routing caller uses (see config.resolve_model_variant).
     """
-    kwargs = {"model": _build_model(fast, guarded), "system_prompt": system_prompt}
+    kwargs = {"model": _build_model(fast, guarded, model_id_override), "system_prompt": system_prompt}
     if session_manager is not None:
         # Attaching a session manager makes the agent record turns to AgentCore Memory and
         # recall relevant history for this actor/session.
