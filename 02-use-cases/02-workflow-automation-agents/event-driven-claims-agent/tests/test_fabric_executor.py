@@ -125,6 +125,35 @@ class GraphExecutorTests(unittest.TestCase):
         with self.assertRaises(FabricConfigError):
             asyncio.run(GraphExecutor(config).run({}))
 
+    def test_unregistered_router_raises_fabric_config_error(self):
+        """Consistent with _adapter_for: a typo'd router name must surface as a
+        FabricConfigError, not a bare KeyError."""
+
+        async def root(state):
+            return {}
+
+        async def optional(state):
+            return {}
+
+        self._node("root", root)
+        self._node("optional", optional)
+        config = _config(
+            ["root", "optional"],
+            [{"source": "root", "target": "optional", "router": "no_such_router"}],
+            start="root",
+        )
+
+        with self.assertRaises(FabricConfigError) as ctx:
+            asyncio.run(GraphExecutor(config).run({}))
+        self.assertIn("no_such_router", str(ctx.exception))
+
+    def test_unregistered_node_implementation_raises_fabric_config_error(self):
+        config = _config(["missing_impl"], [], start="missing_impl")
+
+        with self.assertRaises(FabricConfigError) as ctx:
+            asyncio.run(GraphExecutor(config).run({}))
+        self.assertIn("missing_impl", str(ctx.exception))
+
     def test_cycle_raises(self):
         async def noop(state):
             return {}

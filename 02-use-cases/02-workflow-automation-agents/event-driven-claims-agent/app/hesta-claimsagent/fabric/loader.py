@@ -24,7 +24,6 @@ def _parse_agents(raw: dict | None) -> dict[str, AgentSpec]:
             raise FabricConfigError(f"agents.{name} must be a mapping")
         agents[name] = AgentSpec(
             name=name,
-            implementation=spec.get("implementation", name),
             fast=bool(spec.get("fast", False)),
             guarded=bool(spec.get("guarded", False)),
             role=spec.get("role"),

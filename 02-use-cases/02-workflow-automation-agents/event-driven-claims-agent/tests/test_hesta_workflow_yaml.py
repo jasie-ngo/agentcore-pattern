@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "hesta-claimsagent"))
 
+from fabric import adapters, registry, routers  # noqa: E402,F401 — imports register nodes/routers
 from fabric.loader import load_fabric_config  # noqa: E402
 
 _WORKFLOW_PATH = os.path.join(
@@ -41,7 +42,19 @@ class HestaWorkflowYamlTests(unittest.TestCase):
     def test_conditional_edges_reference_registered_routers(self):
         config = load_fabric_config(_WORKFLOW_PATH)
         routed = {e.router for e in config.workflow.edges if e.router}
-        self.assertEqual(routed, {"is_status_query", "escalate_to_human"})
+        self.assertTrue(routed, "expected at least one conditional edge")
+        self.assertLessEqual(
+            routed,
+            set(registry.ROUTERS),
+            f"unregistered router(s): {sorted(routed - set(registry.ROUTERS))}",
+        )
+
+    def test_nodes_reference_registered_implementations(self):
+        config = load_fabric_config(_WORKFLOW_PATH)
+        for node in config.workflow.nodes:
+            table = registry.AGENT_NODES if node.type == "agent" else registry.DETERMINISTIC_NODES
+            with self.subTest(node=node.id):
+                self.assertIn(node.implementation, table)
 
 
 if __name__ == "__main__":

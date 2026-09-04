@@ -5,21 +5,16 @@
 
 agents:
   intent_identifier:
-    implementation: intent_identifier
     fast: true
   context_manager:
-    implementation: context_manager
     fast: false
   empathy:
-    implementation: empathy
     fast: true
   writer:
-    implementation: writer
     fast: false
     guarded: true
     role: member_facing_writer
   reviewer_editor:
-    implementation: reviewer_editor
     fast: false
     guarded: true
     role: member_facing_writer

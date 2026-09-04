@@ -33,7 +33,13 @@ def _node_active(workflow: WorkflowSpec, node_id: str, state: dict) -> bool:
         return True
     if any(e.router is None for e in incoming):
         return True
-    return any(registry.ROUTERS[e.router](state) for e in incoming)
+    return any(_router_for(e.router)(state) for e in incoming)
+
+
+def _router_for(name: str) -> "registry.RouterFn":
+    if name not in registry.ROUTERS:
+        raise FabricConfigError(f"no registered router named '{name}'")
+    return registry.ROUTERS[name]
 
 
 def _adapter_for(node) -> "registry.NodeAdapter":

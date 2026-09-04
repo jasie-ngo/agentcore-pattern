@@ -1,5 +1,8 @@
-# Bounds mirror pyproject.toml. The Dockerfile installs from THIS file, so the
-# upper bounds must live here to keep the deployed container reproducible.
+# Bounds mirror pyproject.toml, which is the source of truth for this app.
+# The Dockerfile does NOT install from this file — it runs `uv sync --frozen`
+# against pyproject.toml + uv.lock, so the lockfile is what pins the deployed
+# container. This file exists only as a convenience for plain-pip local setups
+# (see docs/deployment.md) and must be kept in sync with pyproject.toml by hand.
 aws-opentelemetry-distro>=0.18.0,<1.0
 bedrock-agentcore>=1.15.0,<2.0
 botocore[crt]>=1.43.36,<2.0

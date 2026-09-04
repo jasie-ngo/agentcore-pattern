@@ -8,6 +8,7 @@ doesn't declare that agent) so existing behaviour is unchanged.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Awaitable, Callable
 
 from .schema import AgentSpec, FabricConfig
@@ -39,10 +40,19 @@ def spec_for(name: str, *, default_fast: bool = False, default_guarded: bool = F
 
     Falls back to defaults (matching pre-fabric hardcoded behaviour) when no fabric
     config is bound, or the bound config doesn't declare this agent.
+
+    ``default_guarded`` is a **floor**, not a default: a bound config may raise an
+    agent to guarded, but can never lower a caller that asked for guarded=True back
+    to False. ADR-0015 decision 7 chose "enforcement over injection, since a client
+    could otherwise override an agent and silently drop a default". ``default_fast``
+    has no compliance implication and stays a plain default — the config wins.
     """
     if _active is not None and name in _active.agents:
-        return _active.agents[name]
-    return AgentSpec(name=name, implementation=name, fast=default_fast, guarded=default_guarded)
+        spec = _active.agents[name]
+        if default_guarded and not spec.guarded:
+            return replace(spec, guarded=True)
+        return spec
+    return AgentSpec(name=name, fast=default_fast, guarded=default_guarded)
 
 
 def deterministic_node(name: str):

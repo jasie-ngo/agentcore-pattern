@@ -13,10 +13,8 @@ from fabric.schema import FabricConfigError  # noqa: E402
 _VALID_YAML = """
 agents:
   intent_identifier:
-    implementation: intent_identifier
     fast: true
   writer:
-    implementation: writer
     guarded: true
     role: member_facing_writer
 
@@ -39,7 +37,6 @@ workflow:
 _UNGUARDED_MEMBER_FACING_YAML = """
 agents:
   writer:
-    implementation: writer
     role: member_facing_writer
 workflow:
   start: writer

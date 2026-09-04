@@ -17,11 +17,11 @@ from fabric.schema import (  # noqa: E402
 )
 
 
-def _minimal_config(**agent_overrides) -> FabricConfig:
-    agent = AgentSpec(name="writer", implementation="writer", **agent_overrides)
-    node = NodeSpec(id="writer", type="agent", implementation="writer")
-    workflow = WorkflowSpec(start="writer", nodes=(node,), edges=())
-    return FabricConfig(agents={"writer": agent}, workflow=workflow)
+def _minimal_config(name: str = "drafter", **agent_overrides) -> FabricConfig:
+    agent = AgentSpec(name=name, **agent_overrides)
+    node = NodeSpec(id=name, type="agent", implementation=name)
+    workflow = WorkflowSpec(start=name, nodes=(node,), edges=())
+    return FabricConfig(agents={name: agent}, workflow=workflow)
 
 
 class ValidateFabricConfigTests(unittest.TestCase):
@@ -75,6 +75,18 @@ class ValidateFabricConfigTests(unittest.TestCase):
 
     def test_member_facing_role_with_guardrail_passes(self):
         validate_fabric_config(_minimal_config(role="member_facing_writer", guarded=True))  # must not raise
+
+    def test_member_facing_agent_name_without_role_or_guardrail_raises(self):
+        """Identity backstop: a config that never self-tags ``role`` must still be
+        rejected for the known member-facing agent names (ADR-0015 decision 7)."""
+        for name in ("writer", "reviewer_editor"):
+            with self.subTest(name=name), self.assertRaises(FabricConfigError):
+                validate_fabric_config(_minimal_config(name=name, guarded=False))
+
+    def test_member_facing_agent_name_with_guardrail_passes(self):
+        for name in ("writer", "reviewer_editor"):
+            with self.subTest(name=name):
+                validate_fabric_config(_minimal_config(name=name, guarded=True))  # must not raise
 
 
 if __name__ == "__main__":

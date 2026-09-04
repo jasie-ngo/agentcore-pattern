@@ -13,7 +13,7 @@ from fabric.schema import AgentSpec, FabricConfig, NodeSpec, WorkflowSpec  # noq
 
 
 def _bind_single(name: str, **overrides) -> None:
-    spec = AgentSpec(name=name, implementation=name, **overrides)
+    spec = AgentSpec(name=name, **overrides)
     node = NodeSpec(id=name, type="agent", implementation=name)
     workflow = WorkflowSpec(start=name, nodes=(node,), edges=())
     registry.bind(FabricConfig(agents={name: spec}, workflow=workflow))

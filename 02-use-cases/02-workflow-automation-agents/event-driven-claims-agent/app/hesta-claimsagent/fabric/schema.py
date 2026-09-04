@@ -19,7 +19,6 @@ class FabricConfigError(ValueError):
 @dataclass(frozen=True)
 class AgentSpec:
     name: str
-    implementation: str
     fast: bool = False
     guarded: bool = False
     role: str | None = None
@@ -56,6 +55,13 @@ class FabricConfig:
 # Role tags whose agents MUST have a guardrail attached (ADR-0015 decision 7).
 GUARDRAILED_ROLES = frozenset({"member_facing_writer"})
 
+# Identity-based backstop: agents declared under these names are member-facing by
+# definition and MUST be guarded, whether or not the config remembers to self-tag
+# ``role: member_facing_writer``. ADR-0015 decision 7 chose "enforcement over
+# injection" precisely so compliance can't be silently dropped by an incomplete
+# client config — the role tag alone is opt-in and therefore not sufficient.
+MEMBER_FACING_AGENTS = frozenset({"writer", "reviewer_editor"})
+
 
 def validate_fabric_config(config: FabricConfig) -> None:
     """Raise FabricConfigError on any structural or compliance violation."""
@@ -84,5 +90,10 @@ def validate_fabric_config(config: FabricConfig) -> None:
         if agent.role in GUARDRAILED_ROLES and not agent.guarded:
             raise FabricConfigError(
                 f"agent '{name}' has role '{agent.role}' which requires guarded=true "
+                "(ADR-0015 decision 7) but guarded is false"
+            )
+        if name in MEMBER_FACING_AGENTS and not agent.guarded:
+            raise FabricConfigError(
+                f"agent '{name}' is member-facing and requires guarded=true "
                 "(ADR-0015 decision 7) but guarded is false"
             )
