@@ -322,11 +322,18 @@ async def invoke(payload, context):
                 queue.put_nowait(None)  # sentinel: no more sections
 
         driver = asyncio.ensure_future(_drive())
-        while True:
-            chunk = await queue.get()
-            if chunk is None:
-                break
-            yield chunk
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            # If the consumer abandons the stream (GeneratorExit at the yield above), stop the
+            # graph rather than leaving it running against the MCP session we're about to close
+            # — and so its exception isn't left unretrieved. No-op on the normal path.
+            if not driver.done():
+                driver.cancel()
         await driver  # re-raise any exception the graph run hit
 
         # ── LEARN ───────────────────────────────────────────────────────────

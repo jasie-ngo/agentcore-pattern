@@ -145,6 +145,23 @@ class MainFabricPipelineTests(unittest.TestCase):
         self.assertIn("- **Human-in-the-loop:** no", output)
         self.assertIn("Processing complete", output)
 
+    def test_exception_in_graph_propagates_out_of_invoke(self):
+        """A node blowing up inside the graph must surface to invoke()'s caller.
+
+        The executor runs as a background task feeding an asyncio.Queue, so an exception
+        there could plausibly be swallowed (never retrieved) or deadlock the drain loop.
+        The wait_for turns a hang into a failure rather than a stalled test run.
+        """
+        import main
+
+        with patch("tools.gateway.get_mcp_client", return_value=MagicMock()), patch(
+            "agents.intent_identifier.identify", new=AsyncMock(side_effect=RuntimeError("boom"))
+        ):
+            with self.assertRaises(RuntimeError) as ctx:
+                asyncio.run(asyncio.wait_for(_collect(main.invoke({"prompt": "hello"}, None)), timeout=10))
+
+        self.assertIn("boom", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()
