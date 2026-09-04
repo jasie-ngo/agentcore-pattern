@@ -65,3 +65,67 @@ GUARDRAIL_BLOCK_SENTINEL = "[GUARDRAIL_BLOCKED_ADVICE]"
 
 # ─── Logging ────────────────────────────────────────────────────────────────
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# ─── Model routing override (canary testing) ──────────────────────────────────
+# Optional DynamoDB table for per-role model overrides, layered beneath the
+# AGENT_MODEL_ID/FAST_MODEL_ID env-var defaults above. Empty ⇒ disabled, use env
+# vars only (today's behaviour, unchanged). Table schema: partition key `role`
+# ("fast" | "strong"), attributes `primaryModelId`, `canaryModelId` (optional),
+# `canaryPercent` (0-100, optional).
+MODEL_ROUTING_TABLE = os.getenv("MODEL_ROUTING_TABLE", "")
+
+import hashlib
+import logging
+
+_model_routing_log = logging.getLogger(__name__)
+
+
+def _get_model_routing_item(role: str) -> dict | None:
+    """Fetch the override item for a role. Isolated for easy test mocking."""
+    import boto3
+
+    table = boto3.resource("dynamodb", region_name=REGION).Table(MODEL_ROUTING_TABLE)
+    response = table.get_item(Key={"role": role})
+    return response.get("Item")
+
+
+def resolve_model_variant(role: str, seed: str) -> tuple[str, str]:
+    """Resolve which model id to use for a role, honouring any canary override.
+
+    Args:
+        role: "fast" or "strong" — matches agents/base.py's existing fast/strong split.
+        seed: a stable per-case identifier (e.g. the case's actor/session id) used to
+            deterministically bucket the same case into the same variant every time it's
+            evaluated, rather than an independent random draw per call.
+
+    Returns:
+        (model_id, variant_label) where variant_label is "primary" or "canary".
+        Never raises — any failure degrades to the existing env-var default with
+        variant_label="primary", matching today's behaviour exactly.
+    """
+    default_id = FAST_MODEL_ID if role == "fast" else AGENT_MODEL_ID
+    if not MODEL_ROUTING_TABLE:
+        return default_id, "primary"
+
+    try:
+        item = _get_model_routing_item(role)
+    except Exception as exc:  # noqa: BLE001 — routing override is best-effort
+        _model_routing_log.warning("Model routing lookup failed for role=%s (using default): %s", role, exc)
+        return default_id, "primary"
+
+    if not item:
+        return default_id, "primary"
+
+    primary_id = item.get("primaryModelId") or default_id
+    canary_id = item.get("canaryModelId")
+    canary_pct = int(item.get("canaryPercent", 0) or 0)
+
+    if not canary_id or canary_pct <= 0:
+        return primary_id, "primary"
+    if canary_pct >= 100:
+        return canary_id, "canary"
+
+    bucket = int(hashlib.sha256(f"{role}:{seed}".encode()).hexdigest(), 16) % 100
+    if bucket < canary_pct:
+        return canary_id, "canary"
+    return primary_id, "primary"
