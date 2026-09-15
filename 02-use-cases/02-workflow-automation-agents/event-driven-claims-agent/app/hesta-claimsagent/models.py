@@ -52,6 +52,15 @@ class IdentityInfo(BaseModel):
     name: str | None = Field(default=None, description="Member name from lookup.")
     status: str | None = Field(default=None, description="Member status (active, etc.).")
     error: str | None = Field(default=None, description="Error message if lookup failed.")
+    lookup_failed: bool = Field(
+        default=False,
+        description=(
+            "True only when the lookup itself errored (Gateway/DynamoDB failure) rather than running "
+            "successfully and finding no match. Drives the 'lookup_failed' disclosure state — distinct "
+            "from a genuine 'unverified' (no error, just no match), since a system failure must fail "
+            "closed rather than be treated as a normal no-match case."
+        ),
+    )
 
 
 class CaseInfo(BaseModel):
@@ -95,6 +104,16 @@ class MemberProfile(BaseModel):
     member_status: str | None = Field(default=None, description="active | expired | closed …")
     verification_level: str = Field(default="unverified", description="verified | partial | unverified")
     verification_required: bool = Field(default=True, description="True until identity is sufficiently verified.")
+    disclosure_state: str = Field(
+        default="unverified",
+        description=(
+            "unverified | partially_verified | verified | lookup_failed. What account-specific "
+            "information the Writer may disclose: unverified/lookup_failed = none, general info + "
+            "verification instructions only; partially_verified = approved procedural information only, "
+            "no account-specific detail; verified = only data actually returned by authorized tools. "
+            "Enforced by application logic (this field), not by the Bedrock Guardrail alone."
+        ),
+    )
     notes: str = Field(default="", description="Human-readable explanation of the verification outcome.")
 
 
@@ -106,7 +125,13 @@ class AttachmentAssessment(BaseModel):
 
     attachments_present: int = Field(default=0, description="Count of attachment markers detected.")
     expected_document: str = Field(default="none", description="Document expected for the primary intent, or 'none'.")
-    status: str = Field(default="not_applicable", description="ok | missing | present_unverified | not_applicable")
+    status: str = Field(
+        default="not_applicable",
+        description=(
+            "missing | present | not_applicable. Pilot scope: any detected attachment marker is treated "
+            "as present and accepted — this is presence-of-marker only, never byte-level inspection."
+        ),
+    )
     notes: str = Field(default="", description="Explanation for a HESTA agent.")
 
 

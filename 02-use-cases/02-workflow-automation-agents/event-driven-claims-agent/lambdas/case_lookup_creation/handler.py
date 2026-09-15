@@ -9,7 +9,6 @@ from botocore.exceptions import ClientError
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ.get("HESTA_CASES_TABLE", "Hesta-cases"))
 
-_ACTIVE_STATUSES = {"open", "pending", "in_progress", "in progress", "active"}
 _MAX_HISTORY_ENTRIES = 30
 _MAX_HISTORY_ENTRY_BYTES = 8_000
 
@@ -27,12 +26,20 @@ def _idempotency_key(event: dict) -> str:
     return hashlib.sha256(f"{source}\n{message}".encode("utf-8")).hexdigest()
 
 
-def _case_id(member_id: str, intent_id: str, idempotency_key: str) -> str:
-    value = hashlib.sha256(f"{member_id}\n{intent_id}\n{idempotency_key}".encode("utf-8")).hexdigest()
+def _case_id(member_id: str) -> str:
+    """Deterministic per-member case id.
+
+    A member has exactly one case for the life of the relationship, so the id
+    depends only on member_id — not on intent or idempotency_key. That is what
+    makes concurrent first-contact creation for the same never-before-seen
+    member race-safe: two concurrent invocations compute the SAME case_id and
+    collide on the same conditional put_item instead of creating two cases.
+    """
+    value = hashlib.sha256(member_id.encode("utf-8")).hexdigest()
     return f"CASE-{value[:20].upper()}"
 
 
-def _history_entry(entry_type: str, content: str, entry_id: str, runtime_version: str) -> dict:
+def _history_entry(entry_type: str, content: str, entry_id: str, runtime_version: str, intent_id: str | None = None) -> dict:
     entry = {
         "entry_id": entry_id,
         "entry_type": entry_type,
@@ -40,18 +47,33 @@ def _history_entry(entry_type: str, content: str, entry_id: str, runtime_version
         "timestamp": _now(),
         "pipeline_version": runtime_version,
     }
+    if intent_id:
+        entry["intent_id"] = intent_id
     return entry
 
 
 def _append_history(case_id: str, entries: list[dict], retries: int = 1) -> dict:
-    """Append entries atomically; a duplicate entry_id is a successful no-op."""
+    """Append entries atomically; a duplicate entry_id is a successful no-op.
+
+    Every entry's content is capped here (not just at case-creation via `_history_entry`) —
+    this is the only path that ever runs for a reused case's inbound entry, and for every
+    draft/review entry regardless of whether the case is new or reused, so the cap must be
+    enforced here to actually bound every entry that reaches DynamoDB.
+    """
     item = table.get_item(Key={"case_id": case_id}).get("Item")
     if not item:
         return {"error": "Case not found"}
 
     history = item.get("conversation_history", [])
     known_ids = {entry.get("entry_id") for entry in history}
-    new_entries = [entry for entry in entries if entry.get("entry_id") not in known_ids]
+    new_entries = []
+    for entry in entries:
+        if entry.get("entry_id") in known_ids:
+            continue
+        content = entry.get("content")
+        if isinstance(content, str) and len(content) > _MAX_HISTORY_ENTRY_BYTES:
+            entry = {**entry, "content": content[:_MAX_HISTORY_ENTRY_BYTES]}
+        new_entries.append(entry)
     if not new_entries:
         return {"status": "history_unchanged", "case": item, "case_id": case_id}
 
@@ -98,35 +120,22 @@ def handler(event, context):
     )
     items = response.get("Items", [])
 
-    # An exact event replay wins before status/intent matching.
-    replay = next((item for item in items if item.get("idempotency_key") == idempotency_key), None)
-    if replay:
-        return {
-            "status": "existing_cases_found",
-            "case_id": replay["case_id"],
-            "cases": [replay],
-            "conversation_history": replay.get("conversation_history", []),
-        }
-
-    matching_candidates = [
-        item
-        for item in items
-        if item.get("primary_intent_id") == intent_id
-        and str(item.get("status", "")).lower() in _ACTIVE_STATUSES
-    ]
-    matching = sorted(
-        matching_candidates,
+    # One case per member for the life of the relationship: reuse it regardless
+    # of its stored intent or status (open/closed). Deterministic tie-break
+    # (earliest created) covers legacy data that predates this rule.
+    existing = sorted(
+        items,
         key=lambda item: (item.get("created_at", ""), item.get("case_id", "")),
-    )[0] if matching_candidates else None
-    if matching:
+    )[0] if items else None
+    if existing:
         return {
             "status": "existing_cases_found",
-            "case_id": matching["case_id"],
-            "cases": [matching],
-            "conversation_history": matching.get("conversation_history", []),
+            "case_id": existing["case_id"],
+            "cases": [existing],
+            "conversation_history": existing.get("conversation_history", []),
         }
 
-    case_id = _case_id(member_id, intent_id, idempotency_key)
+    case_id = _case_id(member_id)
     runtime_version = event.get("pipeline_version", "hesta-v2")
     inbound = event.get("inbound_email")
     history = []
@@ -137,6 +146,7 @@ def handler(event, context):
                 str(inbound),
                 f"{idempotency_key}:inbound",
                 runtime_version,
+                intent_id=intent_id,
             )
         )
 

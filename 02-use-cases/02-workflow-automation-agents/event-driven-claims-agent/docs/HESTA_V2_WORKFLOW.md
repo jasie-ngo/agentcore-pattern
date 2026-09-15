@@ -313,11 +313,13 @@ with the expected document for the primary intent. It returns:
 
 * `not_applicable`
 * `missing`
-* `present_unverified`
+* `present`
 
 The pilot sees attachment markers only; it does not receive or inspect file
-bytes. A human must confirm the type, completeness, and legibility of a
-document.
+bytes. Any detected marker is treated as present and accepted for the pilot,
+so the Writer asks for a missing document only when none was detected, and
+never re-asks once a marker is present. A human must still confirm the type,
+completeness, and legibility of a document.
 
 For an unverified member, attachment assessment is skipped.
 

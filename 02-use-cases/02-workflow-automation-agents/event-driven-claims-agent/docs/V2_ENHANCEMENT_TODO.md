@@ -94,13 +94,41 @@ messages can be processed with their prior context.
 
 ---
 
-## TODO 2: Reuse matching cases and pass history to the Writer
+## TODO 2: Reuse the member's case and pass history to the Writer
+
+### Priority
+
+High
 
 ### Objective
 
-Ensure a repeated or older conversation reuses the correct existing case
-instead of creating duplicate cases, and ensure the previous conversation is
-provided to the Writer with the current email.
+Ensure a member has exactly one ongoing case that accumulates conversation
+history across every enquiry, instead of creating duplicate cases per
+message or per topic — and ensure that accumulated history is provided to
+the Writer alongside the current email's own intent.
+
+### Design decision: one case per member
+
+A case is the member's relationship record, not a record of one specific
+enquiry. `primary_intent_id` and case `status` are **not** part of the case
+lookup/reuse decision:
+
+* A member's repeat contact — regardless of topic, and regardless of
+  whether their existing case is open or closed — reuses that same case.
+  Do not filter by status and do not compare intents when deciding whether
+  to reuse a case.
+* The *current* message still gets its own `primary_intent_id` from the
+  Intent Identifier (AI-001) as normal. That per-message intent is not used
+  to decide case reuse; it is used for the Writer's snippet selection, the
+  attachment assessment, and routing, exactly as today.
+* Each stored history entry should carry the intent that message was
+  associated with (see TODO 1), so the Writer can see how the member's
+  intent has shifted across the life of the case, not just the current
+  intent.
+* A reply to a case that is `closed` is still the same case: reuse it, and
+  let the Writer/Reviewer see the closed status in the passed context so it
+  can give a status-appropriate reply (e.g. referencing the prior
+  resolution) rather than silently re-actioning a resolved matter.
 
 ### Current flow and required rule
 
@@ -111,53 +139,54 @@ review and do not create or select a case through the normal verified-member
 path.
 
 After identity is established, `case_lookup_creation` queries cases by
-`member_id`. The current email's `primary_intent_id` must then be compared with
-the intent stored on each retrieved case:
-
-* reuse the matching active case when the intent is the same;
-* create a new case when no retrieved case has the same intent.
-
-The implementation must not select an arbitrary first case when the intent
-does not match.
+`member_id` alone. If any case exists for that member, reuse it — regardless
+of its stored intent or status. Only create a new case when the member truly
+has none yet. If more than one case exists for a member (e.g. from legacy
+data before this rule), selection must be deterministic (e.g. the earliest
+by `created_at`, then `case_id`) rather than arbitrary.
 
 ### Required implementation
 
 1. Require a successful verified `member_id` before normal case lookup or
    creation.
 2. Query existing cases by the `member_id-index` GSI.
-3. Store `primary_intent_id` on every case.
-4. Reuse an active/pending case only when its stored intent matches the
-   current `primary_intent_id`.
-5. Create a new case when no matching-intent case exists.
-6. Do not reuse a closed case for an unrelated new enquiry.
-7. When an existing matching case is reused, retrieve its
-    `conversation_history` and pass it to the Context Manager and Writer
-    together with the current email. Clearly delimit historical content from
-    the current request.
-8. Add an idempotency key derived from the strongest available source:
+3. Store `primary_intent_id` on every case at creation, for audit/reporting
+   only — it does not gate reuse.
+4. Reuse the member's existing case whenever one exists, irrespective of its
+   stored intent or status (open, pending, closed, etc.).
+5. Create a new case only when the member has no case at all yet.
+6. When an existing case is reused, retrieve its `conversation_history` and
+   pass it to the Context Manager and Writer together with the current
+   email and the current message's own intent. Clearly delimit historical
+   content from the current request, and preserve the intent recorded
+   against each historical entry where available.
+7. Add an idempotency key derived from the strongest available source:
      * conversation/thread ID;
      * S3 bucket + object key + ETag;
      * deterministic message hash.
-9. Use DynamoDB conditional writes or an equivalent atomic operation to
+8. Use DynamoDB conditional writes or an equivalent atomic operation to
     prevent duplicate case creation during retries or concurrent invocations.
-10. Return the selected or created case ID and conversation history in a
+9. Return the selected or created case ID and conversation history in a
     stable response shape.
-11. Update the Runtime, Pydantic models, and human-review payload if the
+10. Update the Runtime, Pydantic models, and human-review payload if the
     response shape changes.
 
 ### Acceptance criteria
 
-* A known member's follow-up email reuses the correct active case.
+* A known member's follow-up email — on any topic, regardless of intent
+  match — reuses their existing case.
 * A request without an established member identity is routed to human review
   and does not enter the verified-member case path.
-* A retrieved case is reused only when its intent matches the current intent.
-* A matching existing case provides previous email and draft history to the
-  Context Manager and Writer.
-* A different intent creates a new case for the verified member.
+* A matching existing case provides previous email/draft history, tagged
+  with the intent recorded at the time, to the Context Manager and Writer.
+* A different intent on a follow-up still reuses the member's existing case
+  rather than creating a new one.
 * Duplicate trigger delivery does not create duplicate cases.
-* A closed case is not incorrectly reused for a new enquiry.
+* A reply to a closed case reuses that same case rather than creating a new
+  one; the Writer is informed the case is closed.
 * Concurrent case-creation requests are safe.
-* Existing-case selection is deterministic and covered by tests.
+* Existing-case selection is deterministic (one case per member) and covered
+  by tests.
 
 ---
 

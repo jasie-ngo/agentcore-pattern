@@ -197,13 +197,18 @@ export class InfraConstruct extends Construct {
       targets: [new eventsTargets.LambdaFunction(this.triggerFn)],
     });
 
-    // ─── Bedrock Guardrail: deny personal financial advice ────────
+    // ─── Bedrock Guardrail: deny personal financial advice + sensitive account disclosure ────────
     // Platform control (showcase): a denied-topic guardrail attached to the Writer model
-    // so the agent cannot generate personal financial/product advice. Works together with
-    // the app-layer detection (AI-001) + routing + Reviewer checks.
+    // so the agent cannot generate personal financial/product advice, or state sensitive
+    // account-specific details. This is the model-level BACKSTOP only — the authorization
+    // decision itself is application logic (MemberProfile.disclosure_state in main.py), and
+    // the deterministic pattern scan (agents/disclosure_check.py) is the application-layer
+    // check. Works together with the app-layer detection (AI-001) + routing + Reviewer checks.
     this.adviceGuardrail = new bedrock.CfnGuardrail(this, 'AdviceGuardrail', {
       name: `${resourcePrefix}-NoPersonalAdvice`,
-      description: 'Denies personal financial/investment/product advice; HESTA staff handle advice enquiries.',
+      description:
+        'Denies personal financial/investment/product advice and sensitive account-detail disclosure; '
+        + 'HESTA staff handle advice enquiries and verified account actions.',
       blockedInputMessaging: 'This enquiry needs a HESTA team member — we can’t provide personal financial advice.',
       blockedOutputsMessaging: '[GUARDRAIL_BLOCKED_ADVICE]',
       topicPolicyConfig: {
@@ -221,6 +226,22 @@ export class InfraConstruct extends Construct {
               'What should I invest my super in?',
               'Is it a good idea for me to roll over my other fund for my situation?',
               'Can you recommend the best investment choice for me?',
+            ],
+          },
+          {
+            name: 'SensitiveAccountDisclosure',
+            type: 'DENY',
+            definition:
+              'Stating a member\'s specific account-level financial details in an email reply — account '
+              + 'balances, transaction or contribution history, payment amounts, tax file numbers or other '
+              + 'tax information, bank account/BSB details, or internal account identifiers — rather than '
+              + 'general information and next steps.',
+            examples: [
+              'Your current balance is $48,213.55.',
+              'We can confirm your BSB is 063-000 and account number 12345678.',
+              'Your TFN on file is 123 456 789.',
+              'Your last contribution of $2,500 was received on 3 March.',
+              'Your bank details for the refund are BSB 063-000, account 87654321.',
             ],
           },
         ],

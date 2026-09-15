@@ -56,7 +56,8 @@ async def summarize(
         idempotency_key=idempotency_key, source_object_id=source_object_id
     )
     history = "\n\n".join(
-        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}]\n"
+        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}"
+        f"{' | intent: ' + entry['intent_id'] if entry.get('intent_id') else ''}]\n"
         f"{entry.get('content', '')}"
         for entry in cases.conversation_history
     ) or "(none)"
@@ -84,9 +85,15 @@ async def summarize(
 
 
 async def _lookup_member(mcp, inbound) -> IdentityInfo:
-    """Call member_lookup via MCP Gateway."""
+    """Call member_lookup via MCP Gateway.
+
+    Distinguishes a genuine "no match" (lookup ran fine, nothing found — disclosure_state
+    "unverified") from a system failure (Gateway/DynamoDB error — disclosure_state
+    "lookup_failed"). Both fail closed on disclosure, but only the latter is a system fault
+    worth surfacing distinctly rather than treating as a normal not-found.
+    """
     if mcp is None:
-        return IdentityInfo(error="Gateway unavailable")
+        return IdentityInfo(error="Gateway unavailable", lookup_failed=True)
 
     # Try lookup by member ID first, then by email
     member_id = inbound.member_number_for_lookup
@@ -100,7 +107,7 @@ async def _lookup_member(mcp, inbound) -> IdentityInfo:
         return IdentityInfo(error="No member_id or email available")
 
     if "_gateway_error" in result:
-        return IdentityInfo(error=f"Gateway error: {result['_gateway_error']}")
+        return IdentityInfo(error=f"Gateway error: {result['_gateway_error']}", lookup_failed=True)
     if isinstance(result, dict) and result.get("error"):
         return IdentityInfo(error=result["error"])
 

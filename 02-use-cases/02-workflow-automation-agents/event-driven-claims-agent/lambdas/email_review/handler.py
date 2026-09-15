@@ -29,9 +29,16 @@ def handler(event, context):
             "draft_subject": event.get("draft_subject", ""),
             "draft_body": event.get("draft_body", ""),
             "escalation_reasons": event.get("escalation_reasons", ""),
+            "revision_count": event.get("revision_count", 0),
             "created_at": timestamp,
             "status": "pending_review"
         }
+        if event.get("attachment_status"):
+            item["attachment_status"] = event["attachment_status"]
+        if event.get("attachment_notes"):
+            item["attachment_notes"] = event["attachment_notes"]
+        if event.get("review_result"):
+            item["review_result"] = event["review_result"]
 
         table.put_item(Item=item)
 

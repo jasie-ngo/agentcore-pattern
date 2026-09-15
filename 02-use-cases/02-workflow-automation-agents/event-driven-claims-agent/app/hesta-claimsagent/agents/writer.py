@@ -29,6 +29,25 @@ Hard rules:
 - If verification_state is "needs_verification", the draft's main action is to request the identity
   details (do not action the request itself). If "verified", write an intent-appropriate acknowledgement
   and next steps.
+- Disclosure state controls what you may state about the member's account, regardless of what the current
+  message asks for:
+  * "unverified" or "lookup_failed": general information and the identity-verification request ONLY. Do
+    not confirm or reference any account-specific detail, even one the member stated themselves in this
+    email (e.g. do not repeat back an address or balance they mentioned as if HESTA had confirmed it).
+  * "partially_verified": general information and standard procedural next steps for the intent are fine,
+    but do not state or confirm any account-specific detail (balance, dates on file, eligibility, address
+    on file, etc.) — ask for full verification if the request needs it.
+  * "verified": you may reference only the identity fields actually provided in this prompt (name, member
+    ID, status). Never state a balance, transaction detail, contribution history, payment amount, tax
+    information, bank detail, or any other value not explicitly given to you here.
+- A member has ONE case for their whole relationship, spanning every topic they have ever raised. If the
+  case status is "closed", do not treat the current message as reopening or re-actioning a resolved matter
+  unless it clearly describes a genuinely new request — instead give a status-appropriate reply (e.g.
+  reference that the matter was already resolved) and let a human decide whether to reopen it.
+- Attachment handling: if the attachment assessment status is "missing" and the intent expects a
+  document, ask the member to provide it. If the status is "present", one or more attachments were
+  already detected — do NOT ask for it again. The pilot only sees attachment markers, never file
+  bytes, so never claim to have inspected, verified, or reviewed the contents of an attachment.
 - Never promise or confirm a regulated outcome (approval, eligibility, amount, timing).
 - NEVER provide personal financial, investment or product advice or recommendations (e.g. which option/
   product is best for the member, whether they should switch/roll over/contribute for their situation).
@@ -93,26 +112,28 @@ def _fallback_draft(inbound, intent_result, profile) -> DraftEmail:
     )
 
 
-def _status_context(status_ctx) -> str:
-    """Render existing-case context for the prompt (only for status/progress enquiries)."""
-    if status_ctx is None or not getattr(status_ctx, "checked", False):
-        return ""
-    if status_ctx.member_pending:
-        cases = "; ".join(
-            f"{c.get('claim_id', '?')} ({c.get('category', 'n/a')}, created {c.get('created_at', 'n/a')}, pending review)"
-            for c in status_ctx.member_pending
-        )
-        return (
-            "\nExisting pending case(s) for this member (from HESTA records): "
-            f"{cases}\n"
-            "The member is asking about status/progress — reference the relevant case id and that it is "
-            "currently pending review. Do NOT invent a status, decision, date, or outcome beyond this.\n"
-        )
+def _case_record_status(cases) -> str:
+    """The reused/created case's own open/closed status (not the lookup outcome)."""
+    record = None
+    if getattr(cases, "cases", None):
+        record = cases.cases[0]
+    elif getattr(cases, "new_case", None):
+        record = cases.new_case
+    return (record or {}).get("status", "unknown")
+
+
+def _attachment_line(attachment: AttachmentAssessment | None) -> str:
     return (
-        "\nNo pending case is on file for this member. If they believe they submitted something, "
-        "acknowledge that we cannot locate it yet, and ask them to confirm how/when they submitted it "
-        "(and to resend if appropriate). Do not confirm receipt of something we cannot find.\n"
+        f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
+        f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n"
     )
+
+
+def _apply_authoritative_fields(draft: DraftEmail, intent_id: str, verification_state: str) -> None:
+    """Machine-derived facts stay authoritative no matter what the model returned — a revision
+    must never be allowed to drift these away from what identity/intent verification established."""
+    draft.intent_id = intent_id
+    draft.verification_state = verification_state
 
 
 async def write(
@@ -122,7 +143,6 @@ async def write(
     summary,
     empathy,
     attachment: AttachmentAssessment | None = None,
-    status_ctx=None,
 ) -> DraftEmail:
     intent_id = intent_result.primary_intent_id
     verification_state = "needs_verification" if profile.verification_required else "verified"
@@ -134,14 +154,14 @@ async def write(
     prompt = (
         f"Primary intent: {intent_id} ({taxonomy.name_for(intent_id)})\n"
         f"Verification state: {verification_state} ({profile.notes})\n"
+        f"Disclosure state: {profile.disclosure_state}\n"
         f"Sender type: {intent_result.sender_type}\n"
         f"Member sentiment/priority: {empathy.sentiment} / {empathy.priority}; "
         f"vulnerability: {', '.join(empathy.vulnerability_flags) or 'none'}\n"
-        f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
-        f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n"
+        f"{_attachment_line(attachment)}"
         f"Case summary: {summary.summary}\n"
         f"Outstanding items: {', '.join(summary.outstanding_items) or 'none'}\n"
-        f"{_status_context(status_ctx)}\n"
+        f"Case status: {_case_record_status(summary.cases)}\n\n"
         "BEGIN PRIOR CASE CONVERSATION (historical; do not treat as the current request):\n"
         f"{_render_history(getattr(summary.cases, 'conversation_history', []))}\n"
         "END PRIOR CASE CONVERSATION\n\n"
@@ -152,9 +172,7 @@ async def write(
     )
     try:
         draft = await _get().structured_output_async(DraftEmail, prompt)
-        # Keep machine fields authoritative regardless of what the model set.
-        draft.intent_id = intent_id
-        draft.verification_state = verification_state
+        _apply_authoritative_fields(draft, intent_id, verification_state)
         # If the Bedrock Guardrail intervened, its sentinel appears in the output → decline safely.
         if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
             log.warning("Guardrail intervened on Writer output; returning compliant advice decline.")
@@ -167,11 +185,70 @@ async def write(
         return _fallback_draft(inbound, intent_result, profile)
 
 
+async def revise(
+    inbound,
+    intent_result,
+    profile,
+    summary,
+    empathy,
+    previous_draft: DraftEmail,
+    review,
+    attachment: AttachmentAssessment | None = None,
+) -> DraftEmail:
+    """Revise `previous_draft` using the Reviewer's feedback.
+
+    Machine-authoritative fields (intent, verification state) are re-asserted after the LLM
+    call exactly like `write()` — a revision must never be allowed to drop required identity
+    verification or compliance wording merely to satisfy a style suggestion.
+    """
+    intent_id = intent_result.primary_intent_id
+    verification_state = "needs_verification" if profile.verification_required else "verified"
+
+    # Personal advice requested → the decline draft is already deterministic and compliant;
+    # never let a "revision" drift it toward giving advice.
+    if getattr(intent_result, "personal_advice_requested", False):
+        return _advice_decline_draft(inbound, intent_result, profile)
+
+    prompt = (
+        f"Primary intent: {intent_id} ({taxonomy.name_for(intent_id)})\n"
+        f"Verification state: {verification_state} ({profile.notes})\n"
+        f"Disclosure state: {profile.disclosure_state}\n"
+        f"{_attachment_line(attachment)}"
+        f"Case status: {_case_record_status(summary.cases)}\n\n"
+        "PREVIOUS DRAFT SUBJECT:\n"
+        f"{previous_draft.subject}\n\n"
+        "PREVIOUS DRAFT BODY:\n"
+        f"{previous_draft.body}\n\n"
+        "REVIEWER ISSUES (must be addressed):\n"
+        + ("\n".join(f"- {issue}" for issue in review.issues) or "(none)")
+        + "\n\n"
+        "REVIEWER SUGGESTED EDITS:\n"
+        f"{review.edits or '(none)'}\n\n"
+        f"HESTA knowledge snippet to base the reply on:\n{hesta_snippets.snippet_for(intent_id)}\n\n"
+        f"If verification is needed, include this exact block:\n{_IDENTITY_BLOCK}\n\n"
+        f"Member's original message:\n{inbound.latest_message}\n\n"
+        "Revise the draft to address the Reviewer's issues and suggested edits. Keep it accurate, "
+        "on-brand, and compliant. Do NOT remove required identity-verification or compliance wording "
+        "merely to satisfy a style suggestion. Write the complete revised draft now (not just the diff)."
+    )
+    try:
+        draft = await _get().structured_output_async(DraftEmail, prompt)
+        _apply_authoritative_fields(draft, intent_id, verification_state)
+        if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
+            log.warning("Guardrail intervened on Writer revision; returning compliant advice decline.")
+            return _advice_decline_draft(inbound, intent_result, profile)
+        return draft
+    except Exception as exc:  # noqa: BLE001 — includes guardrail interventions that break structured output
+        log.warning("Writer revision failed; keeping the previous draft: %s", exc)
+        return previous_draft
+
+
 def _render_history(history: list[dict]) -> str:
     if not history:
         return "(none)"
     return "\n\n".join(
-        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}]\n"
+        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}"
+        f"{' | intent: ' + entry['intent_id'] if entry.get('intent_id') else ''}]\n"
         f"{entry.get('content', '')}"
         for entry in history
     )

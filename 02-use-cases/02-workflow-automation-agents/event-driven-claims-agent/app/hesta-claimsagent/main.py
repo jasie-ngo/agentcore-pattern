@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from opentelemetry import trace as otel_trace
 from opentelemetry.trace import SpanKind
-from config import ENABLE_HITL_RECORD
+from config import ENABLE_HITL_RECORD, MAX_DRAFT_REVISIONS
 from ingestion.email_normalizer import normalize_email
 from intents import taxonomy
 from memory.session import get_memory_session_manager, record_interaction
@@ -39,6 +39,7 @@ from tools import gateway
 from agents import (
     attachment_validation,
     context_manager,
+    disclosure_check,
     empathy as empathy_agent,
     intent_identifier,
     reviewer_editor,
@@ -210,11 +211,12 @@ def _fmt_tool_log(calls) -> str:
     # return "\n".join(out) + "\n"
 
 
-def _fmt_review(review) -> str:
+def _fmt_review(review, revision_count: int = 0) -> str:
     checks = f"accuracy={review.accuracy_ok} · tone={review.tone_ok} · compliance={review.compliance_ok}"
     out = [
         "### 🔎 Review (AI-012)\n",
         f"- **Approved for a human to send:** {review.approved_for_human_send} ({checks})",
+        f"- **Revisions:** {revision_count} (max {MAX_DRAFT_REVISIONS})",
     ]
     if review.edits:
         out.append(f"- **Suggested edits:** {review.edits}")
@@ -226,9 +228,22 @@ def _fmt_review(review) -> str:
 # ─── Convert identity info to MemberProfile for routing/writer ──────────────────
 
 
+def _disclosure_state(identity) -> str:
+    """TODO 5: the four explicit disclosure states, application-enforced (not left to the
+    Guardrail). A system failure is distinguished from a genuine not-found — both disclose
+    nothing, but only the former is a fault worth surfacing distinctly."""
+    if identity.lookup_failed:
+        return "lookup_failed"
+    if not identity.member_id:
+        return "unverified"
+    return "verified" if identity.status == "active" else "partially_verified"
+
+
 def _convert_identity_to_profile(identity, inbound, intent_result):
     """Convert IdentityInfo from member_lookup into MemberProfile for routing."""
     from models import MemberProfile
+
+    disclosure_state = _disclosure_state(identity)
 
     if identity.error:
         return MemberProfile(
@@ -236,6 +251,7 @@ def _convert_identity_to_profile(identity, inbound, intent_result):
             matched=False,
             verification_level="unverified",
             verification_required=True,
+            disclosure_state=disclosure_state,
             notes=identity.error,
         )
 
@@ -248,6 +264,7 @@ def _convert_identity_to_profile(identity, inbound, intent_result):
         member_status=identity.status,
         verification_level="verified" if identity.status == "active" else "unverified",
         verification_required=False if identity.status == "active" else True,
+        disclosure_state=disclosure_state,
         notes=f"Member lookup found: {identity.member_id}",
     )
 
@@ -255,7 +272,10 @@ def _convert_identity_to_profile(identity, inbound, intent_result):
 # ─── Human-in-the-loop: write a record to DynamoDB via the MCP Gateway ────────
 
 
-async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, cases, attachment=None) -> str:
+async def _write_hitl_record(
+    mcp, inbound, intent_result, profile, decision, draft, cases, attachment=None,
+    revision_count: int = 0, review_result=None,
+) -> str:
     """Write draft for human review via email_review tool.
 
     Gets the case_id from case_lookup_creation result (in cases), then calls
@@ -274,18 +294,22 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
     if not case_id:
         return "⚠️ No case_id available for email review (case lookup failed).\n\n"
 
-    review = await gateway.call_tool(
-        mcp,
-        "email_review",
-        {
-            "case_id": case_id,
-            "draft_subject": draft.subject,
-            "draft_body": draft.body,
-            "escalation_reasons": "; ".join(
-                decision.reasons + ([f"attachment: {attachment.notes}"] if attachment else [])
-            ) or "Manual review required",
-        },
-    )
+    tool_input = {
+        "case_id": case_id,
+        "draft_subject": draft.subject,
+        "draft_body": draft.body,
+        "escalation_reasons": "; ".join(
+            decision.reasons + ([f"attachment: {attachment.notes}"] if attachment else [])
+        ) or "Manual review required",
+        "revision_count": revision_count,
+    }
+    if attachment is not None:
+        tool_input["attachment_status"] = attachment.status
+        tool_input["attachment_notes"] = attachment.notes
+    if review_result is not None:
+        tool_input["review_result"] = review_result.model_dump()
+
+    review = await gateway.call_tool(mcp, "email_review", tool_input)
 
     if isinstance(review, dict) and "_gateway_error" in review:
         return f"⚠️ Could not write review record (Gateway error): {review['_gateway_error']}\n\n"
@@ -302,6 +326,16 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
         f"- **Review ID:** `{review_id}`\n"
         f"- **Escalation reasons:** {'; '.join(decision.reasons) or 'Manual review required'}\n\n"
     )
+
+
+async def _safe_review(draft, intent_result, profile, attachment):
+    """Run the Reviewer, converting a raised failure into None so the caller can distinguish
+    "Reviewer failed" (stop the loop, escalate) from "Reviewer rejected" (revise and re-review)."""
+    try:
+        return await reviewer_editor.review(draft, intent_result, profile, attachment=attachment)
+    except Exception as exc:  # noqa: BLE001 — includes guardrail interventions that break structured output
+        log.warning("Reviewer failed: %s", exc)
+        return None
 
 
 async def _append_case_history(mcp, cases, entries) -> str:
@@ -421,8 +455,6 @@ async def _run_pipeline(payload, context):
                 f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
             )
 
-        status_ctx = summary.cases
-
         # ── DECIDE ──────────────────────────────────────────────────────────
         yield "## 2 · Decide\n\n"
         # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
@@ -443,25 +475,80 @@ async def _run_pipeline(payload, context):
                 priority="normal",
                 recommended_attention="Identity verification is required before processing the request.",
             )
+        # Computed now (needs profile/empathy) but NOT shown yet — the Writer/Reviewer loop
+        # below can still add its own escalation reasons, and printing this now would show a
+        # stale "no escalation needed" verdict that the later Human-in-the-loop section then
+        # contradicts. The single, final verdict is shown after the review loop completes.
         decision = decide(intent_result, profile, emp)
-        yield _fmt_decision(decision)
 
         # ── EXECUTE ─────────────────────────────────────────────────────────
         yield "## 3 · Execute\n\n"
         draft = await writer_agent.write(
-            inbound, intent_result, profile, summary, emp, attachment=attach, status_ctx=status_ctx
+            inbound, intent_result, profile, summary, emp, attachment=attach
         )
+
+        # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. Re-run the
+        # Reviewer after every revision; stop as soon as it approves, the Reviewer itself fails
+        # (never revise blindly against a failure), or MAX_DRAFT_REVISIONS is reached.
+        revision_count = 0
+        review = None
+        reviewer_failed = False
+        if verified_member:
+            review = await _safe_review(draft, intent_result, profile, attach)
+            reviewer_failed = review is None
+            while (
+                review is not None
+                and not review.approved_for_human_send
+                and revision_count < MAX_DRAFT_REVISIONS
+            ):
+                revision_count += 1
+                draft = await writer_agent.revise(
+                    inbound, intent_result, profile, summary, emp, draft, review,
+                    attachment=attach,
+                )
+                review = await _safe_review(draft, intent_result, profile, attach)
+                reviewer_failed = review is None
+
         yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
+        if revision_count:
+            yield f"_Revised {revision_count} time(s) based on Reviewer feedback._\n\n"
         yield f"**Subject:** {draft.subject}\n\n"
         yield "```text\n" + draft.body + "\n```\n\n"
         if draft.assumptions:
             yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
 
-        review = None
-        if verified_member:
-            review = await reviewer_editor.review(draft, intent_result, profile)
-            yield _fmt_review(review)
+        if review is not None:
+            yield _fmt_review(review, revision_count)
+        if reviewer_failed:
+            yield "_⚠️ Automated review unavailable — routed to human review._\n\n"
+            decision.reasons.append("automated review unavailable")
+            decision.escalate_to_human = True
+        elif review is not None and not review.approved_for_human_send:
+            decision.reasons.append(
+                f"draft not approved after {revision_count} revision(s)" if revision_count
+                else "draft not approved for human send"
+            )
+            decision.escalate_to_human = True
 
+        # TODO 5 rule 7: deterministic backstop for obvious account-detail leaks (dollar
+        # amounts, BSB, bank account numbers, TFN) — independent of verification state, since
+        # nothing in this pipeline legitimately sources such values for the Writer to state.
+        disclosure_findings = disclosure_check.scan(draft.subject, draft.body)
+        if disclosure_findings:
+            yield (
+                "_⚠️ Possible sensitive account detail(s) in the draft — routed to human review: "
+                + "; ".join(disclosure_findings) + "._\n\n"
+            )
+            decision.reasons.append("possible sensitive account detail(s): " + "; ".join(disclosure_findings))
+            decision.escalate_to_human = True
+
+        # Final routing verdict — now reflects both the pre-draft checks (intent/identity/
+        # vulnerability) and anything the review loop above added.
+        yield _fmt_decision(decision)
+
+        # Each entry carries the CURRENT message's intent — cases now span a member's
+        # whole relationship, not one topic, so the Writer needs to see how intent
+        # has shifted message to message across the history, not just today's intent.
         history_entries = [
             {
                 "entry_id": f"{idempotency_key}:inbound",
@@ -469,6 +556,7 @@ async def _run_pipeline(payload, context):
                 "content": inbound.latest_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "pipeline_version": "hesta-v2",
+                "intent_id": intent_result.primary_intent_id,
             },
             {
                 "entry_id": f"{idempotency_key}:draft",
@@ -476,6 +564,7 @@ async def _run_pipeline(payload, context):
                 "content": json.dumps({"subject": draft.subject, "body": draft.body}),
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "pipeline_version": "hesta-v2",
+                "intent_id": intent_result.primary_intent_id,
             }
         ]
         if review is not None:
@@ -483,9 +572,10 @@ async def _run_pipeline(payload, context):
                 {
                     "entry_id": f"{idempotency_key}:review",
                     "entry_type": "review_outcome",
-                    "content": json.dumps(review.model_dump()),
+                    "content": json.dumps({**review.model_dump(), "revision_count": revision_count}),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "pipeline_version": "hesta-v2",
+                    "intent_id": intent_result.primary_intent_id,
                 }
             )
         if verified_member and mcp is not None:
@@ -496,7 +586,8 @@ async def _run_pipeline(payload, context):
             yield "### 👤 Human-in-the-loop\n\n"
             if ENABLE_HITL_RECORD:
                 yield await _write_hitl_record(
-                    mcp, inbound, intent_result, profile, decision, draft, status_ctx, attachment=attach
+                    mcp, inbound, intent_result, profile, decision, draft, summary.cases, attachment=attach,
+                    revision_count=revision_count, review_result=review,
                 )
             else:
                 yield (

@@ -6,13 +6,9 @@ It does not send; it produces a review a human can act on alongside the displaye
 
 from __future__ import annotations
 
-import logging
-
 from agents.base import build_agent
 from intents import taxonomy
 from models import ReviewResult
-
-log = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = """You are the Reviewer & Editor for HESTA member communications.
 Review a draft reply (written by the Writer) before a human sends it.
@@ -27,7 +23,19 @@ Check:
   are appropriate for the intent.
 - If the draft contains personal advice, set compliance_ok=false and approved_for_human_send=false, and
   note it in issues.
-- approved_for_human_send: true only if all three checks pass.
+- Attachment handling: if the attachment assessment says a document is "missing" and the draft does not
+  ask for it, that is an accuracy/compliance issue. If the assessment says "present" and the draft asks
+  for the attachment again anyway, that is also an issue. The draft must never claim to have inspected or
+  verified the contents of an attachment — the pilot only detects presence, never file bytes.
+- Disclosure state (see the input): reject the draft (compliance_ok=false) if it states any of the
+  following without the disclosure state being "verified", or if it states them at all when nothing in
+  the prompt actually supplied that value: balances, transaction details, contribution history, payment
+  amounts, tax information (including TFN), bank details (BSB/account numbers), member/account
+  identifiers not already given to the Writer, or any date/eligibility/outcome not explicitly supported
+  by the provided context. If disclosure state is "unverified", "lookup_failed", or "partially_verified",
+  the draft must contain no account-specific detail at all — only general information and (for
+  unverified/lookup_failed) the identity-verification request.
+- approved_for_human_send: true only if all checks pass.
 - edits: concise suggested wording changes (or "" if none).
 - issues: specific problems (or empty).
 
@@ -44,23 +52,18 @@ def _get():
     return _agent
 
 
-async def review(draft, intent_result, profile) -> ReviewResult:
+async def review(draft, intent_result, profile, attachment=None) -> ReviewResult:
+    """Review a draft. Raises on failure (rather than swallowing) so the orchestrator's bounded
+    revision loop can distinguish "Reviewer failed" from "Reviewer rejected the draft" — the two
+    call for different handling (stop immediately vs. revise and re-review)."""
     regulated = taxonomy.is_regulated(intent_result.primary_intent_id)
     prompt = (
         f"Intent: {draft.intent_id} ({taxonomy.name_for(draft.intent_id)}); regulated: {regulated}\n"
-        f"Verification state: {draft.verification_state}\n\n"
+        f"Verification state: {draft.verification_state}\n"
+        f"Disclosure state: {profile.disclosure_state}\n"
+        f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
+        f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n\n"
         f"DRAFT SUBJECT: {draft.subject}\n\n"
         f"DRAFT BODY:\n{draft.body}"
     )
-    try:
-        return await _get().structured_output_async(ReviewResult, prompt)
-    except Exception as exc:  # noqa: BLE001 — fail safe: not approved, needs a human
-        log.warning("Reviewer failed; marking not-approved for human send: %s", exc)
-        return ReviewResult(
-            approved_for_human_send=False,
-            accuracy_ok=False,
-            tone_ok=False,
-            compliance_ok=False,
-            edits="",
-            issues=["Automated review unavailable — a human must review the draft before sending."],
-        )
+    return await _get().structured_output_async(ReviewResult, prompt)

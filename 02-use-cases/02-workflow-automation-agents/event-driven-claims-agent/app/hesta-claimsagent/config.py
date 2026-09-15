@@ -55,6 +55,22 @@ INTENT_CONFIDENCE_THRESHOLD = int(os.getenv("INTENT_CONFIDENCE_THRESHOLD", "70")
 # resources: it reuses the existing Claims/Reviews tables and Gateway tools.
 ENABLE_HITL_RECORD = os.getenv("ENABLE_HITL_RECORD", "true").lower() in ("1", "true", "yes")
 
+
+def _bounded_int(env_var: str, default: int, *, min_value: int, max_value: int) -> int:
+    """Read a non-negative, bounded integer env var. Falls back to `default` on bad input
+    (fail closed rather than crash the runtime over a misconfigured env var)."""
+    try:
+        value = int(os.getenv(env_var, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(min_value, min(value, max_value))
+
+
+# Maximum Writer→Reviewer revision attempts after the first draft (revision 0). Bounded so
+# the loop can never run indefinitely — a rejected draft that keeps failing review escalates
+# to a human once this limit is hit rather than looping forever.
+MAX_DRAFT_REVISIONS = _bounded_int("MAX_DRAFT_REVISIONS", 2, min_value=0, max_value=5)
+
 # ─── Guardrail (no personal financial advice) ─────────────────────────────────
 # Bedrock Guardrail (denied topic) injected by CDK. Attached to the Writer model so the
 # agent cannot generate personal financial/product advice. Empty ⇒ app-layer controls only.
