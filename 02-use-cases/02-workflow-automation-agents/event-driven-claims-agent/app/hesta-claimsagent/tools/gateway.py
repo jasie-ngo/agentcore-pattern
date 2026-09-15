@@ -1,9 +1,9 @@
 """MCP Gateway access — Identity-managed Cognito M2M OAuth, direct tool calls.
 
-The pilot reuses the EXISTING Gateway tools (no new Lambdas):
-  - lookup_policy         → identity verification (AI-003)
-  - create_claim          → write a case record (human-in-the-loop hand-off)
-  - request_human_review  → write a review record (human-in-the-loop hand-off)
+Post-pilot: the Gateway exposes three dedicated Lambda-backed tools:
+  - member_lookup          → identity resolution (member_id or email) against MembersTable
+  - case_lookup_creation   → find or open a case for a member against CasesTable
+  - email_review           → write a draft-review record (human-in-the-loop hand-off) to HumanReviewTable
 
 IMPORTANT — where the Cognito token is fetched
 -----------------------------------------------
@@ -64,12 +64,6 @@ def _safe_repr(obj, limit: int = 4000) -> str:
 # AgentCore Gateway namespaces every tool as "<target>___<tool>". Map bare names
 # (used by deterministic calls) to the Gateway's namespaced names.
 GATEWAY_TOOL_NAMES = {
-    "lookup_policy": "policy-lookup___lookup_policy",
-    "create_claim": "create-claim___create_claim",
-    "request_human_review": "human-review___request_human_review",
-    "send_notification": "notification___send_notification",
-    "list_pending_claims": "list-pending-claims___list_pending_claims",
-    "resolve_claim": "resolve-claim___resolve_claim",
     "member_lookup": "member-lookup___member_lookup",
     "case_lookup_creation": "case-lookup-creation___case_lookup_creation",
     "email_review": "email-review___email_review",
@@ -113,17 +107,23 @@ def get_mcp_client() -> MCPClient | None:
     from the entrypoint (request/event-loop thread) so the Cognito M2M token fetch has the
     workload-identity context. The caller starts/stops the returned client.
     """
+    
     global LAST_ERROR
     if not GATEWAY_URL:
         LAST_ERROR = "GATEWAY_URL not set (AGENTCORE_GATEWAY_URL / AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL missing)"
         log.warning(LAST_ERROR)
-        return None
+        return "1"
+        #return None
     try:
         return _build_mcp_client()  # decorator injects the M2M access_token
+
     except Exception as exc:  # noqa: BLE001
-        LAST_ERROR = f"could not build MCP client (Cognito M2M token/identity): {exc!r}"
-        log.warning(LAST_ERROR)
-        return None
+        log.exception("build failed")
+        raise
+        # LAST_ERROR = f"could not build MCP client (Cognito M2M token/identity): {exc!r}"
+        # log.warning(LAST_ERROR)
+        # return True
+        #return None
 
 
 def _loads_json(text: str):

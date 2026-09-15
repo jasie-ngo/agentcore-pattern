@@ -27,10 +27,7 @@ logger.setLevel(os.environ.get("LOG_LEVEL", "INFO"))
 s3 = boto3.client("s3")
 
 # Environment variables (set by CDK)
-RUNTIME_ARN = os.environ.get(
-    "AGENTCORE_RUNTIME_ARN",
-    "arn:aws:bedrock-agentcore:ap-southeast-2:975050098174:runtime/ClaimsAgent_hestaclaimsagent-BNZ7CEF7an",
-)
+RUNTIME_ARN = os.environ.get("AGENTCORE_RUNTIME_ARN", "")
 REGION = os.environ.get("AWS_REGION", "ap-southeast-2")
 
 
@@ -41,6 +38,8 @@ def invoke_runtime_async(payload_dict):
     Does NOT buffer the full streaming response — the agent processes
     asynchronously and writes results to DynamoDB via tool calls.
     """
+    if not RUNTIME_ARN:
+        raise RuntimeError("AGENTCORE_RUNTIME_ARN is not configured")
     escaped_arn = urllib.parse.quote(RUNTIME_ARN, safe="")
     url = f"https://bedrock-agentcore.{REGION}.amazonaws.com/runtimes/{escaped_arn}/invocations"
 

@@ -62,7 +62,7 @@ async def summarize(inbound, mcp=None, session_manager=None) -> CaseSummary:
 
     # Now pull member identity and cases
     result.identity = await _lookup_member(mcp, inbound)
-    result.cases = await _lookup_cases(mcp, result.identity)
+    result.cases = await _lookup_cases(mcp, result.identity, inbound)
     return result
 
 
@@ -95,14 +95,16 @@ async def _lookup_member(mcp, inbound) -> IdentityInfo:
     )
 
 
-async def _lookup_cases(mcp, identity: IdentityInfo) -> CaseInfo:
+async def _lookup_cases(mcp, identity: IdentityInfo, inbound) -> CaseInfo:
     """Call case_lookup_creation via MCP Gateway."""
     if mcp is None:
         return CaseInfo(error="Gateway unavailable", status="unavailable")
-    if identity.error or not identity.member_id:
-        return CaseInfo(error="Cannot lookup cases without valid member_id", status="unavailable")
-
-    result = await gateway.call_tool(mcp, "case_lookup_creation", {"member_id": identity.member_id})
+    case_input = {}
+    if identity.member_id:
+        case_input["member_id"] = identity.member_id
+    if inbound.from_email:
+        case_input["sender_email"] = inbound.from_email
+    result = await gateway.call_tool(mcp, "case_lookup_creation", case_input)
 
     if "_gateway_error" in result:
         return CaseInfo(error=f"Gateway error: {result['_gateway_error']}", status="error")

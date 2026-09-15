@@ -1,149 +1,50 @@
-"""Unit tests for the structured-output tools in app/claimsagent/tools/structured_output.py.
+"""Unit tests for the HESTA structured models and deterministic attachment step."""
 
-Covers state capture, confidence clamping, value normalization (uppercasing),
-copy semantics, and reset behavior. These tools require the Strands SDK
-(`@tool` decorator), so the whole module is skipped when Strands isn't installed
-(e.g., running `python3 -m unittest` outside the agent venv). Run under the
-agent venv (`app/claimsagent/.venv`) to exercise them.
-
-Run:
-    app/claimsagent/.venv/bin/python -m unittest discover -s tests
-"""
-
-import json
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "claimsagent"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "hesta-claimsagent"))
 
-try:
-    from tools.structured_output import (
-        get_last_decision,
-        get_last_validation,
-        reset_state,
-        submit_decision,
-        submit_validation,
-    )
-
-    _STRANDS_AVAILABLE = True
-except ImportError:
-    _STRANDS_AVAILABLE = False
+from agents.attachment_validation import assess  # noqa: E402
+from ingestion.email_normalizer import normalize_email  # noqa: E402
+from models import AttachmentAssessment, MemberProfile  # noqa: E402
+from intents import taxonomy  # noqa: E402
 
 
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class SubmitDecisionTests(unittest.TestCase):
-    def setUp(self):
-        reset_state()
-
-    def test_records_decision_fields(self):
-        submit_decision(
-            decision="accept",
-            amount=2000,
-            policy_number="POL-12345",
-            category="auto_collision",
-            description="fender bender",
-            reasoning="within limits",
-            coverage_check="active, $500 deductible",
+class HestaModelTests(unittest.TestCase):
+    def test_member_profile_uses_member_id_contract(self):
+        profile = MemberProfile(
+            member_number="60010001",
+            matched=True,
+            match_key="member_id",
+            factors_matched=["member_id", "email"],
+            verification_level="verified",
+            verification_required=False,
         )
-        captured = get_last_decision()
-        self.assertEqual(captured["decision"], "ACCEPT")
-        self.assertEqual(captured["amount"], 2000)
-        self.assertEqual(captured["policy_number"], "POL-12345")
-        self.assertEqual(captured["category"], "auto_collision")
+        self.assertEqual(profile.match_key, "member_id")
+        self.assertEqual(profile.factors_matched, ["member_id", "email"])
 
-    def test_decision_uppercased(self):
-        submit_decision(
-            decision="reject",
-            amount=0,
-            policy_number="POL-1",
-            category="theft",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+    def test_attachment_missing_for_expected_document(self):
+        inbound = normalize_email("Please send my Binding Death Nomination form. Member number 60010001.")
+        result = assess(
+            inbound,
+            type("Intent", (), {"primary_intent_id": "death_benefit_nomination"})(),
         )
-        self.assertEqual(get_last_decision()["decision"], "REJECT")
+        self.assertIsInstance(result, AttachmentAssessment)
+        self.assertEqual(result.status, "missing")
+        self.assertEqual(result.expected_document, taxonomy.expected_attachment("death_benefit_nomination"))
 
-    def test_returns_status_json(self):
-        result = submit_decision(
-            decision="accept",
-            amount=100,
-            policy_number="POL-1",
-            category="medical",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+    def test_attachment_present_is_unverified(self):
+        inbound = normalize_email(
+            "Please find attached my Binding Death Nomination form. [ATTACHMENT form.pdf]"
         )
-        parsed = json.loads(result)
-        self.assertEqual(parsed["status"], "recorded")
-        self.assertEqual(parsed["decision"], "ACCEPT")
-
-    def test_get_returns_copy_not_reference(self):
-        submit_decision(
-            decision="accept",
-            amount=100,
-            policy_number="POL-1",
-            category="medical",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+        result = assess(
+            inbound,
+            type("Intent", (), {"primary_intent_id": "death_benefit_nomination"})(),
         )
-        snapshot = get_last_decision()
-        snapshot["decision"] = "MUTATED"
-        # Mutating the returned dict must not affect internal state.
-        self.assertEqual(get_last_decision()["decision"], "ACCEPT")
-
-
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class SubmitValidationTests(unittest.TestCase):
-    def setUp(self):
-        reset_state()
-
-    def test_records_validation_fields(self):
-        submit_validation(
-            confidence=92,
-            routing="auto_approve",
-            validation_notes="clean",
-            concerns="None",
-        )
-        captured = get_last_validation()
-        self.assertEqual(captured["confidence"], 92)
-        self.assertEqual(captured["routing"], "AUTO_APPROVE")
-
-    def test_confidence_clamped_above_100(self):
-        submit_validation(confidence=150, routing="auto_approve", validation_notes="n", concerns="None")
-        self.assertEqual(get_last_validation()["confidence"], 100)
-
-    def test_confidence_clamped_below_0(self):
-        submit_validation(confidence=-10, routing="human_review", validation_notes="n", concerns="c")
-        self.assertEqual(get_last_validation()["confidence"], 0)
-
-    def test_routing_uppercased(self):
-        submit_validation(confidence=50, routing="human_review", validation_notes="n", concerns="c")
-        self.assertEqual(get_last_validation()["routing"], "HUMAN_REVIEW")
-
-
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class ResetStateTests(unittest.TestCase):
-    def test_reset_clears_both(self):
-        submit_decision(
-            decision="accept",
-            amount=1,
-            policy_number="POL-1",
-            category="auto",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
-        )
-        submit_validation(confidence=90, routing="auto_approve", validation_notes="n", concerns="None")
-        reset_state()
-        self.assertEqual(get_last_decision(), {})
-        self.assertEqual(get_last_validation(), {})
-
-    def test_empty_state_before_submit(self):
-        reset_state()
-        self.assertEqual(get_last_decision(), {})
-        self.assertEqual(get_last_validation(), {})
+        self.assertEqual(result.status, "present_unverified")
+        self.assertEqual(result.attachments_present, 1)
 
 
 if __name__ == "__main__":

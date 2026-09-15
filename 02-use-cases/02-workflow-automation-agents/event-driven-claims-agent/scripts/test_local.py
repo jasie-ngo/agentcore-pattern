@@ -5,11 +5,11 @@ Requires a running AgentCore dev server OR environment variables from .env.
 
 Usage:
     # Start dev server first (separate terminal):
-    #   cd app/claimsagent && agentcore dev --no-browser
+    #   cd event-driven-claims-agent && agentcore dev --no-browser
     #
     # Then invoke:
     python3 scripts/test_local.py
-    python3 scripts/test_local.py --prompt "File a claim for POL-12345. $3000 storm damage."
+    python3 scripts/test_local.py --prompt "Please confirm receipt of my HESTA form. Member number 60010001."
     python3 scripts/test_local.py --port 8080
 """
 
@@ -67,7 +67,7 @@ def invoke_local(port: int, prompt: str) -> str:
     except urllib.error.URLError as e:
         print(f"\nError: Could not connect to dev server on port {port}.")
         print("Make sure the dev server is running:")
-        print("  cd app/claimsagent && agentcore dev --no-browser")
+        print("  cd event-driven-claims-agent && agentcore dev --no-browser")
         raise SystemExit(1) from e
 
     print()
@@ -75,14 +75,13 @@ def invoke_local(port: int, prompt: str) -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Invoke claims agent local dev server")
+    parser = argparse.ArgumentParser(description="Invoke HESTA member-email agent local dev server")
     parser.add_argument("--port", type=int, default=8080, help="Dev server port (default: 8080)")
     parser.add_argument(
         "--prompt",
         default=(
-            "I need to file a claim under policy POL-12345. "
-            "A storm caused a tree branch to fall on my car, damaging the roof. "
-            "Estimated repair cost is $4,500."
+            "Please confirm receipt of my Binding Death Nomination form. "
+            "Member number 60010001."
         ),
         help="Claim prompt to send",
     )

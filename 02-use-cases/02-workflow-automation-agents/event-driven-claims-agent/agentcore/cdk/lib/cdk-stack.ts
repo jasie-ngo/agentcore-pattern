@@ -23,9 +23,9 @@ export interface AgentCoreStackProps extends StackProps {
  * CDK Stack: Event-Driven Claims Agent
  *
  * Integrates:
- * 1. InfraConstruct — DynamoDB, S3, Lambda tools, SNS, EventBridge, Cognito
+ * 1. InfraConstruct — DynamoDB, S3, Lambda tools, EventBridge, and Bedrock guardrail
  * 2. AgentCoreApplication — Runtime, Memory, PolicyEngine, OnlineEval (from agentcore.json)
- * 3. AgentCoreMcp — Gateway + 6 Lambda targets with real ARNs from step 1
+ * 3. AgentCoreMcp — Gateway + three Lambda targets with real ARNs from step 1
  *
  * Deployment: `agentcore deploy --target dev`
  */
@@ -39,7 +39,7 @@ export class AgentCoreStack extends Stack {
     const { spec, mcpSpec, credentials } = props;
 
     // ─── Step 1: Supplementary infrastructure ──────────────────────
-    // Creates DynamoDB tables, Lambda tool functions, S3, EventBridge, SNS, Cognito.
+    // Creates DynamoDB tables, Lambda tool functions, S3, EventBridge, and guardrail.
     // Exposes lambdaArnMap for patching gateway targets.
     this.infra = new InfraConstruct(this, 'Infra', {
       destroyOnDelete: true,

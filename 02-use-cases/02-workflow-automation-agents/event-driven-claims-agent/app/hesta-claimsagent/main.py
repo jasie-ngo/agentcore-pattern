@@ -245,7 +245,7 @@ def _convert_identity_to_profile(identity, inbound, intent_result):
 # ─── Human-in-the-loop: write a record to DynamoDB via the MCP Gateway ────────
 
 
-async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, cases) -> str:
+async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, cases, attachment=None) -> str:
     """Write draft for human review via email_review tool.
 
     Gets the case_id from case_lookup_creation result (in cases), then calls
@@ -269,7 +269,9 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
             "case_id": case_id,
             "draft_subject": draft.subject,
             "draft_body": draft.body,
-            "escalation_reasons": "; ".join(decision.reasons) or "Manual review required",
+            "escalation_reasons": "; ".join(
+                decision.reasons + ([f"attachment: {attachment.notes}"] if attachment else [])
+            ) or "Manual review required",
         },
     )
 
@@ -354,6 +356,7 @@ async def _run_pipeline(payload, context):
     # Cognito M2M token fetch has the workload-identity context (matches claimsagent).
     # Do NOT move this into a worker thread — the token exchange fails without that context.
     mcp = gateway.get_mcp_client()
+    
     started = False
     if mcp is not None:
         try:
@@ -390,30 +393,46 @@ async def _run_pipeline(payload, context):
         # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
         profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
         yield _fmt_profile(profile)
-        attach = attachment_validation.assess(inbound, intent_result)
-        yield _fmt_attach(attach)
-        emp = await empathy_agent.assess(inbound)
-        yield _fmt_empathy(emp)
+        verified_member = bool(summary.identity.member_id)
+        attach = attachment_validation.assess(inbound, intent_result) if verified_member else None
+        if attach:
+            yield _fmt_attach(attach)
+        if verified_member:
+            emp = await empathy_agent.assess(inbound)
+            yield _fmt_empathy(emp)
+        else:
+            from models import EmpathyAssessment
+
+            emp = EmpathyAssessment(
+                sentiment="neutral",
+                priority="normal",
+                recommended_attention="Identity verification is required before processing the request.",
+            )
         decision = decide(intent_result, profile, emp)
         yield _fmt_decision(decision)
 
         # ── EXECUTE ─────────────────────────────────────────────────────────
         yield "## 3 · Execute\n\n"
-        draft = await writer_agent.write(inbound, intent_result, profile, summary, emp, status_ctx=status_ctx)
+        draft = await writer_agent.write(
+            inbound, intent_result, profile, summary, emp, attachment=attach, status_ctx=status_ctx
+        )
         yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
         yield f"**Subject:** {draft.subject}\n\n"
         yield "```text\n" + draft.body + "\n```\n\n"
         if draft.assumptions:
             yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
 
-        review = await reviewer_editor.review(draft, intent_result, profile)
-        yield _fmt_review(review)
+        if verified_member:
+            review = await reviewer_editor.review(draft, intent_result, profile)
+            yield _fmt_review(review)
 
         # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
         if decision.escalate_to_human:
             yield "### 👤 Human-in-the-loop\n\n"
             if ENABLE_HITL_RECORD:
-                yield await _write_hitl_record(mcp, inbound, intent_result, profile, decision, draft, status_ctx)
+                yield await _write_hitl_record(
+                    mcp, inbound, intent_result, profile, decision, draft, status_ctx, attachment=attach
+                )
             else:
                 yield (
                     "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "

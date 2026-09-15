@@ -14,7 +14,7 @@ import config
 from agents.base import build_agent
 from intents import taxonomy
 from knowledge import hesta_snippets
-from models import DraftEmail
+from models import AttachmentAssessment, DraftEmail
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +115,15 @@ def _status_context(status_ctx) -> str:
     )
 
 
-async def write(inbound, intent_result, profile, summary, empathy, status_ctx=None) -> DraftEmail:
+async def write(
+    inbound,
+    intent_result,
+    profile,
+    summary,
+    empathy,
+    attachment: AttachmentAssessment | None = None,
+    status_ctx=None,
+) -> DraftEmail:
     intent_id = intent_result.primary_intent_id
     verification_state = "needs_verification" if profile.verification_required else "verified"
 
@@ -129,6 +137,8 @@ async def write(inbound, intent_result, profile, summary, empathy, status_ctx=No
         f"Sender type: {intent_result.sender_type}\n"
         f"Member sentiment/priority: {empathy.sentiment} / {empathy.priority}; "
         f"vulnerability: {', '.join(empathy.vulnerability_flags) or 'none'}\n"
+        f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
+        f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n"
         f"Case summary: {summary.summary}\n"
         f"Outstanding items: {', '.join(summary.outstanding_items) or 'none'}\n"
         f"{_status_context(status_ctx)}\n"

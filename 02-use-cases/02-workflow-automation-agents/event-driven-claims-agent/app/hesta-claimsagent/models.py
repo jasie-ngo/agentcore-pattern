@@ -57,7 +57,7 @@ class IdentityInfo(BaseModel):
 class CaseInfo(BaseModel):
     """Case data from case_lookup_creation."""
 
-    status: str = Field(description="existing_cases_found | new_case_created")
+    status: str = Field(default="unavailable", description="existing_cases_found | new_case_created | unavailable")
     cases: list[dict] = Field(default_factory=list, description="Existing cases, if any.")
     new_case: dict | None = Field(default=None, description="Newly created case, if applicable.")
     error: str | None = Field(default=None, description="Error message if lookup failed.")

@@ -11,16 +11,17 @@ table = dynamodb.Table(
 
 def handler(event, context):
     member_id = event.get("member_id")
-
-    if not member_id:
-        return {"error": "member_id required"}
+    sender_email = event.get("sender_email")
 
     try:
-        # Query cases by member_id GSI
-        response = table.query(
-            IndexName="member_id-index",
-            KeyConditionExpression=Key("member_id").eq(member_id)
-        )
+        if member_id:
+            # Query verified cases by member_id GSI.
+            response = table.query(
+                IndexName="member_id-index",
+                KeyConditionExpression=Key("member_id").eq(member_id)
+            )
+        else:
+            response = {"Items": []}
 
         items = response.get("Items", [])
 
@@ -36,9 +37,13 @@ def handler(event, context):
 
         new_case = {
             "case_id": case_id,
-            "member_id": member_id,
-            "status": "Open"
+            "status": "Open",
+            "identity_status": "verified" if member_id else "unverified",
         }
+        if member_id:
+            new_case["member_id"] = member_id
+        if sender_email:
+            new_case["sender_email"] = sender_email
 
         table.put_item(Item=new_case)
 

@@ -28,6 +28,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import boto3
 from botocore.auth import SigV4Auth
@@ -41,7 +42,7 @@ from botocore.session import Session as BotocoreSession
 def get_stack_outputs(region: str) -> dict:
     """Get all CloudFormation outputs as a flat dict."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgentV2-dev")["Stacks"][0]["Outputs"]
     return {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
 
@@ -59,31 +60,13 @@ def get_runtime_arn(output_map: dict) -> str:
 
 
 def get_cognito_config(region: str, output_map: dict) -> dict:
-    """Get Cognito M2M config by discovering the pool and client from the deployed stack."""
+    """Get Cognito M2M config from the externally managed project state."""
     cognito = boto3.client("cognito-idp", region_name=region)
 
-    # Try CFN outputs first (some stack versions export these)
-    user_pool_id = find_output(output_map, "InfraUserPoolId")
-    client_id = find_output(output_map, "InfraUserPoolClientId")
-
-    # Fallback: discover by naming convention
-    if not user_pool_id:
-        pools = cognito.list_user_pools(MaxResults=20)["UserPools"]
-        for pool in pools:
-            if "ClaimsAgent" in pool["Name"]:
-                user_pool_id = pool["Id"]
-                break
-        if not user_pool_id:
-            raise RuntimeError("Could not find ClaimsAgent Cognito User Pool")
-
-    if not client_id:
-        clients = cognito.list_user_pool_clients(UserPoolId=user_pool_id, MaxResults=10)["UserPoolClients"]
-        for c in clients:
-            if "M2M" in c.get("ClientName", ""):
-                client_id = c["ClientId"]
-                break
-        if not client_id:
-            raise RuntimeError(f"Could not find M2M client in pool {user_pool_id}")
+    state_path = Path(__file__).resolve().parents[1] / ".cognito-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    user_pool_id = state["user_pool_id"]
+    client_id = state["client_id"]
 
     client_info = cognito.describe_user_pool_client(UserPoolId=user_pool_id, ClientId=client_id)
     client_secret = client_info["UserPoolClient"]["ClientSecret"]
@@ -208,14 +191,14 @@ def test_e2e_gateway_auth(region: str, runtime_arn: str, **_) -> tuple:
     """
     url = make_runtime_url(runtime_arn, region)
     payload = json.dumps(
-        {"prompt": "Look up policy POL-12345 using the lookup_policy tool and tell me the holder name."}
+        {"prompt": "Look up member 60010001 using the member_lookup tool and tell me the member name."}
     ).encode()
     headers = sign_request_sigv4(url, payload, region)
 
     status, body = invoke_runtime_raw(url, payload, headers, timeout=180)
 
-    if status == 200 and "john" in body.lower():
-        return True, "Agent→Gateway auth working (tool call returned policy holder)"
+    if status == 200 and "sarah" in body.lower():
+        return True, "Agent→Gateway auth working (member lookup returned Sarah Thompson)"
     if status == 200:
         return False, f"Agent responded but tool may have failed: {body[:300]}"
     return False, f"HTTP {status}: {body[:200]}"

@@ -1,10 +1,10 @@
 {
-  "name": "ClaimsAgent",
+  "name": "ClaimsAgentV2",
   "version": 1,
   "managedBy": "CDK",
   "runtimes": [
     {
-      "name": "hestaclaimsagent",
+      "name": "hestaclaimsagent_v2",
       "description": "Event-driven dual-agent claims processor with confidence-based routing",
       "build": "Container",
       "entrypoint": "main.py",
@@ -73,7 +73,7 @@
     {
       "authorizerType": "OAuthCredentialProvider",
       "name": "cognito-gateway-m2m",
-      "discoveryUrl": "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_xMeKwrxW6/.well-known/openid-configuration",
+      "discoveryUrl": "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_5Owf1PdzM/.well-known/openid-configuration",
       "scopes": [
         "agentcore/invoke"
       ],
@@ -125,7 +125,7 @@
   "onlineEvalConfigs": [
     {
       "name": "ClaimsEvaluation",
-      "agent": "hestaclaimsagent",
+      "agent": "hestaclaimsagent_v2",
       "evaluators": [
         "Builtin.Helpfulness",
         "Builtin.Correctness",
@@ -138,56 +138,8 @@
   "agentCoreGateways": [
     {
       "name": "ClaimsGateway",
-      "description": "MCP Gateway for claims processing tools: policy lookup, claim creation, human review, notifications, and claim resolution",
+      "description": "MCP Gateway for HESTA member lookup, case lookup and creation, and human-review email drafting",
       "targets": [
-        {
-          "name": "policy-lookup",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_POLICY_LOOKUP",
-            "toolSchemaFile": "lambdas/schemas/policy_lookup.json"
-          }
-        },
-        {
-          "name": "create-claim",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_CREATE_CLAIM",
-            "toolSchemaFile": "lambdas/schemas/create_claim.json"
-          }
-        },
-        {
-          "name": "human-review",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_HUMAN_REVIEW",
-            "toolSchemaFile": "lambdas/schemas/human_review.json"
-          }
-        },
-        {
-          "name": "notification",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_NOTIFICATION",
-            "toolSchemaFile": "lambdas/schemas/notification.json"
-          }
-        },
-        {
-          "name": "list-pending-claims",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_LIST_PENDING",
-            "toolSchemaFile": "lambdas/schemas/list_pending_claims.json"
-          }
-        },
-        {
-          "name": "resolve-claim",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_RESOLVE_CLAIM",
-            "toolSchemaFile": "lambdas/schemas/resolve_claim.json"
-          }
-        },
         {
           "name": "member-lookup",
           "targetType": "lambdaFunctionArn",
@@ -216,7 +168,7 @@
       "authorizerType": "CUSTOM_JWT",
       "authorizerConfiguration": {
         "customJwtAuthorizer": {
-          "discoveryUrl": "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_xMeKwrxW6/.well-known/openid-configuration",
+          "discoveryUrl": "https://cognito-idp.ap-southeast-2.amazonaws.com/ap-southeast-2_5Owf1PdzM/.well-known/openid-configuration",
           "allowedClients": [
             "41ppu6uq1or79jkgrkag8f4rbj"
           ]
@@ -225,28 +177,20 @@
       "enableSemanticSearch": true,
       "exceptionLevel": "NONE",
       "policyEngineConfiguration": {
-        "policyEngineName": "ClaimsPolicyEngine",
+        "policyEngineName": "ClaimsAgentV2PolicyEngine",
         "mode": "ENFORCE"
       }
     }
   ],
   "policyEngines": [
     {
-      "name": "ClaimsPolicyEngine",
+      "name": "ClaimsAgentV2PolicyEngine",
       "description": "Cedar policy engine for claims processing authorization — AllowAll + BlockExcessiveClaims ($100k threshold)",
       "policies": [
         {
-          "name": "ClaimsAllowAllTools",
+          "name": "ClaimsAgentV2AllowAllTools",
           "description": "Permit all tool calls on the claims gateway for authenticated agents",
           "statement": "permit(principal, action, resource is AgentCore::Gateway);",
-          "validationMode": "IGNORE_ALL_FINDINGS",
-          "enforcementMode": "ACTIVE",
-          "authorizationPhase": "INITIATE"
-        },
-        {
-          "name": "ClaimsBlockExcessiveAmount",
-          "description": "Forbid creating claims with estimated amount >= $100,000 — routes to human review",
-          "statement": "forbid(principal, action, resource is AgentCore::Gateway) when { context has \"toolName\" && context.toolName == \"create-claim\" && context has \"input\" && context.input has \"estimated_amount\" && context.input.estimated_amount >= 100000 };",
           "validationMode": "IGNORE_ALL_FINDINGS",
           "enforcementMode": "ACTIVE",
           "authorizationPhase": "INITIATE"

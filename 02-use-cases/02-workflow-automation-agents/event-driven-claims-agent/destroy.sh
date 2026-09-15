@@ -2,13 +2,13 @@
 set -euo pipefail
 
 # ============================================================================
-# Event-Driven Claims Agent — One-Command Teardown
+# ClaimsAgentV2 HESTA Agent — One-Command Teardown
 # Usage: ./destroy.sh [region]
 # Example: ./destroy.sh us-west-2
 #
 # Destroys ALL resources created by deploy.sh:
 # - AgentCore Runtime, Gateway, Memory, PolicyEngine, OnlineEval
-# - Infrastructure (DynamoDB, S3, SNS, Cognito, EventBridge, Lambda)
+# - Infrastructure (DynamoDB, S3, EventBridge, Lambda)
 #
 # S3 buckets and DynamoDB tables have RemovalPolicy.DESTROY + autoDeleteObjects,
 # so all data is permanently deleted. This is NOT reversible.
@@ -22,7 +22,7 @@ export CDK_DEFAULT_REGION="$REGION"
 # Use Finch or Docker for container builds
 export CDK_DOCKER="${CDK_DOCKER:-docker}"
 
-echo "🗑️  Destroying Claims Agent in $REGION..."
+echo "🗑️  Destroying ClaimsAgentV2 HESTA agent in $REGION..."
 echo ""
 
 # Ensure aws-targets.json exists with correct region
@@ -49,7 +49,7 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Destroy via CDK
-echo "💥 Destroying stack AgentCore-ClaimsAgent-dev..."
+echo "💥 Destroying stack AgentCore-ClaimsAgentV2-dev..."
 cdk destroy --all --force
 cd ../..
 echo ""

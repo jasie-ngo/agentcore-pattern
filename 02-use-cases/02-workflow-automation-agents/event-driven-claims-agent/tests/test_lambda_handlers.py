@@ -1,29 +1,18 @@
-"""Unit tests for Gateway Lambda tool handlers (input validation + happy path).
+"""Unit tests for the current HESTA Gateway Lambda handlers.
 
-Covers the validation logic in lambdas/create_claim and lambdas/policy_lookup.
-DynamoDB calls are mocked, so no AWS access is needed. Validation-failure paths
-return before any AWS call; success paths patch the module-level `table`.
-
-The two handlers are both named `handler.py`, so they're loaded under unique
-module names via importlib to avoid collision.
-
-Run:
-    python3 -m unittest discover -s tests
+DynamoDB calls are mocked, so these tests do not access AWS.
 """
 
 import importlib.util
-import json
 import os
 import unittest
 from unittest.mock import MagicMock
 
-# boto3.resource() can require a region at creation time; set one before import.
 os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
-
 _ROOT = os.path.join(os.path.dirname(__file__), "..")
 
 try:
-    import boto3  # noqa: F401
+    import boto3
 
     _BOTO3_AVAILABLE = True
 except ImportError:
@@ -31,153 +20,126 @@ except ImportError:
 
 
 def _load(module_name: str, rel_path: str):
-    """Load a handler module from an explicit path under a unique name."""
     path = os.path.join(_ROOT, rel_path)
     spec = importlib.util.spec_from_file_location(module_name, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 @unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
-class CreateClaimValidationTests(unittest.TestCase):
+class MemberLookupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.mod = _load("create_claim_handler", "lambdas/create_claim/handler.py")
+        cls.mod = _load("member_lookup_handler", "lambdas/member_lookup/handler.py")
 
     def setUp(self):
-        # Fresh mock table per test; restore after.
-        self._orig_table = self.mod.table
+        self.original_table = self.mod.table
         self.mod.table = MagicMock()
 
     def tearDown(self):
-        self.mod.table = self._orig_table
+        self.mod.table = self.original_table
 
-    def _call(self, event):
-        return json.loads(self.mod.handler(event, None))
+    def test_requires_member_id_or_email(self):
+        result = self.mod.handler({}, None)
+        self.assertEqual(result, {"error": "member_id or email required"})
+        self.mod.table.get_item.assert_not_called()
+        self.mod.table.query.assert_not_called()
 
-    def test_missing_policy_number(self):
-        result = self._call({"description": "damage"})
-        self.assertIn("error", result)
-        self.mod.table.put_item.assert_not_called()
+    def test_lookup_by_member_id(self):
+        item = {"member_id": "60010001", "email": "sarah@example.com", "status": "active"}
+        self.mod.table.get_item.return_value = {"Item": item}
+        result = self.mod.handler({"member_id": "60010001"}, None)
+        self.assertEqual(result, item)
+        self.mod.table.get_item.assert_called_once_with(Key={"member_id": "60010001"})
 
-    def test_missing_description(self):
-        result = self._call({"policy_number": "POL-1"})
-        self.assertIn("error", result)
-        self.mod.table.put_item.assert_not_called()
+    def test_lookup_by_email(self):
+        item = {"member_id": "60010001", "email": "sarah@example.com"}
+        self.mod.table.query.return_value = {"Items": [item]}
+        result = self.mod.handler({"email": item["email"]}, None)
+        self.assertEqual(result, item)
+        self.mod.table.query.assert_called_once()
 
-    def test_description_too_long(self):
-        result = self._call(
-            {
-                "policy_number": "POL-1",
-                "description": "x" * 5001,
-            }
-        )
-        self.assertIn("error", result)
-        self.assertIn("5000", result["error"])
-        self.mod.table.put_item.assert_not_called()
+    def test_email_not_found(self):
+        self.mod.table.query.return_value = {"Items": []}
+        result = self.mod.handler({"email": "missing@example.com"}, None)
+        self.assertEqual(result, {"error": "Member not found"})
 
-    def test_negative_amount(self):
-        result = self._call(
-            {
-                "policy_number": "POL-1",
-                "description": "d",
-                "estimated_amount": -5,
-            }
-        )
-        self.assertIn("error", result)
-        self.mod.table.put_item.assert_not_called()
 
-    def test_amount_exceeds_max(self):
-        result = self._call(
-            {
-                "policy_number": "POL-1",
-                "description": "d",
-                "estimated_amount": 10_000_001,
-            }
-        )
-        self.assertIn("error", result)
-        self.mod.table.put_item.assert_not_called()
+@unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
+class CaseLookupCreationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.mod = _load("case_lookup_creation_handler", "lambdas/case_lookup_creation/handler.py")
 
-    def test_valid_claim_creates_record(self):
-        result = self._call(
-            {
-                "policy_number": "POL-12345",
-                "description": "fender bender",
-                "estimated_amount": 2000,
-                "category": "auto_collision",
-            }
-        )
-        self.assertNotIn("error", result)
-        self.assertTrue(result["claim_id"].startswith("CLM-"))
-        self.assertEqual(result["policy_number"], "POL-12345")
-        self.assertEqual(result["category"], "auto_collision")
+    def setUp(self):
+        self.original_table = self.mod.table
+        self.mod.table = MagicMock()
+
+    def tearDown(self):
+        self.mod.table = self.original_table
+
+    def test_creates_verified_case(self):
+        self.mod.table.query.return_value = {"Items": []}
+        result = self.mod.handler({"member_id": "60010001"}, None)
+        self.assertEqual(result["status"], "new_case_created")
+        self.assertTrue(result["case"]["case_id"].startswith("CASE-"))
+        self.assertEqual(result["case"]["member_id"], "60010001")
+        self.assertEqual(result["case"]["identity_status"], "verified")
         self.mod.table.put_item.assert_called_once()
 
-    def test_agent_routed_status_passthrough(self):
-        # The agent controls status/decision; the Lambda just records them.
-        result = self._call(
-            {
-                "policy_number": "POL-1",
-                "description": "d",
-                "estimated_amount": 100,
-                "status": "approved",
-                "decision": "auto_approved",
-            }
-        )
-        self.assertEqual(result["status"], "approved")
-        self.assertEqual(result["decision"], "auto_approved")
+    def test_returns_existing_verified_case(self):
+        cases = [{"case_id": "CASE-1234", "member_id": "60010001", "status": "Open"}]
+        self.mod.table.query.return_value = {"Items": cases}
+        result = self.mod.handler({"member_id": "60010001"}, None)
+        self.assertEqual(result, {"status": "existing_cases_found", "cases": cases})
+        self.mod.table.put_item.assert_not_called()
 
-    def test_default_status_pending_review(self):
-        result = self._call(
-            {
-                "policy_number": "POL-1",
-                "description": "d",
-                "estimated_amount": 100,
-            }
-        )
-        self.assertEqual(result["status"], "pending_review")
+    def test_creates_anonymous_case_for_unknown_member(self):
+        result = self.mod.handler({"sender_email": "unknown@example.com"}, None)
+        case = result["case"]
+        self.assertEqual(result["status"], "new_case_created")
+        self.assertTrue(case["case_id"].startswith("CASE-"))
+        self.assertEqual(case["identity_status"], "unverified")
+        self.assertEqual(case["sender_email"], "unknown@example.com")
+        self.assertNotIn("member_id", case)
+        self.mod.table.put_item.assert_called_once()
+        self.mod.table.query.assert_not_called()
 
 
 @unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
-class PolicyLookupTests(unittest.TestCase):
+class EmailReviewTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.mod = _load("policy_lookup_handler", "lambdas/policy_lookup/handler.py")
+        cls.mod = _load("email_review_handler", "lambdas/email_review/handler.py")
 
     def setUp(self):
-        self._orig_table = self.mod.table
+        self.original_table = self.mod.table
         self.mod.table = MagicMock()
 
     def tearDown(self):
-        self.mod.table = self._orig_table
+        self.mod.table = self.original_table
 
-    def _call(self, event):
-        return json.loads(self.mod.handler(event, None))
+    def test_requires_case_id(self):
+        result = self.mod.handler({}, None)
+        self.assertEqual(result, {"error": "case_id required"})
+        self.mod.table.put_item.assert_not_called()
 
-    def test_missing_policy_number(self):
-        result = self._call({})
-        self.assertIn("error", result)
-        self.mod.table.get_item.assert_not_called()
-
-    def test_policy_not_found(self):
-        self.mod.table.get_item.return_value = {}  # no Item
-        result = self._call({"policy_number": "POL-NOPE"})
-        self.assertIn("error", result)
-        self.assertIn("not found", result["error"].lower())
-
-    def test_policy_found_returns_item(self):
-        self.mod.table.get_item.return_value = {
-            "Item": {
-                "policy_number": "POL-12345",
-                "holder": "John Smith",
-                "status": "active",
-                "coverage_limit": 50000,
-            }
+    def test_writes_review_record(self):
+        event = {
+            "case_id": "CASE-1234",
+            "draft_subject": "HESTA enquiry",
+            "draft_body": "Please provide your member number.",
+            "escalation_reasons": "identity not verified",
         }
-        result = self._call({"policy_number": "POL-12345"})
-        self.assertEqual(result["policy_number"], "POL-12345")
-        self.assertEqual(result["status"], "active")
+        result = self.mod.handler(event, None)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["case_id"], "CASE-1234")
+        self.assertTrue(result["review_id"])
+        written = self.mod.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(written["case_id"], "CASE-1234")
+        self.assertEqual(written["status"], "pending_review")
+        self.assertEqual(written["escalation_reasons"], "identity not verified")
 
 
 if __name__ == "__main__":
