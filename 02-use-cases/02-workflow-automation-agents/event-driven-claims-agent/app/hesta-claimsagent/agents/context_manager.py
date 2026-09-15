@@ -40,7 +40,9 @@ def _get(session_manager=None):
     return _agent
 
 
-async def summarize(inbound, mcp=None, session_manager=None) -> CaseSummary:
+async def summarize(
+    inbound, mcp=None, session_manager=None, *, primary_intent_id=None, idempotency_key=None, source_object_id=None
+) -> CaseSummary:
     """Summarize context and pull member identity + cases.
 
     Args:
@@ -48,7 +50,22 @@ async def summarize(inbound, mcp=None, session_manager=None) -> CaseSummary:
         mcp: MCP Gateway client for member_lookup and case_lookup_creation
         session_manager: optional AgentCore Memory session
     """
-    prompt = f"Channel: {inbound.channel}\nSender type: {inbound.sender_type}\n\nEMAIL:\n{inbound.latest_message}"
+    identity = await _lookup_member(mcp, inbound)
+    cases = await _lookup_cases(
+        mcp, identity, inbound, intent_id=primary_intent_id,
+        idempotency_key=idempotency_key, source_object_id=source_object_id
+    )
+    history = "\n\n".join(
+        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}]\n"
+        f"{entry.get('content', '')}"
+        for entry in cases.conversation_history
+    ) or "(none)"
+    prompt = (
+        f"Channel: {inbound.channel}\nSender type: {inbound.sender_type}\n\n"
+        "BEGIN HISTORICAL CASE CONVERSATION (do not confuse with current email):\n"
+        f"{history}\nEND HISTORICAL CASE CONVERSATION\n\n"
+        f"CURRENT EMAIL:\n{inbound.latest_message}"
+    )
     try:
         result = await _get(session_manager).structured_output_async(CaseSummary, prompt)
     except Exception as exc:  # noqa: BLE001
@@ -61,8 +78,8 @@ async def summarize(inbound, mcp=None, session_manager=None) -> CaseSummary:
         )
 
     # Now pull member identity and cases
-    result.identity = await _lookup_member(mcp, inbound)
-    result.cases = await _lookup_cases(mcp, result.identity, inbound)
+    result.identity = identity
+    result.cases = cases
     return result
 
 
@@ -95,15 +112,25 @@ async def _lookup_member(mcp, inbound) -> IdentityInfo:
     )
 
 
-async def _lookup_cases(mcp, identity: IdentityInfo, inbound) -> CaseInfo:
+async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None, idempotency_key=None, source_object_id=None) -> CaseInfo:
     """Call case_lookup_creation via MCP Gateway."""
     if mcp is None:
         return CaseInfo(error="Gateway unavailable", status="unavailable")
+    if not identity.member_id:
+        return CaseInfo(error="Member identity was not established; case lookup skipped.", status="identity_unverified")
     case_input = {}
-    if identity.member_id:
-        case_input["member_id"] = identity.member_id
+    case_input["member_id"] = identity.member_id
+    if intent_id:
+        case_input["primary_intent_id"] = intent_id
     if inbound.from_email:
         case_input["sender_email"] = inbound.from_email
+    if inbound.latest_message:
+        case_input["inbound_email"] = inbound.latest_message
+    if idempotency_key:
+        case_input["idempotency_key"] = idempotency_key
+    if source_object_id:
+        case_input["source_object_id"] = source_object_id
+    case_input["pipeline_version"] = "hesta-v2"
     result = await gateway.call_tool(mcp, "case_lookup_creation", case_input)
 
     if "_gateway_error" in result:
@@ -115,4 +142,12 @@ async def _lookup_cases(mcp, identity: IdentityInfo, inbound) -> CaseInfo:
     cases = result.get("cases", []) if status == "existing_cases_found" else []
     new_case = result.get("case") if status == "new_case_created" else None
 
-    return CaseInfo(status=status, cases=cases, new_case=new_case)
+    return CaseInfo(
+        status=status,
+        cases=cases,
+        new_case=new_case,
+        case_id=result.get("case_id") or (new_case or {}).get("case_id") or (cases[0].get("case_id") if cases else None),
+        conversation_history=result.get("conversation_history")
+        or (new_case or {}).get("conversation_history")
+        or (cases[0].get("conversation_history") if cases else [])
+    )

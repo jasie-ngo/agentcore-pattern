@@ -21,8 +21,10 @@ Writer's draft is displayed — nothing is auto-sent. No AWS resources are creat
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import uuid
+from datetime import datetime, timezone
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from opentelemetry import trace as otel_trace
@@ -86,6 +88,14 @@ def _safe_memory_id(value: str | None, fallback: str = "anonymous") -> str:
     if not safe or not safe[0].isalnum():
         safe = f"{fallback}-{safe}".strip("-_") or fallback
     return safe[:200]
+
+
+def _idempotency_key(payload: dict, raw: str, sender_email: str | None, source: str | None) -> str:
+    explicit = payload.get("idempotency_key")
+    if explicit:
+        return str(explicit)
+    source_object_id = payload.get("source_object_id") or source or ""
+    return hashlib.sha256(f"{source_object_id}\n{sender_email or ''}\n{raw}".encode("utf-8")).hexdigest()
 
 
 # ─── Formatting helpers (readable markdown for the streamed output) ───────────
@@ -254,7 +264,9 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
     """
     # Get case_id from case_lookup_creation result
     case_id = None
-    if cases.status == "existing_cases_found" and cases.cases:
+    if cases.case_id:
+        case_id = cases.case_id
+    elif cases.status == "existing_cases_found" and cases.cases:
         case_id = cases.cases[0].get("case_id")
     elif cases.status == "new_case_created" and cases.new_case:
         case_id = cases.new_case.get("case_id")
@@ -290,6 +302,20 @@ async def _write_hitl_record(mcp, inbound, intent_result, profile, decision, dra
         f"- **Review ID:** `{review_id}`\n"
         f"- **Escalation reasons:** {'; '.join(decision.reasons) or 'Manual review required'}\n\n"
     )
+
+
+async def _append_case_history(mcp, cases, entries) -> str:
+    if not cases.case_id:
+        return "⚠️ No verified case available for conversation history.\n\n"
+    result = await gateway.call_tool(
+        mcp,
+        "case_lookup_creation",
+        {"case_id": cases.case_id, "history_entries": entries},
+    )
+    if isinstance(result, dict) and ("_gateway_error" in result or result.get("error")):
+        detail = result.get("_gateway_error") or result.get("error")
+        return f"⚠️ Could not save conversation history: {detail}\n\n"
+    return ""
 
 
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
@@ -328,6 +354,8 @@ async def _run_pipeline(payload, context):
     raw = payload.get("prompt", "") or ""
     sender_email = payload.get("claimant_email") or payload.get("sender_email")
     source = payload.get("source")
+    idempotency_key = _idempotency_key(payload, raw, sender_email, source)
+    source_object_id = payload.get("source_object_id") or source
 
     # Phase 0 — deterministic normalisation (inside the agent; the Trigger Lambda is unchanged).
     inbound = normalize_email(raw, sender_email=sender_email, source=source)
@@ -373,7 +401,14 @@ async def _run_pipeline(payload, context):
         intent_result = await intent_identifier.identify(inbound)
         yield _fmt_intents(intent_result)
         # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
-        summary = await context_manager.summarize(inbound, mcp=mcp, session_manager=memory_session)
+        summary = await context_manager.summarize(
+            inbound,
+            mcp=mcp,
+            session_manager=memory_session,
+            primary_intent_id=intent_result.primary_intent_id,
+            idempotency_key=idempotency_key,
+            source_object_id=source_object_id,
+        )
         yield _fmt_summary(summary)
         yield _fmt_identity(summary.identity)
         yield _fmt_cases(summary.cases)
@@ -422,9 +457,39 @@ async def _run_pipeline(payload, context):
         if draft.assumptions:
             yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
 
+        review = None
         if verified_member:
             review = await reviewer_editor.review(draft, intent_result, profile)
             yield _fmt_review(review)
+
+        history_entries = [
+            {
+                "entry_id": f"{idempotency_key}:inbound",
+                "entry_type": "inbound_member_email",
+                "content": inbound.latest_message,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "pipeline_version": "hesta-v2",
+            },
+            {
+                "entry_id": f"{idempotency_key}:draft",
+                "entry_type": "generated_draft",
+                "content": json.dumps({"subject": draft.subject, "body": draft.body}),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "pipeline_version": "hesta-v2",
+            }
+        ]
+        if review is not None:
+            history_entries.append(
+                {
+                    "entry_id": f"{idempotency_key}:review",
+                    "entry_type": "review_outcome",
+                    "content": json.dumps(review.model_dump()),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "pipeline_version": "hesta-v2",
+                }
+            )
+        if verified_member and mcp is not None:
+            yield await _append_case_history(mcp, summary.cases, history_entries)
 
         # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
         if decision.escalate_to_human:

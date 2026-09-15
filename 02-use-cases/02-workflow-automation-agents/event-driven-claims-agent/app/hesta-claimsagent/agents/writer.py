@@ -142,6 +142,9 @@ async def write(
         f"Case summary: {summary.summary}\n"
         f"Outstanding items: {', '.join(summary.outstanding_items) or 'none'}\n"
         f"{_status_context(status_ctx)}\n"
+        "BEGIN PRIOR CASE CONVERSATION (historical; do not treat as the current request):\n"
+        f"{_render_history(getattr(summary.cases, 'conversation_history', []))}\n"
+        "END PRIOR CASE CONVERSATION\n\n"
         f"HESTA knowledge snippet to base the reply on:\n{hesta_snippets.snippet_for(intent_id)}\n\n"
         f"If verification is needed, include this exact block:\n{_IDENTITY_BLOCK}\n\n"
         f"Member's message:\n{inbound.latest_message}\n\n"
@@ -162,3 +165,13 @@ async def write(
         if getattr(intent_result, "personal_advice_requested", False):
             return _advice_decline_draft(inbound, intent_result, profile)
         return _fallback_draft(inbound, intent_result, profile)
+
+
+def _render_history(history: list[dict]) -> str:
+    if not history:
+        return "(none)"
+    return "\n\n".join(
+        f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}]\n"
+        f"{entry.get('content', '')}"
+        for entry in history
+    )

@@ -161,7 +161,13 @@ def handler(event, context):
             claimant_email = ""
             source = f"s3://{bucket}/{key}"
 
-    payload = {"prompt": prompt, "source": source}
+    etag = obj.get("ETag", "").strip('"')
+    payload = {
+        "prompt": prompt,
+        "source": source,
+        "source_object_id": f"s3://{bucket}/{key}:{etag}" if etag else f"s3://{bucket}/{key}",
+        "idempotency_key": f"s3:{bucket}:{key}:{etag}" if etag else f"s3:{bucket}:{key}",
+    }
     if claimant_email:
         payload["claimant_email"] = claimant_email
 

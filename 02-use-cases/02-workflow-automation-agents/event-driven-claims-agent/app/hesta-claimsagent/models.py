@@ -60,6 +60,10 @@ class CaseInfo(BaseModel):
     status: str = Field(default="unavailable", description="existing_cases_found | new_case_created | unavailable")
     cases: list[dict] = Field(default_factory=list, description="Existing cases, if any.")
     new_case: dict | None = Field(default=None, description="Newly created case, if applicable.")
+    case_id: str | None = Field(default=None, description="Selected or created case identifier.")
+    conversation_history: list[dict] = Field(
+        default_factory=list, description="Bounded prior conversation entries for the selected case."
+    )
     error: str | None = Field(default=None, description="Error message if lookup failed.")
 
 
