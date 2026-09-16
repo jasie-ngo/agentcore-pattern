@@ -108,7 +108,26 @@ class CaseLookupCreationTests(unittest.TestCase):
         self.assertEqual(history[0]["entry_type"], "inbound_member_email")
         self.assertEqual(history[0]["content"], "Please send my BDBN form.")
         self.assertEqual(history[0]["intent_id"], "death_benefit_nomination")
+        # No attachments_present sent -> defaults to 0, not omitted (0 is meaningful, not absent).
+        self.assertEqual(history[0]["attachments_present"], 0)
         self.mod.table.put_item.assert_called_once()
+
+    def test_first_message_attachment_is_recorded_on_the_case_creation_entry(self):
+        """Regression: a brand-new case's very first history entry is written here at case
+        creation, not via the later append call — main.py's later copy of this same entry_id
+        is silently deduped, so if attachments_present isn't captured HERE, it's lost forever
+        and a follow-up message incorrectly re-requests an attachment already on file."""
+        self.mod.table.query.return_value = {"Items": []}
+        result = self.mod.handler(
+            {
+                "member_id": "60010001",
+                "primary_intent_id": "death_benefit_nomination",
+                "inbound_email": "Please find attached my BDBN form. [ATTACHMENT form.pdf]",
+                "attachments_present": 1,
+            },
+            None,
+        )
+        self.assertEqual(result["conversation_history"][0]["attachments_present"], 1)
 
     def test_reuses_the_members_case_regardless_of_intent(self):
         """One case per member: a different topic on a follow-up still reuses it."""

@@ -152,6 +152,11 @@ async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None,
         case_input["idempotency_key"] = idempotency_key
     if source_object_id:
         case_input["source_object_id"] = source_object_id
+    # Always sent (not conditional on truthiness) — 0 is a meaningful value here, not "absent".
+    # Needed so a brand-new case's very first history entry records whether an attachment was
+    # present; without it, that entry is later written by main.py's own append call, but
+    # discarded as a duplicate entry_id, silently losing the field (see attachment_validation).
+    case_input["attachments_present"] = inbound.attachment_count
     case_input["pipeline_version"] = "hesta-v2"
     result = await gateway.call_tool(mcp, "case_lookup_creation", case_input)
 

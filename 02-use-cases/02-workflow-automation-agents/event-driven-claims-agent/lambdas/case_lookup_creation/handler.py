@@ -39,7 +39,10 @@ def _case_id(member_id: str) -> str:
     return f"CASE-{value[:20].upper()}"
 
 
-def _history_entry(entry_type: str, content: str, entry_id: str, runtime_version: str, intent_id: str | None = None) -> dict:
+def _history_entry(
+    entry_type: str, content: str, entry_id: str, runtime_version: str,
+    intent_id: str | None = None, attachments_present: int | None = None,
+) -> dict:
     entry = {
         "entry_id": entry_id,
         "entry_type": entry_type,
@@ -49,6 +52,8 @@ def _history_entry(entry_type: str, content: str, entry_id: str, runtime_version
     }
     if intent_id:
         entry["intent_id"] = intent_id
+    if attachments_present is not None:
+        entry["attachments_present"] = attachments_present
     return entry
 
 
@@ -147,6 +152,7 @@ def handler(event, context):
                 f"{idempotency_key}:inbound",
                 runtime_version,
                 intent_id=intent_id,
+                attachments_present=event.get("attachments_present", 0),
             )
         )
 
