@@ -584,19 +584,19 @@ async def _run_pipeline(payload, context):
                 "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)", draft
             )
 
-            # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. Re-run the
-            # Reviewer after every revision; stop as soon as it approves, the Reviewer itself
-            # fails (never revise blindly against a failure), or MAX_DRAFT_REVISIONS is reached.
-            # Each round's draft and review verdict are streamed as they happen, so the final
-            # (possibly revised) draft is always visible, not just the very first one.
+            # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. The Reviewer
+            # only checks and flags issues (accuracy/tone/compliance/etc.) — it never rewrites
+            # the email; the Writer, which has the full context, addresses the flags on each
+            # revision. Re-run the Reviewer after every revision; stop as soon as it approves,
+            # the Reviewer itself fails (never revise blindly against a failure), or
+            # MAX_DRAFT_REVISIONS is reached. Rounds run silently — only the final review verdict
+            # and the final (possibly revised) draft are shown, in that order.
             revision_count = 0
             review = None
             reviewer_failed = False
             if verified_member:
                 review = await _safe_review(draft, intent_result, profile, attach)
                 reviewer_failed = review is None
-                if review is not None:
-                    yield _fmt_review(review, revision_count)
                 while (
                     review is not None
                     and not review.approved_for_human_send
@@ -607,11 +607,13 @@ async def _run_pipeline(payload, context):
                         inbound, intent_result, profile, summary, emp, draft, review,
                         attachment=attach,
                     )
-                    yield _fmt_draft(f"### ✏️ Revised draft (revision {revision_count})", draft)
                     review = await _safe_review(draft, intent_result, profile, attach)
                     reviewer_failed = review is None
-                    if review is not None:
-                        yield _fmt_review(review, revision_count)
+
+            if review is not None:
+                yield _fmt_review(review, revision_count)
+            if revision_count:
+                yield _fmt_draft(f"### ✏️ Final draft — after Reviewer feedback ({revision_count} revision(s))", draft)
 
             if reviewer_failed:
                 yield "_⚠️ Automated review unavailable — routed to human review._\n\n"

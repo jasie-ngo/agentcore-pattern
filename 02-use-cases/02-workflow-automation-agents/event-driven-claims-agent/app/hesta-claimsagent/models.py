@@ -190,7 +190,14 @@ class ReviewResult(BaseModel):
     accuracy_ok: bool = Field(description="Facts/claims are consistent with the request and HESTA knowledge.")
     tone_ok: bool = Field(description="Tone matches HESTA's supportive house style.")
     compliance_ok: bool = Field(description="No unverified regulated action, no promises, correct next steps.")
-    edits: str = Field(default="", description="Suggested edits, or '' if none.")
+    edits: str = Field(
+        default="",
+        description=(
+            "Short, targeted suggestions only (e.g. 'soften the opening line', 'remove the sentence "
+            "promising a timeframe') — never a full rewritten draft or the complete email body. "
+            "'' if none."
+        ),
+    )
     issues: list[str] = Field(default_factory=list, description="Specific problems found, or empty.")
 
 
