@@ -556,7 +556,7 @@ async def _run_pipeline(payload, context):
                 )
                 if verified_member else None
             )
-            if attach:
+            if attach is not None:
                 yield _fmt_attach(attach)
             if verified_member:
                 emp = await empathy_agent.assess(inbound)

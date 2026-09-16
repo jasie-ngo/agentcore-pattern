@@ -136,6 +136,23 @@ def _apply_authoritative_fields(draft: DraftEmail, intent_id: str, verification_
     draft.verification_state = verification_state
 
 
+def _identity_instruction(verification_state: str) -> str:
+    """Whether to ask for identity is already known deterministically (verification_state) —
+    never leave "if needed" as a judgment call in the prompt. That phrasing previously let the
+    model copy the instructional sentence itself into the draft body; giving the block only
+    when it actually applies, clearly delimited, with an explicit "don't include this note"
+    warning, avoids that."""
+    if verification_state != "needs_verification":
+        return ""
+    return (
+        "The draft's body MUST include the following block verbatim, word for word — do not "
+        "paraphrase it, and do not include this instruction sentence itself in the draft:\n"
+        "---BEGIN REQUIRED BLOCK---\n"
+        f"{_IDENTITY_BLOCK}\n"
+        "---END REQUIRED BLOCK---\n\n"
+    )
+
+
 async def write(
     inbound,
     intent_result,
@@ -166,7 +183,7 @@ async def write(
         f"{_render_history(getattr(summary.cases, 'conversation_history', []))}\n"
         "END PRIOR CASE CONVERSATION\n\n"
         f"HESTA knowledge snippet to base the reply on:\n{hesta_snippets.snippet_for(intent_id)}\n\n"
-        f"If verification is needed, include this exact block:\n{_IDENTITY_BLOCK}\n\n"
+        f"{_identity_instruction(verification_state)}"
         f"Member's message:\n{inbound.latest_message}\n\n"
         "Write the draft reply now."
     )
@@ -225,7 +242,7 @@ async def revise(
         "REVIEWER SUGGESTED EDITS:\n"
         f"{review.edits or '(none)'}\n\n"
         f"HESTA knowledge snippet to base the reply on:\n{hesta_snippets.snippet_for(intent_id)}\n\n"
-        f"If verification is needed, include this exact block:\n{_IDENTITY_BLOCK}\n\n"
+        f"{_identity_instruction(verification_state)}"
         f"Member's original message:\n{inbound.latest_message}\n\n"
         "Revise the draft to address the Reviewer's issues and suggested edits. Keep it accurate, "
         "on-brand, and compliant. Do NOT remove required identity-verification or compliance wording "
