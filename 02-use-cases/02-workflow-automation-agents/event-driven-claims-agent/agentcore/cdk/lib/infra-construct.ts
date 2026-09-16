@@ -231,11 +231,11 @@ export class InfraConstruct extends Construct {
           {
             name: 'SensitiveAccountDisclosure',
             type: 'DENY',
+            // Bedrock caps topic definitions at 200 chars (this is 188) — keep it terse.
             definition:
-              'Stating a member\'s specific account-level financial details in an email reply — account '
-              + 'balances, transaction or contribution history, payment amounts, tax file numbers or other '
-              + 'tax information, bank account/BSB details, or internal account identifiers — rather than '
-              + 'general information and next steps.',
+              'Stating a member\'s specific account details in a reply: balances, transaction or '
+              + 'contribution history, payment amounts, tax file numbers, bank/BSB details, or internal '
+              + 'account identifiers.',
             examples: [
               'Your current balance is $48,213.55.',
               'We can confirm your BSB is 063-000 and account number 12345678.',
