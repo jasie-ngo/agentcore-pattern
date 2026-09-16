@@ -49,6 +49,32 @@ class HestaModelTests(unittest.TestCase):
         self.assertEqual(result.status, "present")
         self.assertEqual(result.attachments_present, 1)
 
+    def test_missing_attachment_satisfied_by_earlier_case_history(self):
+        """A follow-up with no new attachment doesn't re-flag as missing if the case's
+        history shows one was provided earlier — case-wide, not scoped to that intent."""
+        inbound = normalize_email("Just checking in on this. Member number 60010001.")
+        case_history = [
+            {"entry_type": "inbound_member_email", "attachments_present": 0},
+            {"entry_type": "inbound_member_email", "attachments_present": 1},
+        ]
+        result = assess(
+            inbound,
+            type("Intent", (), {"primary_intent_id": "death_benefit_nomination"})(),
+            case_history=case_history,
+        )
+        self.assertEqual(result.status, "present")
+        self.assertEqual(result.attachments_present, 0)
+        self.assertIn("already on file", result.notes)
+
+    def test_missing_attachment_with_no_prior_history_stays_missing(self):
+        inbound = normalize_email("Please send my Binding Death Nomination form. Member number 60010001.")
+        result = assess(
+            inbound,
+            type("Intent", (), {"primary_intent_id": "death_benefit_nomination"})(),
+            case_history=[{"entry_type": "inbound_member_email", "attachments_present": 0}],
+        )
+        self.assertEqual(result.status, "missing")
+
 
 class MaxDraftRevisionsConfigTests(unittest.TestCase):
     """TODO 4 rule 2: MAX_DRAFT_REVISIONS must validate as a non-negative bounded integer."""

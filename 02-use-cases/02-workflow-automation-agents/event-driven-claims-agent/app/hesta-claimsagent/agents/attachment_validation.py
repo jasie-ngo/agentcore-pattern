@@ -12,7 +12,16 @@ from intents import taxonomy
 from models import AttachmentAssessment
 
 
-def assess(inbound, intent_result) -> AttachmentAssessment:
+def _previously_provided(case_history: list[dict] | None) -> bool:
+    """True if any earlier turn in this case ever had an attachment marker.
+
+    Case-wide, not scoped to the current intent: a member's case is one lifelong record
+    (see TODO 2), and an attachment sent for any earlier request is treated as still on file.
+    """
+    return any((entry.get("attachments_present") or 0) > 0 for entry in (case_history or []))
+
+
+def assess(inbound, intent_result, case_history: list[dict] | None = None) -> AttachmentAssessment:
     n = inbound.attachment_count
     expected = taxonomy.expected_attachment(intent_result.primary_intent_id)
 
@@ -26,8 +35,15 @@ def assess(inbound, intent_result) -> AttachmentAssessment:
             notes = f"{n} attachment(s) detected; not expected for this intent — check relevance."
     else:
         if n == 0:
-            status = "missing"
-            notes = f"Expected a {expected} for this request, but no attachment was detected — ask the member to provide it."
+            if _previously_provided(case_history):
+                status = "present"
+                notes = (
+                    f"No attachment in this message, but one was provided earlier in this case — "
+                    f"treat the {expected} as already on file. Do not ask for it again."
+                )
+            else:
+                status = "missing"
+                notes = f"Expected a {expected} for this request, but no attachment was detected — ask the member to provide it."
         else:
             # Pilot scope: a detected marker is presence-of-marker only (no byte-level inspection),
             # but is treated as present and accepted — the Writer must not ask for it again.

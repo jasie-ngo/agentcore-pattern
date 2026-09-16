@@ -70,7 +70,7 @@ def _get():
     return _agent
 
 
-def _advice_decline_draft(inbound, intent_result, profile) -> DraftEmail:
+def advice_decline_draft(inbound, intent_result, profile) -> DraftEmail:
     """Deterministic, compliant reply when personal advice is requested — NO advice given.
 
     Used when AI-001 flags a personal-advice request; guarantees the draft never contains advice
@@ -149,7 +149,7 @@ async def write(
 
     # Personal advice requested → deterministic compliant decline (no LLM advice risk).
     if getattr(intent_result, "personal_advice_requested", False):
-        return _advice_decline_draft(inbound, intent_result, profile)
+        return advice_decline_draft(inbound, intent_result, profile)
 
     prompt = (
         f"Primary intent: {intent_id} ({taxonomy.name_for(intent_id)})\n"
@@ -176,12 +176,12 @@ async def write(
         # If the Bedrock Guardrail intervened, its sentinel appears in the output → decline safely.
         if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
             log.warning("Guardrail intervened on Writer output; returning compliant advice decline.")
-            return _advice_decline_draft(inbound, intent_result, profile)
+            return advice_decline_draft(inbound, intent_result, profile)
         return draft
     except Exception as exc:  # noqa: BLE001 — includes guardrail interventions that break structured output
         log.warning("Writer failed (or guardrail intervened); using safe fallback: %s", exc)
         if getattr(intent_result, "personal_advice_requested", False):
-            return _advice_decline_draft(inbound, intent_result, profile)
+            return advice_decline_draft(inbound, intent_result, profile)
         return _fallback_draft(inbound, intent_result, profile)
 
 
@@ -207,7 +207,7 @@ async def revise(
     # Personal advice requested → the decline draft is already deterministic and compliant;
     # never let a "revision" drift it toward giving advice.
     if getattr(intent_result, "personal_advice_requested", False):
-        return _advice_decline_draft(inbound, intent_result, profile)
+        return advice_decline_draft(inbound, intent_result, profile)
 
     prompt = (
         f"Primary intent: {intent_id} ({taxonomy.name_for(intent_id)})\n"
@@ -236,7 +236,7 @@ async def revise(
         _apply_authoritative_fields(draft, intent_id, verification_state)
         if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
             log.warning("Guardrail intervened on Writer revision; returning compliant advice decline.")
-            return _advice_decline_draft(inbound, intent_result, profile)
+            return advice_decline_draft(inbound, intent_result, profile)
         return draft
     except Exception as exc:  # noqa: BLE001 — includes guardrail interventions that break structured output
         log.warning("Writer revision failed; keeping the previous draft: %s", exc)

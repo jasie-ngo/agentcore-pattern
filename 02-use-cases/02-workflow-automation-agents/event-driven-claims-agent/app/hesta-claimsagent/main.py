@@ -352,6 +352,79 @@ async def _append_case_history(mcp, cases, entries) -> str:
     return ""
 
 
+async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key, source_object_id):
+    """Personal advice requested: HESTA can never give it, so skip every LLM reasoning step
+    (Context Manager's summarization, Attachment/Empathy assessment, the Writer's LLM call —
+    already bypassed — and the Reviewer) and go straight to a hardcoded decline, always
+    escalated to a human. Identity/case lookup still runs (deterministic Gateway calls, not an
+    LLM agent) — needed to know which case this belongs to and to store the record against it.
+    """
+    from models import RoutingDecision
+
+    yield "## 2 · Decide\n\n"
+    summary = await context_manager.summarize(
+        inbound, mcp=mcp, session_manager=None,
+        primary_intent_id=intent_result.primary_intent_id,
+        idempotency_key=idempotency_key, source_object_id=source_object_id,
+        skip_summary=True,
+    )
+    yield _fmt_identity(summary.identity)
+    yield _fmt_cases(summary.cases)
+    profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
+    yield _fmt_profile(profile)
+    verified_member = bool(summary.identity.member_id)
+
+    yield "## 3 · Execute\n\n"
+    draft = writer_agent.advice_decline_draft(inbound, intent_result, profile)
+    yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
+    yield f"**Subject:** {draft.subject}\n\n"
+    yield "```text\n" + draft.body + "\n```\n\n"
+    if draft.assumptions:
+        yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
+
+    decision = RoutingDecision(
+        escalate_to_human=True,
+        reasons=["PERSONAL ADVICE requested — do NOT provide personal financial advice"],
+        regulated=taxonomy.is_regulated(intent_result.primary_intent_id),
+    )
+    yield _fmt_decision(decision)
+
+    history_entries = [
+        {
+            "entry_id": f"{idempotency_key}:inbound",
+            "entry_type": "inbound_member_email",
+            "content": inbound.latest_message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pipeline_version": "hesta-v2",
+            "intent_id": intent_result.primary_intent_id,
+            "attachments_present": inbound.attachment_count,
+        },
+        {
+            "entry_id": f"{idempotency_key}:draft",
+            "entry_type": "generated_draft",
+            "content": json.dumps({"subject": draft.subject, "body": draft.body}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pipeline_version": "hesta-v2",
+            "intent_id": intent_result.primary_intent_id,
+        },
+    ]
+    if verified_member and mcp is not None:
+        yield await _append_case_history(mcp, summary.cases, history_entries)
+
+    yield "### 👤 Human-in-the-loop\n\n"
+    if ENABLE_HITL_RECORD:
+        yield await _write_hitl_record(
+            mcp, inbound, intent_result, profile, decision, draft, summary.cases,
+            attachment=None, revision_count=0, review_result=None,
+        )
+    else:
+        yield (
+            "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
+            + "; ".join(decision.reasons)
+            + "_\n\n"
+        )
+
+
 # ─── Entrypoint ───────────────────────────────────────────────────────────────
 
 
@@ -434,167 +507,182 @@ async def _run_pipeline(payload, context):
         yield "## 1 · Understand\n\n"
         intent_result = await intent_identifier.identify(inbound)
         yield _fmt_intents(intent_result)
-        # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
-        summary = await context_manager.summarize(
-            inbound,
-            mcp=mcp,
-            session_manager=memory_session,
-            primary_intent_id=intent_result.primary_intent_id,
-            idempotency_key=idempotency_key,
-            source_object_id=source_object_id,
-        )
-        yield _fmt_summary(summary)
-        yield _fmt_identity(summary.identity)
-        yield _fmt_cases(summary.cases)
-        if memory_session is not None:
-            # Explicitly persist this contact (structured_output doesn't fire the session
-            # manager's write hooks), so SEMANTIC/SUMMARIZATION records actually populate.
-            recorded = record_interaction(actor_id, session_id, inbound.latest_message, summary.summary)
-            status = "recorded" if recorded else "not recorded"
-            yield (
-                f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
-            )
-
-        # ── DECIDE ──────────────────────────────────────────────────────────
-        yield "## 2 · Decide\n\n"
-        # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
-        profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
-        yield _fmt_profile(profile)
-        verified_member = bool(summary.identity.member_id)
-        attach = attachment_validation.assess(inbound, intent_result) if verified_member else None
-        if attach:
-            yield _fmt_attach(attach)
-        if verified_member:
-            emp = await empathy_agent.assess(inbound)
-            yield _fmt_empathy(emp)
-        else:
-            from models import EmpathyAssessment
-
-            emp = EmpathyAssessment(
-                sentiment="neutral",
-                priority="normal",
-                recommended_attention="Identity verification is required before processing the request.",
-            )
-        # Computed now (needs profile/empathy) but NOT shown yet — the Writer/Reviewer loop
-        # below can still add its own escalation reasons, and printing this now would show a
-        # stale "no escalation needed" verdict that the later Human-in-the-loop section then
-        # contradicts. The single, final verdict is shown after the review loop completes.
-        decision = decide(intent_result, profile, emp)
-
-        # ── EXECUTE ─────────────────────────────────────────────────────────
-        yield "## 3 · Execute\n\n"
-        draft = await writer_agent.write(
-            inbound, intent_result, profile, summary, emp, attachment=attach
-        )
-
-        # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. Re-run the
-        # Reviewer after every revision; stop as soon as it approves, the Reviewer itself fails
-        # (never revise blindly against a failure), or MAX_DRAFT_REVISIONS is reached.
-        revision_count = 0
-        review = None
-        reviewer_failed = False
-        if verified_member:
-            review = await _safe_review(draft, intent_result, profile, attach)
-            reviewer_failed = review is None
-            while (
-                review is not None
-                and not review.approved_for_human_send
-                and revision_count < MAX_DRAFT_REVISIONS
+        if intent_result.personal_advice_requested:
+            # HESTA can never give personal advice, so every LLM reasoning step below is
+            # skipped in favour of a hardcoded decline, always escalated to a human. See
+            # _run_personal_advice_path for what still runs (identity/case lookup) and why.
+            async for chunk in _run_personal_advice_path(
+                mcp, inbound, intent_result, idempotency_key, source_object_id,
             ):
-                revision_count += 1
-                draft = await writer_agent.revise(
-                    inbound, intent_result, profile, summary, emp, draft, review,
-                    attachment=attach,
+                yield chunk
+        else:
+            # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
+            summary = await context_manager.summarize(
+                inbound,
+                mcp=mcp,
+                session_manager=memory_session,
+                primary_intent_id=intent_result.primary_intent_id,
+                idempotency_key=idempotency_key,
+                source_object_id=source_object_id,
+            )
+            yield _fmt_summary(summary)
+            yield _fmt_identity(summary.identity)
+            yield _fmt_cases(summary.cases)
+            if memory_session is not None:
+                # Explicitly persist this contact (structured_output doesn't fire the session
+                # manager's write hooks), so SEMANTIC/SUMMARIZATION records actually populate.
+                recorded = record_interaction(actor_id, session_id, inbound.latest_message, summary.summary)
+                status = "recorded" if recorded else "not recorded"
+                yield (
+                    f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
                 )
+
+            # ── DECIDE ──────────────────────────────────────────────────────
+            yield "## 2 · Decide\n\n"
+            # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
+            profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
+            yield _fmt_profile(profile)
+            verified_member = bool(summary.identity.member_id)
+            attach = (
+                attachment_validation.assess(
+                    inbound, intent_result, case_history=summary.cases.conversation_history
+                )
+                if verified_member else None
+            )
+            if attach:
+                yield _fmt_attach(attach)
+            if verified_member:
+                emp = await empathy_agent.assess(inbound)
+                yield _fmt_empathy(emp)
+            else:
+                from models import EmpathyAssessment
+
+                emp = EmpathyAssessment(
+                    sentiment="neutral",
+                    priority="normal",
+                    recommended_attention="Identity verification is required before processing the request.",
+                )
+            # Computed now (needs profile/empathy) but NOT shown yet — the Writer/Reviewer loop
+            # below can still add its own escalation reasons, and printing this now would show a
+            # stale "no escalation needed" verdict that the later Human-in-the-loop section then
+            # contradicts. The single, final verdict is shown after the review loop completes.
+            decision = decide(intent_result, profile, emp)
+
+            # ── EXECUTE ───────────────────────────────────────────────────────
+            yield "## 3 · Execute\n\n"
+            draft = await writer_agent.write(
+                inbound, intent_result, profile, summary, emp, attachment=attach
+            )
+
+            # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. Re-run the
+            # Reviewer after every revision; stop as soon as it approves, the Reviewer itself
+            # fails (never revise blindly against a failure), or MAX_DRAFT_REVISIONS is reached.
+            revision_count = 0
+            review = None
+            reviewer_failed = False
+            if verified_member:
                 review = await _safe_review(draft, intent_result, profile, attach)
                 reviewer_failed = review is None
+                while (
+                    review is not None
+                    and not review.approved_for_human_send
+                    and revision_count < MAX_DRAFT_REVISIONS
+                ):
+                    revision_count += 1
+                    draft = await writer_agent.revise(
+                        inbound, intent_result, profile, summary, emp, draft, review,
+                        attachment=attach,
+                    )
+                    review = await _safe_review(draft, intent_result, profile, attach)
+                    reviewer_failed = review is None
 
-        yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
-        if revision_count:
-            yield f"_Revised {revision_count} time(s) based on Reviewer feedback._\n\n"
-        yield f"**Subject:** {draft.subject}\n\n"
-        yield "```text\n" + draft.body + "\n```\n\n"
-        if draft.assumptions:
-            yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
+            yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
+            if revision_count:
+                yield f"_Revised {revision_count} time(s) based on Reviewer feedback._\n\n"
+            yield f"**Subject:** {draft.subject}\n\n"
+            yield "```text\n" + draft.body + "\n```\n\n"
+            if draft.assumptions:
+                yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
 
-        if review is not None:
-            yield _fmt_review(review, revision_count)
-        if reviewer_failed:
-            yield "_⚠️ Automated review unavailable — routed to human review._\n\n"
-            decision.reasons.append("automated review unavailable")
-            decision.escalate_to_human = True
-        elif review is not None and not review.approved_for_human_send:
-            decision.reasons.append(
-                f"draft not approved after {revision_count} revision(s)" if revision_count
-                else "draft not approved for human send"
-            )
-            decision.escalate_to_human = True
+            if review is not None:
+                yield _fmt_review(review, revision_count)
+            if reviewer_failed:
+                yield "_⚠️ Automated review unavailable — routed to human review._\n\n"
+                decision.reasons.append("automated review unavailable")
+                decision.escalate_to_human = True
+            elif review is not None and not review.approved_for_human_send:
+                decision.reasons.append(
+                    f"draft not approved after {revision_count} revision(s)" if revision_count
+                    else "draft not approved for human send"
+                )
+                decision.escalate_to_human = True
 
-        # TODO 5 rule 7: deterministic backstop for obvious account-detail leaks (dollar
-        # amounts, BSB, bank account numbers, TFN) — independent of verification state, since
-        # nothing in this pipeline legitimately sources such values for the Writer to state.
-        disclosure_findings = disclosure_check.scan(draft.subject, draft.body)
-        if disclosure_findings:
-            yield (
-                "_⚠️ Possible sensitive account detail(s) in the draft — routed to human review: "
-                + "; ".join(disclosure_findings) + "._\n\n"
-            )
-            decision.reasons.append("possible sensitive account detail(s): " + "; ".join(disclosure_findings))
-            decision.escalate_to_human = True
+            # TODO 5 rule 7: deterministic backstop for obvious account-detail leaks (dollar
+            # amounts, BSB, bank account numbers, TFN) — independent of verification state,
+            # since nothing in this pipeline legitimately sources such values for the Writer.
+            disclosure_findings = disclosure_check.scan(draft.subject, draft.body)
+            if disclosure_findings:
+                yield (
+                    "_⚠️ Possible sensitive account detail(s) in the draft — routed to human review: "
+                    + "; ".join(disclosure_findings) + "._\n\n"
+                )
+                decision.reasons.append("possible sensitive account detail(s): " + "; ".join(disclosure_findings))
+                decision.escalate_to_human = True
 
-        # Final routing verdict — now reflects both the pre-draft checks (intent/identity/
-        # vulnerability) and anything the review loop above added.
-        yield _fmt_decision(decision)
+            # Final routing verdict — now reflects both the pre-draft checks (intent/identity/
+            # vulnerability) and anything the review loop above added.
+            yield _fmt_decision(decision)
 
-        # Each entry carries the CURRENT message's intent — cases now span a member's
-        # whole relationship, not one topic, so the Writer needs to see how intent
-        # has shifted message to message across the history, not just today's intent.
-        history_entries = [
-            {
-                "entry_id": f"{idempotency_key}:inbound",
-                "entry_type": "inbound_member_email",
-                "content": inbound.latest_message,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "pipeline_version": "hesta-v2",
-                "intent_id": intent_result.primary_intent_id,
-            },
-            {
-                "entry_id": f"{idempotency_key}:draft",
-                "entry_type": "generated_draft",
-                "content": json.dumps({"subject": draft.subject, "body": draft.body}),
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "pipeline_version": "hesta-v2",
-                "intent_id": intent_result.primary_intent_id,
-            }
-        ]
-        if review is not None:
-            history_entries.append(
+            # Each entry carries the CURRENT message's intent — cases now span a member's
+            # whole relationship, not one topic, so the Writer needs to see how intent
+            # has shifted message to message across the history, not just today's intent.
+            history_entries = [
                 {
-                    "entry_id": f"{idempotency_key}:review",
-                    "entry_type": "review_outcome",
-                    "content": json.dumps({**review.model_dump(), "revision_count": revision_count}),
+                    "entry_id": f"{idempotency_key}:inbound",
+                    "entry_type": "inbound_member_email",
+                    "content": inbound.latest_message,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "pipeline_version": "hesta-v2",
+                    "intent_id": intent_result.primary_intent_id,
+                    "attachments_present": inbound.attachment_count,
+                },
+                {
+                    "entry_id": f"{idempotency_key}:draft",
+                    "entry_type": "generated_draft",
+                    "content": json.dumps({"subject": draft.subject, "body": draft.body}),
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "pipeline_version": "hesta-v2",
                     "intent_id": intent_result.primary_intent_id,
                 }
-            )
-        if verified_member and mcp is not None:
-            yield await _append_case_history(mcp, summary.cases, history_entries)
+            ]
+            if review is not None:
+                history_entries.append(
+                    {
+                        "entry_id": f"{idempotency_key}:review",
+                        "entry_type": "review_outcome",
+                        "content": json.dumps({**review.model_dump(), "revision_count": revision_count}),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "pipeline_version": "hesta-v2",
+                        "intent_id": intent_result.primary_intent_id,
+                    }
+                )
+            if verified_member and mcp is not None:
+                yield await _append_case_history(mcp, summary.cases, history_entries)
 
-        # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
-        if decision.escalate_to_human:
-            yield "### 👤 Human-in-the-loop\n\n"
-            if ENABLE_HITL_RECORD:
-                yield await _write_hitl_record(
-                    mcp, inbound, intent_result, profile, decision, draft, summary.cases, attachment=attach,
-                    revision_count=revision_count, review_result=review,
-                )
-            else:
-                yield (
-                    "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
-                    + "; ".join(decision.reasons)
-                    + "_\n\n"
-                )
+            # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
+            if decision.escalate_to_human:
+                yield "### 👤 Human-in-the-loop\n\n"
+                if ENABLE_HITL_RECORD:
+                    yield await _write_hitl_record(
+                        mcp, inbound, intent_result, profile, decision, draft, summary.cases, attachment=attach,
+                        revision_count=revision_count, review_result=review,
+                    )
+                else:
+                    yield (
+                        "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
+                        + "; ".join(decision.reasons)
+                        + "_\n\n"
+                    )
 
         # ── LEARN ───────────────────────────────────────────────────────────
         yield "## 4 · Learn\n\n"

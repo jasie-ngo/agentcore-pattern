@@ -41,7 +41,8 @@ def _get(session_manager=None):
 
 
 async def summarize(
-    inbound, mcp=None, session_manager=None, *, primary_intent_id=None, idempotency_key=None, source_object_id=None
+    inbound, mcp=None, session_manager=None, *, primary_intent_id=None, idempotency_key=None,
+    source_object_id=None, skip_summary=False,
 ) -> CaseSummary:
     """Summarize context and pull member identity + cases.
 
@@ -49,12 +50,26 @@ async def summarize(
         inbound: normalized email
         mcp: MCP Gateway client for member_lookup and case_lookup_creation
         session_manager: optional AgentCore Memory session
+        skip_summary: when True, still runs member_lookup/case_lookup_creation (the identity
+            and case record are needed regardless — e.g. to know which case a personal-advice
+            escalation belongs to) but skips the LLM summarization call entirely. Used for the
+            personal-advice short-circuit, where no LLM reasoning about the request is needed.
     """
     identity = await _lookup_member(mcp, inbound)
     cases = await _lookup_cases(
         mcp, identity, inbound, intent_id=primary_intent_id,
         idempotency_key=idempotency_key, source_object_id=source_object_id
     )
+    if skip_summary:
+        result = CaseSummary(
+            summary="Personal financial advice requested — routed to human review without further analysis.",
+            conversation_state="personal_advice_requested",
+            outstanding_items=[],
+        )
+        result.identity = identity
+        result.cases = cases
+        return result
+
     history = "\n\n".join(
         f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}"
         f"{' | intent: ' + entry['intent_id'] if entry.get('intent_id') else ''}]\n"
