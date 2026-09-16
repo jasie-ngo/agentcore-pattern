@@ -149,12 +149,20 @@ async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None,
     cases = result.get("cases", []) if status == "existing_cases_found" else []
     new_case = result.get("case") if status == "new_case_created" else None
 
-    return CaseInfo(
-        status=status,
-        cases=cases,
-        new_case=new_case,
-        case_id=result.get("case_id") or (new_case or {}).get("case_id") or (cases[0].get("case_id") if cases else None),
-        conversation_history=result.get("conversation_history")
-        or (new_case or {}).get("conversation_history")
-        or (cases[0].get("conversation_history") if cases else [])
-    )
+    # `case_lookup_creation` always includes both keys at the top level of every success
+    # response (handler.py), so read them directly rather than falling back into `new_case`/
+    # `cases[0]` — an `or` chain here is a bug: an empty conversation_history ([]) is falsy in
+    # Python, so it would fall through to a fallback source that can be genuinely absent
+    # (e.g. a legacy case predating this field), returning None and failing CaseInfo validation.
+    try:
+        return CaseInfo(
+            status=status,
+            cases=cases,
+            new_case=new_case,
+            case_id=result.get("case_id"),
+            conversation_history=result.get("conversation_history", []),
+        )
+    except Exception as exc:  # noqa: BLE001 — an unexpected Gateway response shape must not
+        # crash the whole invocation; fail closed the same way the error branches above do.
+        log.warning("Unexpected case_lookup_creation response shape: %s", exc)
+        return CaseInfo(error=f"Unexpected case_lookup_creation response shape: {exc}", status="error")
