@@ -1,8 +1,10 @@
 """The 8 HESTA member-request intents + signals, used to build the AI-001 prompt.
 
 Folder codes in ``hesta/`` are the ground-truth labels; ``id`` is the machine
-value the pipeline uses. ``regulated`` drives the human-in-the-loop gate, and
-``expected_attachment`` feeds AI-004's expectation check.
+value the pipeline uses. ``regulated`` drives the human-in-the-loop gate. The
+expected attachment for each intent is no longer free-text prose on the
+``Intent`` record — it is derived from the per-intent form in
+``forms.catalog`` (see ``expected_attachment()`` below).
 """
 
 from __future__ import annotations
@@ -18,7 +20,6 @@ class Intent:
     regulated: bool
     signals: list[str]
     example: str
-    expected_attachment: str = "none"
 
 
 INTENTS: list[Intent] = [
@@ -34,7 +35,6 @@ INTENTS: list[Intent] = [
             "attached Binding Death Nomination form",
         ],
         example="Please find attached my completed and signed Binding Death Nomination form for member [MEMBER NUMBER].",
-        expected_attachment="Binding Death Nomination form",
     ),
     Intent(
         id="withdrawal_benefit_payment",
@@ -48,7 +48,6 @@ INTENTS: list[Intent] = [
             "status of a withdrawal application already submitted",
         ],
         example="I would like to know if you received my application to withdraw some money from my account.",
-        expected_attachment="none",
     ),
     Intent(
         id="change_of_details",
@@ -61,7 +60,6 @@ INTENTS: list[Intent] = [
             "reason-for-enquiry: Updating my account details",
         ],
         example="My mobile number has been updated. Could you please update my details so I can log in to my account?",
-        expected_attachment="none",
     ),
     Intent(
         id="departing_australia_payment",
@@ -74,7 +72,6 @@ INTENTS: list[Intent] = [
             "living overseas / NZ / KiwiSaver transfer",
         ],
         example="I would like to withdraw my super as I live in New Zealand. Can you advise the process?",
-        expected_attachment="none",
     ),
     Intent(
         id="financial_hardship",
@@ -88,7 +85,6 @@ INTENTS: list[Intent] = [
             "supporting evidence such as a bank statement",
         ],
         example="I am asking about the $10,000 financial hardship withdrawal to help pay my accumulating bills.",
-        expected_attachment="bank statement / evidence of hardship",
     ),
     Intent(
         id="family_law_split",
@@ -101,7 +97,6 @@ INTENTS: list[Intent] = [
             "procedural fairness, court order, Form 6, subpoena",
         ],
         example="We refer to the above matter and confirm our office is yet to receive a response regarding the family law split.",
-        expected_attachment="court order / legal documents",
     ),
     Intent(
         id="notice_of_intent_tax_deduction",
@@ -114,7 +109,6 @@ INTENTS: list[Intent] = [
             "ATO notice of intent form",
         ],
         example="How do I lodge a Notice of Intent to claim a tax deduction for my personal contribution?",
-        expected_attachment="ATO Notice of Intent form",
     ),
     Intent(
         id="rollover_transfer_combine",
@@ -127,7 +121,6 @@ INTENTS: list[Intent] = [
             "transferred funds not yet showing in my account",
         ],
         example="I transferred my Rest super to HESTA but it is not appearing in my account yet.",
-        expected_attachment="none",
     ),
 ]
 
@@ -143,8 +136,15 @@ def is_regulated(intent_id: str) -> bool:
 
 
 def expected_attachment(intent_id: str) -> str:
-    intent = _BY_ID.get(intent_id)
-    return intent.expected_attachment if intent else "none"
+    """The document expected for this intent, by real form name — or 'none'.
+
+    Deferred import: forms.catalog imports INTENTS from this module at load time,
+    so importing it back at module level here would be circular.
+    """
+    from forms import catalog
+
+    spec = catalog.form_for(intent_id)
+    return spec.name if spec else "none"
 
 
 def name_for(intent_id: str) -> str:

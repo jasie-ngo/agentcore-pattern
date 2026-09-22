@@ -1,0 +1,37 @@
+From: Daniel Foster <daniel.foster@example.com>
+To: HESTA <hesta@hesta.com.au>
+Subject: Notice of Intent to Claim a Tax Deduction Form =?utf-8?b?4oCU?=
+ member number 60070001
+Date: Fri, 29 May 2026 09:12:00 +1000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============6205349554383496164=="
+
+--===============6205349554383496164==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi,
+
+Hi, I made a $15,000 personal contribution this year and want to claim a tax deduction. How do I lodge a Notice of Intent? Member number 60070001.
+
+Member number 60070001.
+
+Thanks,
+Daniel Foster
+
+--===============6205349554383496164==
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="NOI-TAX-V1.txt"
+MIME-Version: 1.0
+
+HESTA-FORM-ID: NOI-TAX-V1
+HESTA-FORM-NAME: Notice of Intent to Claim a Tax Deduction Form
+----------------------------------------------------------
+Member name        : Daniel Foster
+Member email       : daniel.foster@example.com
+Member number      : 60070001
+Deduction details  : Claiming a $15,000 deduction for personal contributions made in the 2025-26 financial year
+----------------------------------------------------------
+
+--===============6205349554383496164==--

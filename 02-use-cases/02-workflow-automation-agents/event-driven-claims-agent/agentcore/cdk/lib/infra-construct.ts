@@ -175,6 +175,10 @@ export class InfraConstruct extends Construct {
       environment: {
         // AGENTCORE_RUNTIME_ARN injected by parent stack after Runtime is created
         AGENTCORE_RUNTIME_ARN: 'PENDING',
+        // TODO 2: bounded attachment parsing — fail closed (skipped_reason) rather than
+        // silently drop or truncate an oversized/excess attachment.
+        MAX_ATTACHMENT_BYTES: '262144',
+        MAX_ATTACHMENTS: '5',
       },
       timeout: cdk.Duration.seconds(90),
       deadLetterQueue: triggerDlq,

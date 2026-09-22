@@ -1,0 +1,8 @@
+HESTA-FORM-ID: NOI-TAX-V1
+HESTA-FORM-NAME: Notice of Intent to Claim a Tax Deduction Form
+----------------------------------------------------------
+Member name        : ______________________________
+Member email       : ______________________________
+Member number      : ______________________________
+Deduction details  : ______________________________
+----------------------------------------------------------

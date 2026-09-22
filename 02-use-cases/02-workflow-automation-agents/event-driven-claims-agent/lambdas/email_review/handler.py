@@ -37,6 +37,14 @@ def handler(event, context):
             item["attachment_status"] = event["attachment_status"]
         if event.get("attachment_notes"):
             item["attachment_notes"] = event["attachment_notes"]
+        if event.get("form_id"):
+            item["form_id"] = event["form_id"]
+        if event.get("form_name"):
+            item["form_name"] = event["form_name"]
+        if event.get("missing_fields"):
+            item["missing_fields"] = event["missing_fields"]
+        if event.get("received_filenames"):
+            item["received_filenames"] = event["received_filenames"]
         if event.get("review_result"):
             item["review_result"] = event["review_result"]
 

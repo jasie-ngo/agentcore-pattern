@@ -1,9 +1,16 @@
-# HESTA v2 Enhancement TODO
+# HESTA v2 Enhancement TODO — Real Attachments & Intent Forms
 
 ## Purpose
 
-Use this document as the implementation source of instruction for improving
-the HESTA v2 member-email workflow.
+Use this document as the implementation source of instruction for replacing the
+v2 pilot's *simulated* attachment handling with **real attachment files**
+carried on the inbound email, and for introducing a **blank form per intent**
+that the agent encloses when a member has not sent one.
+
+This supersedes the previous v2 enhancement TODO. That earlier set (conversation
+history, one-case-per-member reuse, attachment-presence signalling, the bounded
+Writer↔Reviewer revision loop, and the disclosure-state controls) is **already
+implemented** — see "Already delivered" below. Do not re-implement it.
 
 Scope is limited to the v2 implementation:
 
@@ -12,51 +19,205 @@ Scope is limited to the v2 implementation:
 * Gateway Lambdas: `lambdas/member_lookup`, `lambdas/case_lookup_creation`,
   `lambdas/email_review`
 * Trigger Lambda: `lambdas/trigger`
+* Sample fixtures: `hesta/sample-emails`, `scripts/generate_sample_emails.py`
 * v2 infrastructure: `agentcore/agentcore.json` and `agentcore/cdk`
 * v2 tests and configuration
 
-Do not modify the old-version code unless a shared interface must be changed
-for v2 compatibility. Do not add outbound email sending, production
+Do not modify the old-version code (`app/claimsagent`, `lambdas/old-version`,
+`app/hesta-claimsagent/agents/old-version`) unless a shared interface must be
+changed for v2 compatibility. Do not add outbound email sending, production
 dashboards, or unrelated features.
+
+### The change in one sentence
+
+Attachments stop being `[ATTACHMENT FILENAME]` text markers that are merely
+*counted*, and become real files parsed off a MIME email, matched against a
+known per-intent form template, and checked field-by-field for completeness.
+
+---
+
+## Already delivered (do not redo)
+
+| Capability | Where |
+| --- | --- |
+| `conversation_history` persisted on the case | `lambdas/case_lookup_creation/handler.py` |
+| One case per member, reused across intents & status | `agents/context_manager.py` |
+| Attachment presence passed to Writer/Reviewer | `agents/attachment_validation.py` |
+| Bounded Writer↔Reviewer revision loop (`MAX_DRAFT_REVISIONS`) | `main.py`, `config.py` |
+| Disclosure states + deterministic sensitive-value scan | `agents/disclosure_check.py` |
+
+### Deferred from the previous plan (still open, NOT in this scope)
+
+* Full human-review audit record — `lambdas/schemas/email_review.json` still
+  lacks `review_id`, `status`, primary intent, sender type, identity state,
+  validation failures, `source_object_id`, processing timestamp and pipeline
+  version. Extend it opportunistically where this work already touches the
+  payload (see TODO 6), but completing it is not a gate for this set.
+
+---
 
 ## Implementation rules
 
 1. Preserve the current v2 safety boundary: the agent drafts email but never
-   sends it automatically.
-2. Fail closed. If identity, review, validation, Gateway, or configuration
-   checks fail, route to human review rather than inventing data or approving
-   a response.
-3. Do not use an unlimited LLM retry loop. All revision loops must have a
-   configurable maximum.
-4. Keep AWS resource names and environment variables v2-specific.
-5. Do not expose account-specific information unless the identity and
-   authorization checks allow it.
-6. Do not treat a model instruction as an authorization decision.
+   sends it automatically. An "enclosed" blank form is a *listed enclosure* for
+   a HESTA staff member to attach — the agent does not transmit files.
+2. Fail closed. If an attachment cannot be decoded, exceeds size limits, or
+   cannot be matched to a known form, route to human review rather than
+   guessing or silently treating it as valid.
+3. Attachment validation is **deterministic Python — no LLM**. It must be
+   exactly reproducible and cheap. Do not introduce a model call for form
+   matching or field-completeness checking.
+4. No new third-party dependencies. MIME parsing uses the Python standard
+   library `email` package; form parsing is plain string handling.
+5. Never claim to have verified something that was not verified. If a form
+   field is present but its *content* was not semantically checked, the notes
+   must say so.
+6. Keep AWS resource names and environment variables v2-specific.
 7. Reuse existing Pydantic models, taxonomy helpers, Gateway helpers, logging,
    and test conventions before adding new abstractions.
-8. Surface real errors. Do not silently convert Gateway, DynamoDB, or
+8. Surface real errors. Do not silently convert parse, Gateway, DynamoDB, or
    configuration failures into successful-looking results.
-9. Add or update focused tests for every behavior change.
+9. Add or update focused tests for every behaviour change.
 10. Keep all changes surgical and verify the relevant tests before completion.
+
+---
+
+## Design decisions (settled — do not relitigate)
+
+### D1 · Transport: one `.eml` MIME file per email
+
+An inbound email is dropped into `s3://<inbox>/claims-inbox/` as a **single
+`.eml` object** containing the body and its attachments as MIME parts.
+
+* One S3 object per email, so the existing EventBridge rule
+  (`object.key` prefix `claims-inbox/`) and the existing idempotency key
+  (`bucket + key + ETag`) keep working unchanged.
+* `.eml` is what a real mail gateway (SES, Microsoft Graph) actually deposits,
+  so the parser written here is production shape, not demo scaffolding.
+* Built and parsed with the standard library `email` package — approximately
+  five lines to build, three to parse.
+* Fixtures MUST be generated with `cte="7bit"` on text attachments so the
+  attachment body stays **human-readable plaintext** inside the `.eml` rather
+  than base64. Fixtures must remain greppable and diffable in git.
+* The whole object therefore stays UTF-8 safe, so the Trigger Lambda's existing
+  `.decode("utf-8")` does not become a crash surface.
+
+### D2 · Form format: plain-text templates
+
+Forms are plain-text files with a machine-readable header and labelled fields.
+No PDF, no JSON. Rationale: zero dependencies, exact deterministic parsing,
+trivial to generate a filled copy, and readable in a diff.
+
+Template shape:
+
+```text
+HESTA-FORM-ID: BDBN-NOM-V1
+HESTA-FORM-NAME: Binding Death Benefit Nomination Form
+----------------------------------------------------------
+Member name        : ______________________________
+Member email       : ______________________________
+Member number      : ______________________________
+Nomination details : ______________________________
+----------------------------------------------------------
+```
+
+`HESTA-FORM-ID` is the positive identifier. The validator matches on it rather
+than guessing from the filename or from field-label similarity.
+
+### D3 · Four fields per form
+
+Every form carries exactly four fields for this pilot:
+
+| Key | Label | Notes |
+| --- | --- | --- |
+| `member_name` | Member name | |
+| `member_email` | Member email | |
+| `member_number` | Member number | Added because identity lookup already keys on it |
+| *(intent-specific)* | e.g. "Nomination details" | The "reason for email" field, named per intent |
+
+The fourth field is the per-intent one — "Nomination details" for BDBN,
+"Reason for hardship" for FH, and so on.
+
+> **Assumption flagged:** the brief named member name, member email and reason.
+> `member_number` is taken as the fourth because `member_lookup` already depends
+> on it and a form without it cannot be tied to a member. Say so if you want a
+> different fourth field.
+
+### D4 · Every intent gets a form
+
+All eight intents in `intents/taxonomy.py` get a form, including the four that
+today declare `expected_attachment="none"` (BP, COD, DASP, RTC). `ADVICE` /
+`other_unknown` gets none — those paths already short-circuit to refusal or
+human review.
+
+### D5 · The `[ATTACHMENT …]` marker convention is deleted
+
+`_ATTACHMENT_MARKER` in `ingestion/email_normalizer.py` is removed outright, not
+kept as a fallback. Sample `.txt` emails that still contain markers will
+correctly report **zero** attachments after this change — that is the intended
+behaviour, and those samples exercise the missing-attachment path.
+
+---
 
 ## Execution order
 
-Implement the work in this order:
+Build bottom-up so each layer can be tested before the next depends on it:
 
-1. Save conversation history to the Cases table
-2. Reuse matching cases and pass history to the Writer
-3. Attachment presence handling
-4. Writer/reviewer revision loop
-5. Account-detail disclosure controls (low priority)
-6. Deterministic final-output validation (low priority)
-7. Human-review audit metadata
-
-The case conversation contract should be stable before wiring it into case
-reuse, Writer revisions, and human-review records.
+1. **Form catalog** — templates + registry (no other code depends on it yet)
+2. **MIME transport** — Trigger Lambda parses `.eml`, extends the payload
+3. **Normalizer** — real `attachments` replace the marker count
+4. **Validator** — open attachments, match form, check fields
+5. **Writer / Reviewer** — enclose the blank form, ask for specific gaps
+6. **Propagation** — case history, HITL record, schemas
+7. **Fixtures** — one filled-form `.eml` per intent, plus failure fixtures
 
 ---
 
-## TODO 1: Save conversation history to the Cases table
+## TODO 1: Build the per-intent form catalog
+
+### Priority
+
+High — everything else reads from this.
+
+### Objective
+
+Define a blank form for each intent as a data file, plus a registry that maps an
+intent to its form, required fields, and fill-in guidance.
+
+### Required implementation
+
+1. Create `app/hesta-claimsagent/forms/` containing:
+   * `templates/<intent_code>_<slug>_v1.txt` — one blank template per intent
+     (8 files), in the D2 shape with the four D3 fields.
+   * `catalog.py` — the registry.
+2. `catalog.py` exposes frozen dataclasses and lookups:
+   * `FormField(key, label)`
+   * `FormSpec(form_id, name, intent_id, template_file, fields, guidance)`
+   * `form_for(intent_id) -> FormSpec | None`
+   * `spec_by_form_id(form_id) -> FormSpec | None`
+   * `blank_template(intent_id) -> str` — reads the template file
+   * `guidance_for(intent_id) -> str` — short, member-facing fill instructions
+3. Template files must be packaged with the Runtime container. Resolve their
+   path relative to the module (`Path(__file__).parent`), never the CWD.
+4. Repoint `taxonomy.expected_attachment()` at the catalog so the expected
+   document is the form's real name instead of a free-text prose string. Keep
+   the existing function signature so callers do not churn.
+5. Validate the catalog at import: every intent in `INTENTS` resolves to a
+   template file that exists and parses, and every `form_id` is unique. Raise
+   loudly on a mismatch — this is a packaging error, not a runtime condition.
+
+### Acceptance criteria
+
+* Each of the 8 intents resolves to exactly one `FormSpec`.
+* `other_unknown` and the personal-advice path resolve to `None`.
+* Every template file exists, contains a `HESTA-FORM-ID`, and declares exactly
+  the four fields its `FormSpec` lists.
+* A test asserts catalog/template consistency so a hand-edited template that
+  drifts from its spec fails CI.
+
+---
+
+## TODO 2: Carry real attachments from S3 through the Trigger Lambda
 
 ### Priority
 
@@ -64,369 +225,282 @@ High
 
 ### Objective
 
-Persist the member conversation and generated draft on the case so future
-messages can be processed with their prior context.
+Parse the dropped `.eml`, extract the body and each attachment, and pass them to
+the Runtime.
+
+### Current behaviour
+
+`lambdas/trigger/handler.py` reads the S3 object, decodes UTF-8, regex-detects
+one of three text shapes (HESTA contact form, `From:`/`Subject:` email, JSON),
+builds a `prompt` string, and invokes the Runtime. It has no concept of an
+attachment.
+
+> This supersedes the earlier plan's "the Trigger Lambda is NOT modified"
+> reuse decision. That constraint is deliberately dropped here.
 
 ### Required implementation
 
-1. Add a `conversation_history` field to each Cases DynamoDB item.
-2. Store structured entries for:
-   * inbound member email;
-   * generated draft;
-   * Reviewer feedback and revision outcomes, when available.
-3. Include timestamps, entry type, and pipeline/runtime version for each entry.
-4. Append the current inbound email and final draft after processing.
-5. Store only the data required for workflow continuity. Do not store secrets
-   or unnecessary sensitive data.
-6. Use a bounded history or a separate conversation table if the case item
-   could exceed DynamoDB's 400 KB item limit.
-7. Make history writes safe for retries and concurrent updates.
-8. Update the case Lambda response/model contract to expose history when the
-   case is reused.
+1. Detect MIME: if the object parses as a multipart MIME message, take the
+   `text/plain` body via `msg.get_body(preferencelist=("plain",))` and iterate
+   `msg.iter_attachments()`.
+2. For each attachment collect `filename`, `content_type`, and decoded `text`.
+   Non-text content types are recorded with `text=None` and a reason — never
+   guessed at.
+3. Extend the Runtime payload with an `attachments` array:
 
-### Acceptance criteria
-
-* A newly created case contains the current inbound email in its history.
-* The final draft is stored against the same case.
-* Reviewer feedback and revision outcomes are retained when available.
-* Reprocessing the same event does not duplicate the same history entry.
-* The case remains below DynamoDB item-size limits.
-
----
-
-## TODO 2: Reuse the member's case and pass history to the Writer
-
-### Priority
-
-High
-
-### Objective
-
-Ensure a member has exactly one ongoing case that accumulates conversation
-history across every enquiry, instead of creating duplicate cases per
-message or per topic — and ensure that accumulated history is provided to
-the Writer alongside the current email's own intent.
-
-### Design decision: one case per member
-
-A case is the member's relationship record, not a record of one specific
-enquiry. `primary_intent_id` and case `status` are **not** part of the case
-lookup/reuse decision:
-
-* A member's repeat contact — regardless of topic, and regardless of
-  whether their existing case is open or closed — reuses that same case.
-  Do not filter by status and do not compare intents when deciding whether
-  to reuse a case.
-* The *current* message still gets its own `primary_intent_id` from the
-  Intent Identifier (AI-001) as normal. That per-message intent is not used
-  to decide case reuse; it is used for the Writer's snippet selection, the
-  attachment assessment, and routing, exactly as today.
-* Each stored history entry should carry the intent that message was
-  associated with (see TODO 1), so the Writer can see how the member's
-  intent has shifted across the life of the case, not just the current
-  intent.
-* A reply to a case that is `closed` is still the same case: reuse it, and
-  let the Writer/Reviewer see the closed status in the passed context so it
-  can give a status-appropriate reply (e.g. referencing the prior
-  resolution) rather than silently re-actioning a resolved matter.
-
-### Current flow and required rule
-
-The Runtime performs `member_lookup` before `case_lookup_creation`. A case
-lookup must proceed only after a member has been found and identity has been
-established. If identity cannot be established, route the request to human
-review and do not create or select a case through the normal verified-member
-path.
-
-After identity is established, `case_lookup_creation` queries cases by
-`member_id` alone. If any case exists for that member, reuse it — regardless
-of its stored intent or status. Only create a new case when the member truly
-has none yet. If more than one case exists for a member (e.g. from legacy
-data before this rule), selection must be deterministic (e.g. the earliest
-by `created_at`, then `case_id`) rather than arbitrary.
-
-### Required implementation
-
-1. Require a successful verified `member_id` before normal case lookup or
-   creation.
-2. Query existing cases by the `member_id-index` GSI.
-3. Store `primary_intent_id` on every case at creation, for audit/reporting
-   only — it does not gate reuse.
-4. Reuse the member's existing case whenever one exists, irrespective of its
-   stored intent or status (open, pending, closed, etc.).
-5. Create a new case only when the member has no case at all yet.
-6. When an existing case is reused, retrieve its `conversation_history` and
-   pass it to the Context Manager and Writer together with the current
-   email and the current message's own intent. Clearly delimit historical
-   content from the current request, and preserve the intent recorded
-   against each historical entry where available.
-7. Add an idempotency key derived from the strongest available source:
-     * conversation/thread ID;
-     * S3 bucket + object key + ETag;
-     * deterministic message hash.
-8. Use DynamoDB conditional writes or an equivalent atomic operation to
-    prevent duplicate case creation during retries or concurrent invocations.
-9. Return the selected or created case ID and conversation history in a
-    stable response shape.
-10. Update the Runtime, Pydantic models, and human-review payload if the
-    response shape changes.
-
-### Acceptance criteria
-
-* A known member's follow-up email — on any topic, regardless of intent
-  match — reuses their existing case.
-* A request without an established member identity is routed to human review
-  and does not enter the verified-member case path.
-* A matching existing case provides previous email/draft history, tagged
-  with the intent recorded at the time, to the Context Manager and Writer.
-* A different intent on a follow-up still reuses the member's existing case
-  rather than creating a new one.
-* Duplicate trigger delivery does not create duplicate cases.
-* A reply to a closed case reuses that same case rather than creating a new
-  one; the Writer is informed the case is closed.
-* Concurrent case-creation requests are safe.
-* Existing-case selection is deterministic (one case per member) and covered
-  by tests.
-
----
-
-## TODO 3: Pass attachment presence to the Writer
-
-### Objective
-
-Ensure the attachment validator tells the Writer whether an attachment is
-present so the Writer can request a missing attachment or avoid requesting one
-that is already present.
-
-### Current behavior
-
-Email normalization already counts attachment markers such as
-`[ATTACHMENT form.pdf]`. The validator already receives that count and returns
-an attachment assessment. The v2 pilot should keep this simple:
-
-* `attachments_present == 0`: no attachment is present;
-* `attachments_present > 0`: an attachment is present and may be treated as
-  valid for the pilot.
-
-No binary file inspection, document-type verification, completeness check, or
-maximum attachment count is required for this TODO.
-
-### Required implementation
-
-1. Keep the existing attachment marker detection.
-2. Keep intent-specific expected-document descriptions where useful for the
-   Writer's missing-document request.
-3. Change the present status from `present_unverified` to `present`, or clearly
-   define `present_unverified` as present-and-accepted for this pilot.
-4. Include the attachment assessment in the Writer prompt.
-5. Instruct the Writer:
-   * request the expected attachment when no attachment is present and the
-     intent requires one;
-   * do not request it again when one or more attachment markers are present.
-6. Include the attachment assessment in Reviewer input and human-review
-   metadata.
-
-### Acceptance criteria
-
-* The Writer receives an explicit present/missing attachment signal.
-* The draft requests a required document only when no attachment is present.
-* The draft does not request an attachment again when a marker is present.
-* The pilot treats any detected attachment marker as present and valid.
-* The implementation does not claim to inspect attachment bytes.
-
----
-
-## TODO 4: Add a bounded Writer–Reviewer revision loop
-
-### Objective
-
-Allow the Writer to revise a draft using Reviewer feedback until the Reviewer
-approves it or a safe maximum is reached.
-
-### Current behavior
-
-The Writer creates one draft. The Reviewer evaluates it once. Reviewer output
-is displayed, but its issues and suggested edits are not sent back to the
-Writer.
-
-### Required implementation
-
-1. Add a configuration value:
-
-   ```text
-   MAX_DRAFT_REVISIONS=2
+   ```json
+   {
+     "prompt": "...",
+     "source": "...",
+     "source_object_id": "s3://bucket/key:etag",
+     "idempotency_key": "...",
+     "claimant_email": "...",
+     "attachments": [
+       {"filename": "BDBN-NOM-V1-filled.txt",
+        "content_type": "text/plain",
+        "text": "...",
+        "skipped_reason": null}
+     ]
+   }
    ```
 
-2. Validate that the value is a non-negative bounded integer.
-3. Keep the first Writer draft as revision `0`.
-4. If the Reviewer approves the draft, stop immediately.
-5. If the Reviewer rejects the draft and revisions remain:
-   * send the original member request;
-   * send the current draft;
-   * send Reviewer issues;
-   * send Reviewer suggested edits;
-   * send identity state and attachment requirements;
-   * request a revised structured `DraftEmail`.
-6. Re-run the Reviewer after every revision.
-7. Keep machine-authoritative fields authoritative:
-   * primary intent;
-   * verification state;
-   * safety flags;
-   * attachment state.
-8. If the Reviewer fails, stop the loop and route to human review.
-9. If the maximum is reached, stop the loop and route to human review.
-10. Include revision count and the final Reviewer result in the output and
-    human-review record.
-11. Never let a revision remove required identity verification or compliance
-    wording merely to satisfy a style suggestion.
+4. Add bounded size limits as configuration:
+
+   ```text
+   MAX_ATTACHMENT_BYTES=262144
+   MAX_ATTACHMENTS=5
+   ```
+
+   Over-limit attachments are included with `text=null` and a `skipped_reason`,
+   never silently dropped and never truncated into something that could parse as
+   a valid-looking form.
+5. Preserve backward compatibility: a plain `.txt` object keeps its existing
+   parsing path and yields `attachments: []`.
+6. Wrap the UTF-8 decode so a genuinely binary object produces a clear logged
+   error and a human-review-worthy outcome rather than an unhandled
+   `UnicodeDecodeError` into the DLQ.
+7. Derive `claimant_email` from the MIME `From:` header when present.
 
 ### Acceptance criteria
 
-* An approved first draft performs no unnecessary extra Writer call.
-* A rejected draft is revised with the actual Reviewer feedback.
-* The loop stops at `MAX_DRAFT_REVISIONS`.
-* Reviewer failure cannot produce an approved draft.
-* Personal-advice refusal remains intact through all revisions.
-* The final draft is always available for human review when not approved.
+* A `.eml` with one text attachment yields one entry with readable `text`.
+* A `.eml` with no attachments yields `attachments: []`.
+* A legacy plain `.txt` object still processes exactly as it does today.
+* An oversized attachment is reported with a `skipped_reason`, not truncated.
+* A binary object produces a handled, logged failure — not an unhandled crash.
+* Unit tests cover each branch without requiring AWS credentials.
 
 ---
 
-## TODO 5: Prevent unauthorized account-detail disclosure — LOW PRIORITY
+## TODO 3: Make the normalizer carry real attachments
 
 ### Priority
 
-Low
+High
 
 ### Objective
 
-Ensure the v2 agent does not disclose account-specific information to an
-unverified or unauthorized sender.
-
-### Design requirement
-
-Authorization must be enforced by application logic and data access policy.
-The Bedrock Guardrail is a safety backstop, not the identity decision.
+Replace the marker count on `InboundEmail` with the real attachment list.
 
 ### Required implementation
 
-1. Define explicit disclosure states:
-   * `unverified`: no account-specific details;
-   * `partially_verified`: only explicitly approved procedural information;
-   * `verified`: only data returned by authorized tools;
-   * `lookup_failed`: no account-specific details.
-2. Do not pass unauthorized account data to the Writer.
-3. Update the Writer prompt with explicit disclosure rules.
-4. Update the Reviewer prompt to reject:
-   * balances;
-   * transaction details;
-   * contribution history;
-   * payment amounts;
-   * tax information;
-   * bank details;
-   * member/account identifiers;
-   * unsupported dates, eligibility, or outcomes.
-5. Extend the v2 Bedrock Guardrail with a topic for sensitive account or
-   personal-data disclosure where appropriate.
-6. Keep the existing personal-financial-advice Guardrail behavior.
-7. Add deterministic post-generation checks for obvious sensitive values and
-   prohibited account-detail patterns.
-8. Ensure logs and human-review records do not unnecessarily duplicate
-   sensitive account data.
+1. Add an `Attachment` dataclass: `filename`, `content_type`, `text`,
+   `skipped_reason`.
+2. Add `attachments: list[Attachment]` to `InboundEmail`.
+3. `attachment_count` becomes a derived property (`len(self.attachments)`) so
+   existing readers keep working without edits.
+4. Delete `_ATTACHMENT_MARKER` and its use (see D5).
+5. `normalize_email()` accepts an `attachments` argument from the payload and
+   populates the list. Body cleaning (banner, footer, quoted history) is
+   unchanged.
+6. `main.py::_run_pipeline` reads `payload["attachments"]` and passes it in.
 
 ### Acceptance criteria
 
-* An unverified member receives only general information and verification
-  instructions.
-* A verified response contains only authorized tool-returned information.
-* Personal advice remains blocked.
-* A draft containing unauthorized account details is rejected or redacted and
-  routed to human review.
-* Guardrail configuration and application-level disclosure checks are both
-  tested.
+* A normalized email exposes real filenames and text, not a count of markers.
+* An email whose body still contains literal `[ATTACHMENT FILENAME]` text
+  reports zero attachments.
+* `attachment_count` still returns an int for every existing caller.
 
 ---
 
-## TODO 6: Add deterministic final-output validation — LOW PRIORITY
+## TODO 4: Validate attachments against the expected form
 
 ### Priority
 
-Low
+High
 
 ### Objective
 
-Add a non-LLM validation step after Writer revisions and before a draft is
-marked approved for human sending.
+Open each attachment, confirm it is the form the intent expects, and confirm its
+blank fields have actually been filled in.
 
-### Why this is needed alongside the Guardrail
+### Current behaviour
 
-The Bedrock Guardrail remains responsible for model-level content safety,
-including personal financial advice and any configured sensitive-data topics.
-This validator is not a replacement for the Guardrail. It enforces
-v2-specific application rules that require workflow context, including whether
-the member is verified, whether the Writer was given authorized data, and
-whether required identity or attachment wording is present.
+`agents/attachment_validation.py` compares an expected-document string against a
+marker count and returns `missing` / `present` / `not_applicable`. It never
+inspects content.
 
-### Required checks
+### Required implementation
 
-Validate the final subject and body for:
+1. Add a deterministic parser — `forms/parser.py`:
+   * `parse_form(text) -> ParsedForm(form_id, fields: dict[str, str])`
+     by reading the `HESTA-FORM-ID` header and the `Label : value` lines.
+   * `is_blank(value)` — true for empty, whitespace-only, runs of `_` / `-` /
+     `.`, or a bracketed placeholder such as `[MEMBER NAME]`.
+2. Rewrite `assess()` to, for each attachment with readable text:
+   * parse it; unparseable ⇒ `unreadable`;
+   * compare `form_id` against `form_for(intent_id).form_id`;
+     mismatch ⇒ `wrong_form` naming both the expected and the received form;
+   * check every required field; any blank ⇒ `incomplete`, listing the
+     **specific unfilled field labels**;
+   * all filled ⇒ `valid`.
+3. Replace the status vocabulary on `AttachmentAssessment`:
 
-* unauthorized account details, based on the identity state and authorized
-  tool output;
-* personal financial or investment advice that was not blocked by the
-  Guardrail;
-* unsupported monetary values;
-* unsupported dates, eligibility, approval, or timing promises;
-* missing identity-verification wording;
-* missing required attachment requests;
-* internal prompts, system instructions, or tool details;
-* Guardrail sentinel text.
+   ```text
+   valid | incomplete | wrong_form | unreadable | missing | not_applicable
+   ```
 
-### Required behavior
-
-* A validation failure must set the draft to not approved.
-* The failure reason must be visible to the Reviewer and human reviewer.
-* Do not silently delete content without recording what happened.
-* If the validator cannot determine safety, route to human review.
-
----
-
-## TODO 7: Improve human-review audit records
-
-### Objective
-
-Make the DynamoDB human-review record sufficient for staff action,
-troubleshooting, and evaluation.
-
-### Required fields
-
-Extend the `email_review` payload and table item with, where available:
-
-* `case_id`;
-* `review_id`;
-* final draft subject/body;
-* `status`;
-* escalation reasons;
-* primary intent;
-* sender type;
-* identity/verification state;
-* attachment assessment;
-* Reviewer approval and check results;
-* Reviewer issues and suggested edits;
-* revision count;
-* validation failures;
-* source object identifier;
-* processing timestamp;
-* pipeline/version identifier.
-
-Do not store secrets or unnecessary raw sensitive data.
+4. Add fields to `AttachmentAssessment`: `form_id`, `form_name`,
+   `missing_fields: list[str]`, `received_filenames: list[str]`.
+5. Keep the existing case-wide memory behaviour from `_previously_provided()`,
+   but raise its bar: only a **previously `valid`** form counts as already on
+   file. A previously incomplete or wrong form does not.
+6. Record the validated status (not just a presence count) on the case history
+   entry so the case-wide check stays accurate across turns.
+7. Field values are checked for **presence, not correctness**. The notes must
+   state that the form's contents were not semantically verified.
 
 ### Acceptance criteria
 
-* A staff member can understand why the item was escalated without reading
-  application logs.
-* The record identifies the related case and final draft.
-* Revision and Reviewer history is traceable.
-* Failed writes surface errors and do not appear successful.
+* A correctly filled matching form ⇒ `valid`.
+* A matching form with one blank field ⇒ `incomplete`, and that field is named.
+* A different intent's form ⇒ `wrong_form`, naming both forms.
+* An unparseable or non-text attachment ⇒ `unreadable`, routed to human review.
+* No attachment, form expected ⇒ `missing`.
+* A previously `valid` form in case history suppresses a repeat request; a
+  previously `incomplete` one does not.
+* The assessment never asserts that field *contents* were verified.
+
+---
+
+## TODO 5: Enclose the blank form and ask for specific gaps
+
+### Priority
+
+High
+
+### Objective
+
+When a member has not sent a usable form, the draft supplies the blank form and
+tells them how to fill it. When they have, the draft never asks again.
+
+### Required implementation
+
+1. Add `enclosures: list[str]` to `DraftEmail` — the form files a HESTA staff
+   member must attach before sending. The agent does not transmit files; this
+   preserves the safety boundary in rule 1.
+2. Extend `_attachment_line()` in `agents/writer.py` to pass the full
+   assessment: status, form name, missing field labels, received filenames.
+3. Writer behaviour per status:
+   * `missing` — name the form, include the fill guidance from the catalog, and
+     list the blank template in `enclosures`;
+   * `incomplete` — thank them for the form, ask **only** for the specific
+     unfilled fields, and re-enclose the blank template;
+   * `wrong_form` — explain which form was received and which is needed, and
+     enclose the correct blank template;
+   * `unreadable` — do not speculate; this path is already escalating to a
+     human, so the draft acknowledges receipt without asserting validity;
+   * `valid` — confirm receipt and do **not** re-request the document;
+   * `not_applicable` — no attachment language at all.
+4. Update the Writer system prompt: it must never claim to have read, verified,
+   or approved the *contents* of an attachment — only that the expected fields
+   were present.
+5. Update the Reviewer to flag a draft that requests a document already assessed
+   `valid`, or that claims the attachment's contents were verified.
+6. Render `enclosures` in the streamed `_fmt_draft()` output so a staff member
+   can see what to attach.
+
+### Acceptance criteria
+
+* A `missing` assessment produces a draft naming the form, carrying guidance,
+  and listing the blank template as an enclosure.
+* An `incomplete` assessment asks only for the named unfilled fields.
+* A `valid` assessment produces a draft that does not re-request the document.
+* No draft claims an attachment's contents were verified or approved.
+* The Reviewer rejects a draft that re-requests an already-valid document.
+
+---
+
+## TODO 6: Propagate the richer assessment through persistence
+
+### Priority
+
+Medium
+
+### Objective
+
+Make the validated form outcome visible to case history and to human reviewers.
+
+### Required implementation
+
+1. Case history entries store the validated `attachment_status`, `form_id`, and
+   `missing_fields` alongside the existing `attachments_present` count.
+   `attachments_present` stays for backward compatibility with existing rows.
+2. Extend `lambdas/schemas/email_review.json` and the `email_review` handler
+   with `form_id`, `form_name`, `missing_fields`, and `received_filenames`, and
+   widen the documented `attachment_status` enum to the TODO 4 vocabulary.
+3. Extend `_write_hitl_record()` in `main.py` to send those fields.
+4. Opportunistically add the deferred audit fields listed under "Deferred from
+   the previous plan" while this payload is already being touched.
+5. Do not store attachment file contents in DynamoDB — metadata only.
+
+### Acceptance criteria
+
+* A reviewer can see which form arrived and exactly which fields were unfilled,
+  without reading application logs.
+* Existing case rows without the new fields still load without error.
+* No attachment bytes are persisted.
+
+---
+
+## TODO 7: Build `.eml` sample fixtures with real attachments
+
+### Priority
+
+Medium
+
+### Objective
+
+Give every intent a realistic end-to-end sample, plus fixtures for each failure
+path.
+
+### Required implementation
+
+1. Extend `scripts/generate_sample_emails.py` to emit `.eml` alongside the
+   existing `.txt`, using `EmailMessage` with `cte="7bit"` (see D1).
+2. For each of the 8 intents, take one existing sample email and produce
+   `hesta/sample-emails/eml/<INTENT>_<member>_filled.eml` — the same body, with
+   a **correctly filled** copy of that intent's form attached. Fill values must
+   match the seed member in `scripts/seed_hesta_members.py` so identity
+   verification succeeds.
+3. Add failure fixtures (three are enough — they do not need to cover all 8):
+   * `*_incomplete.eml` — matching form, one field left blank;
+   * `*_wrongform.eml` — a different intent's form attached;
+   * `*_noattachment.eml` — body asks about the form, nothing attached.
+4. Strip the literal `[ATTACHMENT FILENAME]` lines from the bodies of samples
+   converted to `.eml`, since a real part now carries that meaning.
+5. Add a README in `hesta/sample-emails/eml/` stating what each fixture proves
+   and how to drop one into S3.
+
+### Acceptance criteria
+
+* Eight `.eml` fixtures, one per intent, each with a correctly filled form.
+* Three failure fixtures covering incomplete, wrong-form and absent.
+* Every fixture's attachment is readable plaintext in the raw `.eml`.
+* Filled values match the corresponding seed member.
+* Regenerating fixtures is idempotent — re-running the script produces no diff
+  beyond the MIME boundary string.
 
 ---
 
@@ -435,12 +509,16 @@ Do not store secrets or unnecessary raw sensitive data.
 This enhancement set is complete only when:
 
 * all TODOs above are implemented or explicitly marked out of scope;
-* v2-only unit and integration tests pass;
-* the bounded revision loop cannot run indefinitely;
-* unauthorized account details are blocked by application logic;
-* attachment requirements are configurable per intent;
-* repeated conversations do not create duplicate cases;
-* human-review records contain sufficient audit context;
+* the `[ATTACHMENT …]` marker convention is gone from the codebase;
+* attachment validation is deterministic, with no LLM call in that path;
+* a `.eml` dropped in `claims-inbox/` is parsed, its form matched, and its
+  fields checked, end to end;
+* a missing or incomplete form produces a draft that encloses the blank form
+  and names the specific gaps;
+* no draft or record claims to have verified attachment *contents*;
+* every form template is packaged with the Runtime and resolves at runtime;
+* v2-only unit tests pass, including the new form, MIME, and validator tests;
+* legacy plain-`.txt` drops still process without error;
+* no outbound email sending or file transmission has been introduced;
 * existing v2 deployment configuration remains valid;
-* no outbound email sending has been introduced;
 * `git diff --check` passes for all changed files.

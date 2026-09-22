@@ -1,17 +1,24 @@
 """Normalise a raw inbound "email" into a canonical ``InboundEmail`` envelope.
 
-This is deterministic Python (no LLM) and runs INSIDE the agent — the S3 Trigger
-Lambda is NOT modified (per the plan's reuse decisions). It handles the two shapes
-seen in the HESTA samples:
+This is deterministic Python (no LLM) and runs INSIDE the agent. The Trigger
+Lambda now parses real MIME attachments off a ``.eml`` object (TODO 2) and hands
+them to the Runtime as an ``attachments`` array in the payload; this module just
+carries that list through onto ``InboundEmail`` (TODO 3) — it does no attachment
+parsing itself, that is the Validator's job (``forms/parser.py``).
+
+It still handles the two body shapes seen in the HESTA samples:
 
   A. Contact-Us web form  — "You've received a new form based mail … Values: …"
-  B. Direct / threaded email — WARNING banner, [ATTACHMENT FILENAME] markers,
-     quoted From:/Sent:/Subject: history, and the HESTA legal footer.
+  B. Direct / threaded email — WARNING banner, quoted From:/Sent:/Subject:
+     history, and the HESTA legal footer.
 
 It strips banners/footers/quoted history to isolate the *latest* member message,
-parses contact-form fields, counts attachment markers, and extracts a real-looking
-member/policy number for the identity lookup (placeholders like "[MEMBER NUMBER]"
-are treated as absent).
+parses contact-form fields, and extracts a real-looking member/policy number for
+the identity lookup (placeholders like "[MEMBER NUMBER]" are treated as absent).
+
+The old ``[ATTACHMENT FILENAME]`` text-marker convention is gone (design decision
+D5) — a body that still contains one is just text; only entries in ``attachments``
+count.
 """
 
 from __future__ import annotations
@@ -30,7 +37,6 @@ _FORM_LABELS = [
     "message",
 ]
 
-_ATTACHMENT_MARKER = re.compile(r"\[attachment[^\]]*\]", re.IGNORECASE)
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # A real member/policy number: e.g. POL-12345, or a bare 5-9 digit run.
 _POLICY_RE = re.compile(r"\bPOL-[A-Za-z0-9-]+\b", re.IGNORECASE)
@@ -52,6 +58,14 @@ _TRIGGER_PREFIX_RE = re.compile(r"^\s*process this[^\n:]*:\s*", re.IGNORECASE)
 
 
 @dataclass
+class Attachment:
+    filename: str
+    content_type: str
+    text: str | None = None
+    skipped_reason: str | None = None
+
+
+@dataclass
 class InboundEmail:
     channel: str = "direct_email"  # contact_form | direct_email | third_party
     sender_type: str = "unknown"  # member | non_member | solicitor | unknown
@@ -61,8 +75,12 @@ class InboundEmail:
     member_number_for_lookup: str | None = None  # real-looking number, else None
     form_reason: str | None = None  # contact-form hint only
     latest_message: str = ""
-    attachment_count: int = 0
+    attachments: list[Attachment] = field(default_factory=list)
     raw: str = ""
+
+    @property
+    def attachment_count(self) -> int:
+        return len(self.attachments)
 
 
 def _is_placeholder(value: str | None) -> bool:
@@ -162,14 +180,32 @@ def _detect_solicitor(text: str) -> bool:
 
 
 def normalize_email(
-    raw: str, *, sender_email: str | None = None, source: str | None = None, subject: str | None = None
+    raw: str,
+    *,
+    sender_email: str | None = None,
+    source: str | None = None,
+    subject: str | None = None,
+    attachments: list[dict] | None = None,
 ) -> InboundEmail:
-    """Turn raw email text (as forwarded by the Trigger Lambda) into an InboundEmail."""
+    """Turn raw email text (as forwarded by the Trigger Lambda) into an InboundEmail.
+
+    ``attachments`` is the real, MIME-parsed list the Trigger Lambda extracted (TODO 2) —
+    each dict has ``filename``, ``content_type``, ``text`` and ``skipped_reason``. Defaults
+    to an empty list for legacy plain-text payloads that carry none.
+    """
     raw = raw or ""
     text = _TRIGGER_PREFIX_RE.sub("", raw, count=1)
 
     inbound = InboundEmail(raw=raw, subject=subject or "")
-    inbound.attachment_count = len(_ATTACHMENT_MARKER.findall(text))
+    inbound.attachments = [
+        Attachment(
+            filename=a.get("filename", "attachment"),
+            content_type=a.get("content_type", "application/octet-stream"),
+            text=a.get("text"),
+            skipped_reason=a.get("skipped_reason"),
+        )
+        for a in (attachments or [])
+    ]
 
     is_form = "form based mail" in text.lower() or "Values:" in text
 

@@ -25,10 +25,15 @@ Check ONLY the following:
   are appropriate for the intent.
 - If the draft contains personal advice, set compliance_ok=false and approved_for_human_send=false, and
   note it in issues.
-- Attachment handling: if the attachment assessment says a document is "missing" and the draft does not
-  ask for it, that is an accuracy/compliance issue. If the assessment says "present" and the draft asks
-  for the attachment again anyway, that is also an issue. The draft must never claim to have inspected or
-  verified the contents of an attachment — the pilot only detects presence, never file bytes.
+- Attachment handling: the attachment assessment status tells you what the draft should do.
+  * "missing" or "incomplete": the draft must ask for the document (or the specific blank fields) —
+    if it does not, that is an accuracy/compliance issue.
+  * "valid": the draft must NOT ask for the document again — if it does, set
+    approved_for_human_send=false and note it in issues (re-requesting an already-valid document).
+  * The draft must NEVER state or imply that an attachment's *contents* were read, inspected,
+    verified, checked, or approved — the validator only checks that expected fields are present,
+    never their correctness. If the draft claims content-level verification, set
+    compliance_ok=false, approved_for_human_send=false, and note it in issues.
 - Disclosure state (see the input): reject the draft (compliance_ok=false) if it states any of the
   following without the disclosure state being "verified", or if it states them at all when nothing in
   the prompt actually supplied that value: balances, transaction details, contribution history, payment

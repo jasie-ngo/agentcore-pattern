@@ -1,0 +1,37 @@
+From: Tom Fletcher <tom.fletcher@example.com>
+To: HESTA <hesta@hesta.com.au>
+Subject: Change of Personal Details Form =?utf-8?b?4oCU?= member number
+ 60030001
+Date: Fri, 29 May 2026 09:12:00 +1000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============5359245980767480878=="
+
+--===============5359245980767480878==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi,
+
+Hi there, my mobile number has changed. I tried to update it in the portal but it says I need to call. Could you please update my number so I can log in again?
+
+Member number 60030001.
+
+Thanks,
+Tom Fletcher
+
+--===============5359245980767480878==
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="COD-DET-V1.txt"
+MIME-Version: 1.0
+
+HESTA-FORM-ID: COD-DET-V1
+HESTA-FORM-NAME: Change of Personal Details Form
+----------------------------------------------------------
+Member name          : Tom Fletcher
+Member email         : tom.fletcher@example.com
+Member number        : 60030001
+Details to update    : Update my mobile number to 0400 333 006
+----------------------------------------------------------
+
+--===============5359245980767480878==--

@@ -122,12 +122,47 @@ class CaseLookupCreationTests(unittest.TestCase):
             {
                 "member_id": "60010001",
                 "primary_intent_id": "death_benefit_nomination",
-                "inbound_email": "Please find attached my BDBN form. [ATTACHMENT form.pdf]",
+                "inbound_email": "Please find attached my BDBN form.",
                 "attachments_present": 1,
             },
             None,
         )
         self.assertEqual(result["conversation_history"][0]["attachments_present"], 1)
+
+    def test_validated_attachment_status_is_recorded_on_the_case_creation_entry(self):
+        """TODO 6: the same ordering problem as above, now for the validated status/form_id/
+        missing_fields (not just the raw count) — main.py's early, empty-history assessment
+        seeds these on a brand-new case's bootstrap entry."""
+        self.mod.table.query.return_value = {"Items": []}
+        result = self.mod.handler(
+            {
+                "member_id": "60010001",
+                "primary_intent_id": "death_benefit_nomination",
+                "inbound_email": "Please find attached my BDBN form, mostly filled in.",
+                "attachments_present": 1,
+                "attachment_status": "incomplete",
+                "form_id": "BDBN-NOM-V1",
+                "missing_fields": ["Nomination details"],
+            },
+            None,
+        )
+        entry = result["conversation_history"][0]
+        self.assertEqual(entry["attachment_status"], "incomplete")
+        self.assertEqual(entry["form_id"], "BDBN-NOM-V1")
+        self.assertEqual(entry["missing_fields"], ["Nomination details"])
+
+    def test_absent_attachment_status_is_not_written(self):
+        """No attachment_status/form_id/missing_fields sent (e.g. legacy caller) → not written
+        at all, rather than as None/empty — keeps old rows and new rows the same shape."""
+        self.mod.table.query.return_value = {"Items": []}
+        result = self.mod.handler(
+            {"member_id": "60010001", "primary_intent_id": "death_benefit_nomination", "inbound_email": "hi"},
+            None,
+        )
+        entry = result["conversation_history"][0]
+        self.assertNotIn("attachment_status", entry)
+        self.assertNotIn("form_id", entry)
+        self.assertNotIn("missing_fields", entry)
 
     def test_reuses_the_members_case_regardless_of_intent(self):
         """One case per member: a different topic on a follow-up still reuses it."""
@@ -385,6 +420,41 @@ class EmailReviewTests(unittest.TestCase):
         self.assertEqual(written["attachment_status"], "missing")
         self.assertEqual(written["review_result"]["approved_for_human_send"], False)
         self.assertEqual(written["review_result"]["issues"], ["compliance issue"])
+
+    def test_writes_form_and_field_metadata(self):
+        """TODO 6: form_id/form_name/missing_fields/received_filenames let a reviewer see
+        exactly what arrived and what's blank, without reading application logs."""
+        event = {
+            "case_id": "CASE-1234",
+            "draft_subject": "HESTA enquiry",
+            "draft_body": "Please provide the missing field.",
+            "escalation_reasons": "draft not approved",
+            "attachment_status": "incomplete",
+            "form_id": "BDBN-NOM-V1",
+            "form_name": "Binding Death Benefit Nomination Form",
+            "missing_fields": ["Nomination details"],
+            "received_filenames": ["bdbn.txt"],
+        }
+        self.mod.handler(event, None)
+        written = self.mod.table.put_item.call_args.kwargs["Item"]
+        self.assertEqual(written["form_id"], "BDBN-NOM-V1")
+        self.assertEqual(written["form_name"], "Binding Death Benefit Nomination Form")
+        self.assertEqual(written["missing_fields"], ["Nomination details"])
+        self.assertEqual(written["received_filenames"], ["bdbn.txt"])
+
+    def test_no_attachment_bytes_are_persisted(self):
+        """Rule: metadata only — never the attachment's file contents."""
+        event = {
+            "case_id": "CASE-1234",
+            "draft_subject": "s",
+            "draft_body": "b",
+            "escalation_reasons": "x",
+            "attachment_status": "valid",
+        }
+        self.mod.handler(event, None)
+        written = self.mod.table.put_item.call_args.kwargs["Item"]
+        self.assertNotIn("attachment_text", written)
+        self.assertNotIn("attachment_content", written)
 
 
 if __name__ == "__main__":

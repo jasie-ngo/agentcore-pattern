@@ -1,0 +1,37 @@
+From: Bruce Tan <bruce.tan@example.net>
+To: HESTA <hesta@hesta.com.au>
+Subject: Rollover / Transfer / Combine Accounts Form =?utf-8?b?4oCU?= member
+ number 60080002
+Date: Fri, 29 May 2026 09:12:00 +1000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============0333667222565231791=="
+
+--===============0333667222565231791==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi,
+
+I'd like to combine my Rest super into my HESTA account to have everything in one place. What do I need to do? Member number 60080002.
+
+Member number 60080002.
+
+Thanks,
+Bruce Tan
+
+--===============0333667222565231791==
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="RTC-ROLLOVER-V1.txt"
+MIME-Version: 1.0
+
+HESTA-FORM-ID: RTC-ROLLOVER-V1
+HESTA-FORM-NAME: Rollover / Transfer / Combine Accounts Form
+----------------------------------------------------------
+Member name        : Bruce Tan
+Member email       : bruce.tan@example.net
+Member number      : 60080002
+Transfer details   : Transferring my Rest Super account into HESTA
+----------------------------------------------------------
+
+--===============0333667222565231791==--

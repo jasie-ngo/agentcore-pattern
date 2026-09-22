@@ -20,13 +20,19 @@ Run:  python3 scripts/generate_sample_emails.py
 
 from __future__ import annotations
 
+import email.policy
 import os
 import sys
+from email.message import EmailMessage
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
 from seed_hesta_members import MEMBERS  # noqa: E402
 
-BY_NUM = {m["policy_number"]: m for m in MEMBERS}
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "hesta-claimsagent"))
+from forms import catalog  # noqa: E402
+from intents import taxonomy  # noqa: E402
+
+BY_NUM = {m['member_id']: m for m in MEMBERS}
 
 OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "hesta", "sample-emails")
 
@@ -243,8 +249,8 @@ def _contact_form(member, spec) -> str:
         "Values:\n"
         "enquiry-sent-from : A member\n"
         f"email-address : {member['email']}\n"
-        f"member-number : {member['policy_number']}\n"
-        f"name : {member['holder_name']}\n"
+        f"member-number : {member['member_id']}\n"
+        f"name : {member['name']}\n"
         f"phone : {spec.get('phone', '')}\n"
         f"reason-for-enquiry : {spec['reason']}\n"
         f"message : {spec['message']}\n"
@@ -252,7 +258,7 @@ def _contact_form(member, spec) -> str:
 
 
 def _direct(member, spec) -> str:
-    from_name = spec.get("from_name", member["holder_name"])
+    from_name = spec.get("from_name", member['name'])
     from_email = spec.get("from_email", member["email"])
     parts = []
     if spec.get("banner"):
@@ -272,21 +278,147 @@ def _direct(member, spec) -> str:
     return "\n".join(parts) + "\n"
 
 
+EML_OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "hesta", "sample-emails", "eml")
+
+# TODO 7: one member (and a plausible 4th-field detail) per intent, for the "filled" .eml
+# fixture. Reuses the SAME member/spec as the matching .txt sample, so identity verification
+# (member email == sender) succeeds the same way.
+EML_FIXTURES = {
+    "death_benefit_nomination": ("60010001", "Nominate my spouse Michael Thompson as 100% beneficiary"),
+    "withdrawal_benefit_payment": ("60020001", "Withdraw a lump sum of $40,000 as I am over 65 and retired"),
+    "change_of_details": ("60030001", "Update my mobile number to 0400 333 006"),
+    "departing_australia_payment": (
+        "60040001", "Departed Australia permanently on 3 March 2026, now residing in the United Kingdom",
+    ),
+    "financial_hardship": (
+        "60050001", "Unable to pay rent and utility bills for the past two months due to reduced income",
+    ),
+    "family_law_split": (
+        "60060005", "Family Court of Australia order dated 1 February 2026, case number FLC1234/2026",
+    ),
+    "notice_of_intent_tax_deduction": (
+        "60070001", "Claiming a $15,000 deduction for personal contributions made in the 2025-26 financial year",
+    ),
+    "rollover_transfer_combine": ("60080002", "Transferring my Rest Super account into HESTA"),
+}
+
+_INTENT_CODE = {i.id: i.code for i in taxonomy.INTENTS}
+
+
+def _fill_form(intent_id: str, member: dict, detail: str, *, drop_field: str | None = None) -> str:
+    spec = catalog.form_for(intent_id)
+    text = catalog.blank_template(intent_id)
+    values = {
+        "Member name": member["name"],
+        "Member email": member["email"],
+        "Member number": member["member_id"],
+    }
+    values[spec.fields[-1].label] = detail
+    for field in spec.fields:
+        value = "______________________________" if field.label == drop_field else values[field.label]
+        text = text.replace("______________________________", value, 1)
+    return text
+
+
+def _eml_body(member: dict, spec: dict) -> str:
+    """The member's message, for the .eml body — same words as the .txt fixture, but never
+    the [ATTACHMENT FILENAME] marker text (D5 / TODO 7 rule 4): a real MIME part now carries
+    that meaning."""
+    if spec["channel"] == "direct":
+        return spec["body"]
+    return f"Hi,\n\n{spec['message']}\n\nMember number {member['member_id']}.\n\nThanks,\n{member['name']}"
+
+
+def _build_eml(member: dict, subject: str, body: str, attachment: tuple[str, str] | None) -> bytes:
+    """`attachment`: optional (filename, text) attached as text/plain, 7bit (design decision
+    D1) so it stays human-readable in the raw .eml. Always multipart/mixed, even with no
+    attachment, so the Trigger Lambda reliably detects it as MIME regardless of count."""
+    msg = EmailMessage(policy=email.policy.default)
+    msg["From"] = f"{member['name']} <{member['email']}>"
+    msg["To"] = "HESTA <hesta@hesta.com.au>"
+    msg["Subject"] = subject
+    msg["Date"] = "Fri, 29 May 2026 09:12:00 +1000"
+    msg.set_content(body, cte="7bit")
+    msg.make_mixed()
+    if attachment is not None:
+        filename, text = attachment
+        msg.add_attachment(text.encode("utf-8"), maintype="text", subtype="plain", filename=filename, cte="7bit")
+    return msg.as_bytes()
+
+
+def _write_eml(out_dir: str, fname: str, data: bytes) -> None:
+    with open(os.path.join(out_dir, fname), "wb") as fh:
+        fh.write(data)
+
+
+def build_eml_fixtures() -> int:
+    out = os.path.abspath(EML_OUT_DIR)
+    os.makedirs(out, exist_ok=True)
+    written = 0
+
+    for intent_id, (num, detail) in EML_FIXTURES.items():
+        member = BY_NUM[num]
+        spec = SPECS[num]
+        form_spec = catalog.form_for(intent_id)
+        filled = _fill_form(intent_id, member, detail)
+        subject = spec.get("subject") or f"{form_spec.name} — member number {num}"
+        eml = _build_eml(member, subject, _eml_body(member, spec), (f"{form_spec.form_id}.txt", filled))
+        _write_eml(out, f"{_INTENT_CODE[intent_id]}_{num}_filled.eml", eml)
+        written += 1
+
+    # ── Failure fixtures (three is enough — TODO 7 rule 3) ──────────────────
+    bdbn_num, bdbn_detail = EML_FIXTURES["death_benefit_nomination"]
+    bdbn_member, bdbn_spec = BY_NUM[bdbn_num], SPECS[bdbn_num]
+    bdbn_form = catalog.form_for("death_benefit_nomination")
+    bdbn_body = _eml_body(bdbn_member, bdbn_spec)
+    bdbn_subject = bdbn_spec.get("subject")
+
+    incomplete = _fill_form(
+        "death_benefit_nomination", bdbn_member, bdbn_detail, drop_field="Nomination details"
+    )
+    eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, (f"{bdbn_form.form_id}.txt", incomplete))
+    _write_eml(out, f"BDBN_{bdbn_num}_incomplete.eml", eml)
+    written += 1
+
+    fh_form = catalog.form_for("financial_hardship")
+    wrong_form_text = _fill_form("financial_hardship", bdbn_member, "Struggling to pay rent and bills")
+    eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, (f"{fh_form.form_id}.txt", wrong_form_text))
+    _write_eml(out, f"BDBN_{bdbn_num}_wrongform.eml", eml)
+    written += 1
+
+    eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, None)
+    _write_eml(out, f"BDBN_{bdbn_num}_noattachment.eml", eml)
+    written += 1
+
+    print(f"Wrote {written} .eml fixtures to {out}")
+    return written
+
+
 def main() -> None:
     out = os.path.abspath(OUT_DIR)
     os.makedirs(out, exist_ok=True)
     written = 0
+    skipped_no_member = []
     for num, spec in SPECS.items():
-        member = BY_NUM[num]
+        member = BY_NUM.get(num)
+        if member is None:
+            # e.g. a fixture in seed_hesta_members.OMITTED_FIXTURES — deliberately not seeded
+            # as a member, so there's nothing to regenerate its .txt/.eml pair against.
+            skipped_no_member.append(num)
+            continue
         content = _contact_form(member, spec) if spec["channel"] == "contact_form" else _direct(member, spec)
-        fname = f"{member['test_scenario']}_{num}_{spec['slug']}.txt"
+        fname = f"{member['scenario']}_{num}_{spec['slug']}.txt"
         with open(os.path.join(out, fname), "w", encoding="utf-8") as fh:
             fh.write(content)
         written += 1
     print(f"✅ Wrote {written} sample emails to {out}")
+    if skipped_no_member:
+        print(f"⚠️ Skipped (no seeded member): {sorted(skipped_no_member)}")
     missing = set(BY_NUM) - set(SPECS)
     if missing:
         print(f"⚠️ No spec for members: {sorted(missing)}")
+
+    build_eml_fixtures()
 
 
 if __name__ == "__main__":

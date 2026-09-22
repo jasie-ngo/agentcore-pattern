@@ -12,6 +12,7 @@ import logging
 
 import config
 from agents.base import build_agent
+from forms import catalog as form_catalog
 from intents import taxonomy
 from knowledge import hesta_snippets
 from models import AttachmentAssessment, DraftEmail
@@ -44,10 +45,21 @@ Hard rules:
   case status is "closed", do not treat the current message as reopening or re-actioning a resolved matter
   unless it clearly describes a genuinely new request — instead give a status-appropriate reply (e.g.
   reference that the matter was already resolved) and let a human decide whether to reopen it.
-- Attachment handling: if the attachment assessment status is "missing" and the intent expects a
-  document, ask the member to provide it. If the status is "present", one or more attachments were
-  already detected — do NOT ask for it again. The pilot only sees attachment markers, never file
-  bytes, so never claim to have inspected, verified, or reviewed the contents of an attachment.
+- Attachment handling — the attachment assessment status tells you exactly what to write, per status:
+  * "missing": name the expected form, include the fill guidance given to you, and mention that the
+    blank form is enclosed for the member to complete.
+  * "incomplete": thank the member for the form already received, then ask ONLY for the specific
+    blank field(s) named in the assessment — do not re-ask for fields already filled in. Mention that
+    a blank copy of the form is enclosed again in case it's easier to start over.
+  * "wrong_form": politely explain which form was received and which form is actually needed for this
+    request, and mention that the correct blank form is enclosed.
+  * "unreadable": acknowledge that an attachment was received — do NOT say it was valid, complete, or
+    reviewed. This is already going to a human, so keep this brief and neutral.
+  * "valid": confirm the form was received and is complete — do NOT ask for it again.
+  * "not_applicable": say nothing about attachments at all.
+  Whatever the status, NEVER claim to have inspected, verified, reviewed, or checked the *contents* of
+  an attachment — the validator only checks that expected fields are present, never their correctness.
+  Do not write your own list of enclosures; that is added deterministically after your draft.
 - Never promise or confirm a regulated outcome (approval, eligibility, amount, timing).
 - NEVER provide personal financial, investment or product advice or recommendations (e.g. which option/
   product is best for the member, whether they should switch/roll over/contribute for their situation).
@@ -93,7 +105,7 @@ def advice_decline_draft(inbound, intent_result, profile) -> DraftEmail:
     )
 
 
-def _fallback_draft(inbound, intent_result, profile) -> DraftEmail:
+def _fallback_draft(inbound, intent_result, profile, attachment: AttachmentAssessment | None = None) -> DraftEmail:
     """Deterministic HESTA-voice draft used if the LLM call fails (keeps the pilot working)."""
     intent_id = intent_result.primary_intent_id
     needs_verify = profile.verification_required
@@ -102,7 +114,7 @@ def _fallback_draft(inbound, intent_result, profile) -> DraftEmail:
     if needs_verify:
         body_lines += ["", _IDENTITY_BLOCK]
     body_lines += ["", hesta_snippets.SIGNOFF, "", hesta_snippets.LEGAL_FOOTER]
-    return DraftEmail(
+    draft = DraftEmail(
         subject=f"HESTA — {taxonomy.name_for(intent_id)}",
         body="\n".join(body_lines),
         intent_id=intent_id,
@@ -110,6 +122,8 @@ def _fallback_draft(inbound, intent_result, profile) -> DraftEmail:
         kb_snippets_used=[intent_id],
         assumptions=["Draft generated from template fallback (LLM unavailable) — review before sending."],
     )
+    draft.enclosures = _enclosures_for(intent_id, attachment)
+    return draft
 
 
 def _case_record_status(cases) -> str:
@@ -122,18 +136,42 @@ def _case_record_status(cases) -> str:
     return (record or {}).get("status", "unknown")
 
 
-def _attachment_line(attachment: AttachmentAssessment | None) -> str:
-    return (
-        f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
-        f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n"
-    )
+def _attachment_line(intent_id: str, attachment: AttachmentAssessment | None) -> str:
+    if attachment is None:
+        return "Attachment assessment: not assessed; No attachment assessment was run.\n"
+    parts = [
+        f"Attachment assessment: {attachment.status}; {attachment.notes}",
+        f"Expected form: {attachment.expected_document}",
+    ]
+    if attachment.received_filenames:
+        parts.append(f"Received filename(s): {', '.join(attachment.received_filenames)}")
+    if attachment.missing_fields:
+        parts.append(f"Blank field(s) to ask for: {', '.join(attachment.missing_fields)}")
+    if attachment.status in ("missing", "incomplete", "wrong_form"):
+        guidance = form_catalog.guidance_for(intent_id)
+        if guidance:
+            parts.append(f"Fill guidance to give the member: {guidance}")
+    return "\n".join(parts) + "\n"
 
 
-def _apply_authoritative_fields(draft: DraftEmail, intent_id: str, verification_state: str) -> None:
+def _enclosures_for(intent_id: str, attachment: AttachmentAssessment | None) -> list[str]:
+    """Which blank form file(s) a HESTA staff member must attach before sending — computed
+    deterministically (never left to the model) so it can never drift from the validator's
+    actual status (TODO 5 rule 1/6)."""
+    if attachment is None or attachment.status not in ("missing", "incomplete", "wrong_form"):
+        return []
+    spec = form_catalog.form_for(intent_id)
+    return [spec.template_file] if spec is not None else []
+
+
+def _apply_authoritative_fields(
+    draft: DraftEmail, intent_id: str, verification_state: str, attachment: AttachmentAssessment | None = None
+) -> None:
     """Machine-derived facts stay authoritative no matter what the model returned — a revision
     must never be allowed to drift these away from what identity/intent verification established."""
     draft.intent_id = intent_id
     draft.verification_state = verification_state
+    draft.enclosures = _enclosures_for(intent_id, attachment)
 
 
 def _identity_instruction(verification_state: str) -> str:
@@ -175,7 +213,7 @@ async def write(
         f"Sender type: {intent_result.sender_type}\n"
         f"Member sentiment/priority: {empathy.sentiment} / {empathy.priority}; "
         f"vulnerability: {', '.join(empathy.vulnerability_flags) or 'none'}\n"
-        f"{_attachment_line(attachment)}"
+        f"{_attachment_line(intent_id, attachment)}"
         f"Case summary: {summary.summary}\n"
         f"Outstanding items: {', '.join(summary.outstanding_items) or 'none'}\n"
         f"Case status: {_case_record_status(summary.cases)}\n\n"
@@ -189,7 +227,7 @@ async def write(
     )
     try:
         draft = await _get().structured_output_async(DraftEmail, prompt)
-        _apply_authoritative_fields(draft, intent_id, verification_state)
+        _apply_authoritative_fields(draft, intent_id, verification_state, attachment)
         # If the Bedrock Guardrail intervened, its sentinel appears in the output → decline safely.
         if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
             log.warning("Guardrail intervened on Writer output; returning compliant advice decline.")
@@ -199,7 +237,7 @@ async def write(
         log.warning("Writer failed (or guardrail intervened); using safe fallback: %s", exc)
         if getattr(intent_result, "personal_advice_requested", False):
             return advice_decline_draft(inbound, intent_result, profile)
-        return _fallback_draft(inbound, intent_result, profile)
+        return _fallback_draft(inbound, intent_result, profile, attachment)
 
 
 async def revise(
@@ -230,7 +268,7 @@ async def revise(
         f"Primary intent: {intent_id} ({taxonomy.name_for(intent_id)})\n"
         f"Verification state: {verification_state} ({profile.notes})\n"
         f"Disclosure state: {profile.disclosure_state}\n"
-        f"{_attachment_line(attachment)}"
+        f"{_attachment_line(intent_id, attachment)}"
         f"Case status: {_case_record_status(summary.cases)}\n\n"
         "PREVIOUS DRAFT SUBJECT:\n"
         f"{previous_draft.subject}\n\n"
@@ -250,7 +288,7 @@ async def revise(
     )
     try:
         draft = await _get().structured_output_async(DraftEmail, prompt)
-        _apply_authoritative_fields(draft, intent_id, verification_state)
+        _apply_authoritative_fields(draft, intent_id, verification_state, attachment)
         if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
             log.warning("Guardrail intervened on Writer revision; returning compliant advice decline.")
             return advice_decline_draft(inbound, intent_result, profile)

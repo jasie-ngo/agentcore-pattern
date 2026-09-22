@@ -42,7 +42,7 @@ def _get(session_manager=None):
 
 async def summarize(
     inbound, mcp=None, session_manager=None, *, primary_intent_id=None, idempotency_key=None,
-    source_object_id=None, skip_summary=False,
+    source_object_id=None, skip_summary=False, early_attachment_assessment=None,
 ) -> CaseSummary:
     """Summarize context and pull member identity + cases.
 
@@ -54,11 +54,18 @@ async def summarize(
             and case record are needed regardless — e.g. to know which case a personal-advice
             escalation belongs to) but skips the LLM summarization call entirely. Used for the
             personal-advice short-circuit, where no LLM reasoning about the request is needed.
+        early_attachment_assessment: an AttachmentAssessment computed by the caller against an
+            EMPTY case history (TODO 6) — correct only for a genuinely brand-new case, which is
+            exactly the one case where case_lookup_creation needs it, to record the validated
+            status on that case's bootstrap history entry. Ignored when the case already exists;
+            the real assessment (using the real case history) that main.py computes afterward is
+            what drives the Writer/Reviewer/decision and any history APPEND for that case.
     """
     identity = await _lookup_member(mcp, inbound)
     cases = await _lookup_cases(
         mcp, identity, inbound, intent_id=primary_intent_id,
-        idempotency_key=idempotency_key, source_object_id=source_object_id
+        idempotency_key=idempotency_key, source_object_id=source_object_id,
+        early_attachment_assessment=early_attachment_assessment,
     )
     if skip_summary:
         result = CaseSummary(
@@ -134,7 +141,10 @@ async def _lookup_member(mcp, inbound) -> IdentityInfo:
     )
 
 
-async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None, idempotency_key=None, source_object_id=None) -> CaseInfo:
+async def _lookup_cases(
+    mcp, identity: IdentityInfo, inbound, *, intent_id=None, idempotency_key=None,
+    source_object_id=None, early_attachment_assessment=None,
+) -> CaseInfo:
     """Call case_lookup_creation via MCP Gateway."""
     if mcp is None:
         return CaseInfo(error="Gateway unavailable", status="unavailable")
@@ -157,6 +167,15 @@ async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None,
     # present; without it, that entry is later written by main.py's own append call, but
     # discarded as a duplicate entry_id, silently losing the field (see attachment_validation).
     case_input["attachments_present"] = inbound.attachment_count
+    # TODO 6: same reasoning, for the validated status — only meaningful (and only used by the
+    # handler) when this turns out to be a brand-new case, which is exactly when this early,
+    # empty-history assessment is correct.
+    if early_attachment_assessment is not None:
+        case_input["attachment_status"] = early_attachment_assessment.status
+        if early_attachment_assessment.form_id:
+            case_input["form_id"] = early_attachment_assessment.form_id
+        if early_attachment_assessment.missing_fields:
+            case_input["missing_fields"] = early_attachment_assessment.missing_fields
     case_input["pipeline_version"] = "hesta-v2"
     result = await gateway.call_tool(mcp, "case_lookup_creation", case_input)
 

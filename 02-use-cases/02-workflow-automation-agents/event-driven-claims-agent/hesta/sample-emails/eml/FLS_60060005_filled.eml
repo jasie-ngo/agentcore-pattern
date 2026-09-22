@@ -1,0 +1,37 @@
+From: Hannah Whitlock <hannah.whitlock@example.net>
+To: HESTA <hesta@hesta.com.au>
+Subject: Family Law Superannuation Split Form =?utf-8?b?4oCU?= member number
+ 60060005
+Date: Fri, 29 May 2026 09:12:00 +1000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============0799570734996837415=="
+
+--===============0799570734996837415==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi,
+
+My ex-partner's lawyer has contacted me about splitting my super in our divorce. What is the process from HESTA's side and what do you need from me? Member number 60060005.
+
+Member number 60060005.
+
+Thanks,
+Hannah Whitlock
+
+--===============0799570734996837415==
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="FLS-SPLIT-V1.txt"
+MIME-Version: 1.0
+
+HESTA-FORM-ID: FLS-SPLIT-V1
+HESTA-FORM-NAME: Family Law Superannuation Split Form
+----------------------------------------------------------
+Member name           : Hannah Whitlock
+Member email          : hannah.whitlock@example.net
+Member number         : 60060005
+Court order details   : Family Court of Australia order dated 1 February 2026, case number FLC1234/2026
+----------------------------------------------------------
+
+--===============0799570734996837415==--

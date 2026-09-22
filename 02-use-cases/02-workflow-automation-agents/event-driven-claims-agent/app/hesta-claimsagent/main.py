@@ -169,12 +169,17 @@ def _fmt_profile(profile) -> str:
 
 
 def _fmt_attach(attach) -> str:
-    return (
-        "### 📎 Attachments (AI-004)\n\n"
+    lines = [
+        "### 📎 Attachments (AI-004)\n",
         f"- **Detected:** {attach.attachments_present} · **expected:** {attach.expected_document} · "
-        f"**status:** {attach.status}\n"
-        f"- {attach.notes}\n\n"
-    )
+        f"**status:** {attach.status}",
+    ]
+    if attach.received_filenames:
+        lines.append(f"- **Received:** {', '.join(attach.received_filenames)}")
+    if attach.missing_fields:
+        lines.append(f"- **Blank field(s):** {', '.join(attach.missing_fields)}")
+    lines.append(f"- {attach.notes}")
+    return "\n".join(lines) + "\n\n"
 
 
 def _fmt_empathy(emp) -> str:
@@ -213,6 +218,8 @@ def _fmt_tool_log(calls) -> str:
 
 def _fmt_draft(heading: str, draft) -> str:
     out = f"{heading}\n\n**Subject:** {draft.subject}\n\n```text\n{draft.body}\n```\n\n"
+    if draft.enclosures:
+        out += "_📎 Enclose before sending:_ " + "; ".join(draft.enclosures) + "\n\n"
     if draft.assumptions:
         out += "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
     return out
@@ -313,6 +320,14 @@ async def _write_hitl_record(
     if attachment is not None:
         tool_input["attachment_status"] = attachment.status
         tool_input["attachment_notes"] = attachment.notes
+        if attachment.form_id:
+            tool_input["form_id"] = attachment.form_id
+        if attachment.form_name:
+            tool_input["form_name"] = attachment.form_name
+        if attachment.missing_fields:
+            tool_input["missing_fields"] = attachment.missing_fields
+        if attachment.received_filenames:
+            tool_input["received_filenames"] = attachment.received_filenames
     if review_result is not None:
         tool_input["review_result"] = review_result.model_dump()
 
@@ -471,8 +486,11 @@ async def _run_pipeline(payload, context):
     idempotency_key = _idempotency_key(payload, raw, sender_email, source)
     source_object_id = payload.get("source_object_id") or source
 
-    # Phase 0 — deterministic normalisation (inside the agent; the Trigger Lambda is unchanged).
-    inbound = normalize_email(raw, sender_email=sender_email, source=source)
+    # Phase 0 — deterministic normalisation. The Trigger Lambda now parses real MIME
+    # attachments off a .eml object (TODO 2) and hands them through in the payload.
+    inbound = normalize_email(
+        raw, sender_email=sender_email, source=source, attachments=payload.get("attachments")
+    )
     gateway.reset_tool_log()  # fresh MCP call log for this invocation
 
     # AgentCore Memory (AI-002): key the actor on the member/policy number if we have one,
@@ -523,6 +541,12 @@ async def _run_pipeline(payload, context):
             ):
                 yield chunk
         else:
+            # Computed against an EMPTY case history, correct only if this turns out to be a
+            # brand-new case — case_lookup_creation uses it to seed that case's bootstrap
+            # history entry (TODO 6), since the real case history isn't known until after the
+            # lookup below returns. Ignored entirely for an existing case.
+            early_attach = attachment_validation.assess(inbound, intent_result, case_history=[])
+
             # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
             summary = await context_manager.summarize(
                 inbound,
@@ -531,6 +555,7 @@ async def _run_pipeline(payload, context):
                 primary_intent_id=intent_result.primary_intent_id,
                 idempotency_key=idempotency_key,
                 source_object_id=source_object_id,
+                early_attachment_assessment=early_attach,
             )
             yield _fmt_summary(summary)
             yield _fmt_identity(summary.identity)
@@ -574,6 +599,11 @@ async def _run_pipeline(payload, context):
             # stale "no escalation needed" verdict that the later Human-in-the-loop section then
             # contradicts. The single, final verdict is shown after the review loop completes.
             decision = decide(intent_result, profile, emp)
+            # An unreadable attachment or a mismatched form needs a human's judgment call —
+            # unlike missing/incomplete, the Writer cannot safely resolve these on its own.
+            if attach is not None and attach.status in ("unreadable", "wrong_form"):
+                decision.reasons.append(f"attachment {attach.status}: {attach.notes}")
+                decision.escalate_to_human = True
 
             # ── EXECUTE ───────────────────────────────────────────────────────
             yield "## 3 · Execute\n\n"
@@ -645,16 +675,23 @@ async def _run_pipeline(payload, context):
             # Each entry carries the CURRENT message's intent — cases now span a member's
             # whole relationship, not one topic, so the Writer needs to see how intent
             # has shifted message to message across the history, not just today's intent.
+            inbound_entry = {
+                "entry_id": f"{idempotency_key}:inbound",
+                "entry_type": "inbound_member_email",
+                "content": inbound.latest_message,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "pipeline_version": "hesta-v2",
+                "intent_id": intent_result.primary_intent_id,
+                "attachments_present": inbound.attachment_count,
+            }
+            if attach is not None:
+                inbound_entry["attachment_status"] = attach.status
+                if attach.form_id:
+                    inbound_entry["form_id"] = attach.form_id
+                if attach.missing_fields:
+                    inbound_entry["missing_fields"] = attach.missing_fields
             history_entries = [
-                {
-                    "entry_id": f"{idempotency_key}:inbound",
-                    "entry_type": "inbound_member_email",
-                    "content": inbound.latest_message,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "pipeline_version": "hesta-v2",
-                    "intent_id": intent_result.primary_intent_id,
-                    "attachments_present": inbound.attachment_count,
-                },
+                inbound_entry,
                 {
                     "entry_id": f"{idempotency_key}:draft",
                     "entry_type": "generated_draft",

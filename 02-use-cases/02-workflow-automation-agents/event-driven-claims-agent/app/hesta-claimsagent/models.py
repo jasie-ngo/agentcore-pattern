@@ -117,20 +117,35 @@ class MemberProfile(BaseModel):
     notes: str = Field(default="", description="Human-readable explanation of the verification outcome.")
 
 
-# ─── AI-004 Attachment Validation (deterministic — metadata only in pilot) ────
+# ─── AI-004 Attachment Validation (deterministic — real MIME attachments) ────
 
 
 class AttachmentAssessment(BaseModel):
-    """AI-004 output: attachment expectation vs presence (no file bytes in the pilot)."""
+    """AI-004 output: the received attachment(s) checked against the intent's expected form.
 
-    attachments_present: int = Field(default=0, description="Count of attachment markers detected.")
-    expected_document: str = Field(default="none", description="Document expected for the primary intent, or 'none'.")
+    Field values are checked for PRESENCE only, never semantic correctness — ``notes`` always
+    says so wherever it matters (TODO 4 rule 7 / implementation rule 5).
+    """
+
+    attachments_present: int = Field(default=0, description="Count of real attachments detected on this message.")
+    expected_document: str = Field(default="none", description="Form name expected for the primary intent, or 'none'.")
     status: str = Field(
         default="not_applicable",
         description=(
-            "missing | present | not_applicable. Pilot scope: any detected attachment marker is treated "
-            "as present and accepted — this is presence-of-marker only, never byte-level inspection."
+            "valid | incomplete | wrong_form | unreadable | missing | not_applicable. valid = matching "
+            "form, every expected field present (content not semantically checked); incomplete = matching "
+            "form with blank field(s); wrong_form = a different intent's form was received; unreadable = "
+            "attachment present but not decodable / not a recognisable HESTA form; missing = expected but "
+            "none received; not_applicable = no form expected for this intent."
         ),
+    )
+    form_id: str | None = Field(default=None, description="Form id actually matched/received, if any.")
+    form_name: str | None = Field(default=None, description="Human-readable name of the expected or received form.")
+    missing_fields: list[str] = Field(
+        default_factory=list, description="Field labels left blank on an 'incomplete' form."
+    )
+    received_filenames: list[str] = Field(
+        default_factory=list, description="Filenames of attachments received on this message."
     )
     notes: str = Field(default="", description="Explanation for a HESTA agent.")
 
@@ -181,6 +196,13 @@ class DraftEmail(BaseModel):
     verification_state: str = Field(description="verified | needs_verification — drives what the draft asks for.")
     kb_snippets_used: list[str] = Field(default_factory=list, description="Which inline HESTA snippets informed it.")
     assumptions: list[str] = Field(default_factory=list, description="Assumptions a human should confirm.")
+    enclosures: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Blank form file(s) a HESTA staff member must attach before sending — the agent never "
+            "transmits files itself, this is only a list of what to enclose."
+        ),
+    )
 
 
 class ReviewResult(BaseModel):

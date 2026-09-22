@@ -1,0 +1,36 @@
+From: Jason Reid <jason.reid@example.com>
+To: HESTA <hesta@hesta.com.au>
+Subject: Financial Hardship Form =?utf-8?b?4oCU?= member number 60050001
+Date: Fri, 29 May 2026 09:12:00 +1000
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="===============4439394430724156766=="
+
+--===============4439394430724156766==
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: 7bit
+
+Hi,
+
+I'm in financial hardship and struggling to pay my rent. I'd like to apply for an early release of my super. What are the eligibility criteria and how do I apply? Member number 60050001.
+
+Member number 60050001.
+
+Thanks,
+Jason Reid
+
+--===============4439394430724156766==
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment; filename="FH-HDS-V1.txt"
+MIME-Version: 1.0
+
+HESTA-FORM-ID: FH-HDS-V1
+HESTA-FORM-NAME: Financial Hardship Form
+----------------------------------------------------------
+Member name         : Jason Reid
+Member email        : jason.reid@example.com
+Member number       : 60050001
+Reason for hardship : Unable to pay rent and utility bills for the past two months due to reduced income
+----------------------------------------------------------
+
+--===============4439394430724156766==--

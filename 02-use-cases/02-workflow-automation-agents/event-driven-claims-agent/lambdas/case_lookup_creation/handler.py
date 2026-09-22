@@ -42,6 +42,8 @@ def _case_id(member_id: str) -> str:
 def _history_entry(
     entry_type: str, content: str, entry_id: str, runtime_version: str,
     intent_id: str | None = None, attachments_present: int | None = None,
+    attachment_status: str | None = None, form_id: str | None = None,
+    missing_fields: list[str] | None = None,
 ) -> dict:
     entry = {
         "entry_id": entry_id,
@@ -52,8 +54,16 @@ def _history_entry(
     }
     if intent_id:
         entry["intent_id"] = intent_id
+    # attachments_present stays for backward compatibility with existing rows; the validated
+    # status/form_id/missing_fields (TODO 4) are the fields _previously_valid() actually reads.
     if attachments_present is not None:
         entry["attachments_present"] = attachments_present
+    if attachment_status is not None:
+        entry["attachment_status"] = attachment_status
+    if form_id:
+        entry["form_id"] = form_id
+    if missing_fields:
+        entry["missing_fields"] = missing_fields
     return entry
 
 
@@ -153,6 +163,9 @@ def handler(event, context):
                 runtime_version,
                 intent_id=intent_id,
                 attachments_present=event.get("attachments_present", 0),
+                attachment_status=event.get("attachment_status"),
+                form_id=event.get("form_id"),
+                missing_fields=event.get("missing_fields"),
             )
         )
 
