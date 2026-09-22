@@ -21,6 +21,7 @@ Run:  python3 scripts/generate_sample_emails.py
 from __future__ import annotations
 
 import email.policy
+import json
 import os
 import sys
 from email.message import EmailMessage
@@ -31,6 +32,15 @@ from seed_hesta_members import MEMBERS  # noqa: E402
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "hesta-claimsagent"))
 from forms import catalog  # noqa: E402
 from intents import taxonomy  # noqa: E402
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas", "trigger"))
+try:
+    from handler import _from_address, parse_eml  # noqa: E402
+except ImportError as exc:  # pragma: no cover - depends on local environment
+    sys.exit(
+        f"generate_sample_emails.py: could not import lambdas/trigger/handler.py ({exc}). "
+        "Install boto3 (`pip install boto3`) to generate .dev.json payloads."
+    )
 
 BY_NUM = {m['member_id']: m for m in MEMBERS}
 
@@ -351,6 +361,24 @@ def _write_eml(out_dir: str, fname: str, data: bytes) -> None:
         fh.write(data)
 
 
+def _write_dev_json(out_dir: str, fname: str, eml_bytes: bytes) -> None:
+    """Write <fname minus .eml>.dev.json: the exact payload the Trigger Lambda would send for
+    this .eml, so pasting it into `agentcore dev` carries real attachments without S3. Reuses
+    parse_eml()/_from_address() (handler.py) rather than a second MIME parser."""
+    msg = email.message_from_bytes(eml_bytes, policy=email.policy.default)
+    body, attachments = parse_eml(msg)
+    payload = {
+        "prompt": body,
+        "claimant_email": _from_address(msg),
+        "source": f"eml:{fname}",
+        "attachments": attachments,
+    }
+    json_fname = fname[: -len(".eml")] + ".dev.json"
+    with open(os.path.join(out_dir, json_fname), "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(payload, fh, sort_keys=True, ensure_ascii=False)
+        fh.write("\n")
+
+
 def build_eml_fixtures() -> int:
     out = os.path.abspath(EML_OUT_DIR)
     os.makedirs(out, exist_ok=True)
@@ -363,7 +391,9 @@ def build_eml_fixtures() -> int:
         filled = _fill_form(intent_id, member, detail)
         subject = spec.get("subject") or f"{form_spec.name} — member number {num}"
         eml = _build_eml(member, subject, _eml_body(member, spec), (f"{form_spec.form_id}.txt", filled))
-        _write_eml(out, f"{_INTENT_CODE[intent_id]}_{num}_filled.eml", eml)
+        fname = f"{_INTENT_CODE[intent_id]}_{num}_filled.eml"
+        _write_eml(out, fname, eml)
+        _write_dev_json(out, fname, eml)
         written += 1
 
     # ── Failure fixtures (three is enough — TODO 7 rule 3) ──────────────────
@@ -377,17 +407,23 @@ def build_eml_fixtures() -> int:
         "death_benefit_nomination", bdbn_member, bdbn_detail, drop_field="Nomination details"
     )
     eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, (f"{bdbn_form.form_id}.txt", incomplete))
-    _write_eml(out, f"BDBN_{bdbn_num}_incomplete.eml", eml)
+    fname = f"BDBN_{bdbn_num}_incomplete.eml"
+    _write_eml(out, fname, eml)
+    _write_dev_json(out, fname, eml)
     written += 1
 
     fh_form = catalog.form_for("financial_hardship")
     wrong_form_text = _fill_form("financial_hardship", bdbn_member, "Struggling to pay rent and bills")
     eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, (f"{fh_form.form_id}.txt", wrong_form_text))
-    _write_eml(out, f"BDBN_{bdbn_num}_wrongform.eml", eml)
+    fname = f"BDBN_{bdbn_num}_wrongform.eml"
+    _write_eml(out, fname, eml)
+    _write_dev_json(out, fname, eml)
     written += 1
 
     eml = _build_eml(bdbn_member, bdbn_subject, bdbn_body, None)
-    _write_eml(out, f"BDBN_{bdbn_num}_noattachment.eml", eml)
+    fname = f"BDBN_{bdbn_num}_noattachment.eml"
+    _write_eml(out, fname, eml)
+    _write_dev_json(out, fname, eml)
     written += 1
 
     print(f"Wrote {written} .eml fixtures to {out}")
@@ -411,14 +447,15 @@ def main() -> None:
         with open(os.path.join(out, fname), "w", encoding="utf-8") as fh:
             fh.write(content)
         written += 1
-    print(f"✅ Wrote {written} sample emails to {out}")
-    if skipped_no_member:
-        print(f"⚠️ Skipped (no seeded member): {sorted(skipped_no_member)}")
-    missing = set(BY_NUM) - set(SPECS)
-    if missing:
-        print(f"⚠️ No spec for members: {sorted(missing)}")
 
     build_eml_fixtures()
+
+    print(f"Wrote {written} sample emails to {out}")
+    if skipped_no_member:
+        print(f"Skipped (no seeded member): {sorted(skipped_no_member)}")
+    missing = set(BY_NUM) - set(SPECS)
+    if missing:
+        print(f"No spec for members: {sorted(missing)}")
 
 
 if __name__ == "__main__":

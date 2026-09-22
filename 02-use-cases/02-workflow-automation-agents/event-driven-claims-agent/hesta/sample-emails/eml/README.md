@@ -43,6 +43,33 @@ python3 scripts/generate_sample_emails.py
 Regeneration is idempotent — the only byte-level difference between runs is the
 random MIME boundary string; `git diff` on these files should otherwise be empty.
 
+The same run also (re)writes a `<name>.dev.json` next to every `<name>.eml` —
+see "Testing in agentcore dev" below.
+
+## Testing in agentcore dev
+
+`agentcore dev` bypasses the Trigger Lambda, so pasting a raw `.eml` file's
+text straight into the prompt box arrives as plain text with zero
+attachments — the Lambda is what parses MIME attachments in production
+(`lambdas/trigger/handler.py::parse_eml`).
+
+Each `<name>.eml` has a matching `<name>.dev.json`: the same JSON payload the
+Trigger Lambda would send to the Runtime for that `.eml` (minus
+`idempotency_key`/`source_object_id`, which only make sense for a real S3
+object), generated from the same `parse_eml()`/`_from_address()` so it can
+never drift from what production does. To test:
+
+1. Start `agentcore dev`.
+2. Open the fixture's `.dev.json` (e.g. `BDBN_60010001_filled.dev.json`).
+3. Paste its whole single-line contents into the prompt box.
+
+`main.py::_parse_payload` unwraps a JSON string sent in `prompt`, so the agent
+sees the same `attachments` array it would from a real S3 delivery.
+
+Note: re-pasting the identical payload may be treated as a duplicate by the
+case-history dedup — that's expected, the same as redelivering the same S3
+object.
+
 ## Dropping one into S3 (manual test)
 
 ```bash
