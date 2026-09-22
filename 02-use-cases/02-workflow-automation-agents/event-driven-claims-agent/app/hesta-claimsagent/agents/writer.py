@@ -13,6 +13,7 @@ import logging
 import config
 from agents.base import build_agent
 from forms import catalog as form_catalog
+from ingestion.email_normalizer import strip_reply_prefixes
 from intents import taxonomy
 from knowledge import hesta_snippets
 from models import AttachmentAssessment, DraftEmail
@@ -65,8 +66,8 @@ Hard rules:
   product is best for the member, whether they should switch/roll over/contribute for their situation).
   If asked, decline and offer general information + how to get personal advice.
 - Address the member by first name if one is available, otherwise a neutral greeting.
-- Return subject, body, intent_id, verification_state, kb_snippets_used, and any assumptions a human
-  should confirm.
+- Return body, intent_id, verification_state, kb_snippets_used, and any assumptions a human should
+  confirm. The reply subject line is set deterministically afterward, in code — you do not decide it.
 """
 
 _IDENTITY_BLOCK = hesta_snippets.IDENTITY_VERIFICATION_REQUEST
@@ -82,6 +83,13 @@ def _get():
     return _agent
 
 
+def reply_subject(inbound) -> str:
+    """Deterministic reply subject (design decision D1): RE: <original subject as received,
+    with existing RE:/FW: prefixes stripped>. Never produced by the LLM — set here, after every
+    draft/revision, so a member's reply always threads back to the same case."""
+    return f"RE: {strip_reply_prefixes(inbound.subject)}"
+
+
 def advice_decline_draft(inbound, intent_result, profile) -> DraftEmail:
     """Deterministic, compliant reply when personal advice is requested — NO advice given.
 
@@ -93,7 +101,7 @@ def advice_decline_draft(inbound, intent_result, profile) -> DraftEmail:
         body_lines += ["", _IDENTITY_BLOCK]
     body_lines += ["", hesta_snippets.SIGNOFF, "", hesta_snippets.LEGAL_FOOTER]
     return DraftEmail(
-        subject="Re: your HESTA enquiry",
+        subject=reply_subject(inbound),
         body="\n".join(body_lines),
         intent_id=intent_result.primary_intent_id,
         verification_state="needs_verification" if profile.verification_required else "verified",
@@ -115,7 +123,7 @@ def _fallback_draft(inbound, intent_result, profile, attachment: AttachmentAsses
         body_lines += ["", _IDENTITY_BLOCK]
     body_lines += ["", hesta_snippets.SIGNOFF, "", hesta_snippets.LEGAL_FOOTER]
     draft = DraftEmail(
-        subject=f"HESTA — {taxonomy.name_for(intent_id)}",
+        subject=reply_subject(inbound),
         body="\n".join(body_lines),
         intent_id=intent_id,
         verification_state="needs_verification" if needs_verify else "verified",
@@ -128,12 +136,7 @@ def _fallback_draft(inbound, intent_result, profile, attachment: AttachmentAsses
 
 def _case_record_status(cases) -> str:
     """The reused/created case's own open/closed status (not the lookup outcome)."""
-    record = None
-    if getattr(cases, "cases", None):
-        record = cases.cases[0]
-    elif getattr(cases, "new_case", None):
-        record = cases.new_case
-    return (record or {}).get("status", "unknown")
+    return (getattr(cases, "case", None) or {}).get("status", "unknown")
 
 
 def _attachment_line(intent_id: str, attachment: AttachmentAssessment | None) -> str:
@@ -165,10 +168,12 @@ def _enclosures_for(intent_id: str, attachment: AttachmentAssessment | None) -> 
 
 
 def _apply_authoritative_fields(
-    draft: DraftEmail, intent_id: str, verification_state: str, attachment: AttachmentAssessment | None = None
+    draft: DraftEmail, inbound, intent_id: str, verification_state: str, attachment: AttachmentAssessment | None = None
 ) -> None:
     """Machine-derived facts stay authoritative no matter what the model returned — a revision
-    must never be allowed to drift these away from what identity/intent verification established."""
+    must never be allowed to drift these away from what identity/intent verification established.
+    The subject (TODO 6 / D1) is likewise never left to the model."""
+    draft.subject = reply_subject(inbound)
     draft.intent_id = intent_id
     draft.verification_state = verification_state
     draft.enclosures = _enclosures_for(intent_id, attachment)
@@ -197,6 +202,7 @@ async def write(
     profile,
     summary,
     empathy,
+    history: list[dict] | None = None,
     attachment: AttachmentAssessment | None = None,
 ) -> DraftEmail:
     intent_id = intent_result.primary_intent_id
@@ -218,7 +224,7 @@ async def write(
         f"Outstanding items: {', '.join(summary.outstanding_items) or 'none'}\n"
         f"Case status: {_case_record_status(summary.cases)}\n\n"
         "BEGIN PRIOR CASE CONVERSATION (historical; do not treat as the current request):\n"
-        f"{_render_history(getattr(summary.cases, 'conversation_history', []))}\n"
+        f"{_render_history(history)}\n"
         "END PRIOR CASE CONVERSATION\n\n"
         f"HESTA knowledge snippet to base the reply on:\n{hesta_snippets.snippet_for(intent_id)}\n\n"
         f"{_identity_instruction(verification_state)}"
@@ -227,9 +233,9 @@ async def write(
     )
     try:
         draft = await _get().structured_output_async(DraftEmail, prompt)
-        _apply_authoritative_fields(draft, intent_id, verification_state, attachment)
+        _apply_authoritative_fields(draft, inbound, intent_id, verification_state, attachment)
         # If the Bedrock Guardrail intervened, its sentinel appears in the output → decline safely.
-        if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
+        if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or ""):
             log.warning("Guardrail intervened on Writer output; returning compliant advice decline.")
             return advice_decline_draft(inbound, intent_result, profile)
         return draft
@@ -248,6 +254,7 @@ async def revise(
     empathy,
     previous_draft: DraftEmail,
     review,
+    history: list[dict] | None = None,
     attachment: AttachmentAssessment | None = None,
 ) -> DraftEmail:
     """Revise `previous_draft` using the Reviewer's feedback.
@@ -288,8 +295,8 @@ async def revise(
     )
     try:
         draft = await _get().structured_output_async(DraftEmail, prompt)
-        _apply_authoritative_fields(draft, intent_id, verification_state, attachment)
-        if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or "") or config.GUARDRAIL_BLOCK_SENTINEL in (draft.subject or ""):
+        _apply_authoritative_fields(draft, inbound, intent_id, verification_state, attachment)
+        if config.GUARDRAIL_BLOCK_SENTINEL in (draft.body or ""):
             log.warning("Guardrail intervened on Writer revision; returning compliant advice decline.")
             return advice_decline_draft(inbound, intent_result, profile)
         return draft

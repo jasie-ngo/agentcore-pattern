@@ -233,6 +233,61 @@ class HandlerIntegrationTests(unittest.TestCase):
         self.assertEqual(self.captured_payload["attachments"], [])
         self.assertIn("My basement flooded", self.captured_payload["prompt"])
 
+    def test_eml_subject_is_delivered_in_the_payload(self):
+        """TODO 1: the case key depends on the subject reaching the Runtime payload."""
+        msg = _make_mime_message("Please find attached my form.")
+        self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(msg.as_bytes()), "ETag": '"abc"'}
+        self.trigger_handler.handler(self._event(), None)
+        self.assertEqual(self.captured_payload["subject"], "Binding Death Nomination")
+
+    def test_eml_contact_form_shaped_body_still_uses_the_mime_subject(self):
+        """Regression: a MIME .eml whose body happens to look like a contact-form forward must
+        still report the REAL Subject: header, not "" — is_hesta_form_format only inspects the
+        body text, which has no bearing on the actual MIME Subject header."""
+        msg = email.message.EmailMessage(policy=email.policy.default)
+        msg["From"] = "Sarah Thompson <sarah@example.com>"
+        msg["Subject"] = "Fwd: Contact us submission"
+        msg.set_content(
+            "You've received a new form based mail from https://example\n"
+            "Values:\nenquiry-sent-from : A member\nemail-address : sarah@example.com\n"
+            "member-number : 60010001\nname : Sarah\nphone :\nreason-for-enquiry : Other\n"
+            "message : hi\n"
+        )
+        msg.make_mixed()
+        self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(msg.as_bytes()), "ETag": '"x"'}
+        self.trigger_handler.handler(self._event(), None)
+        self.assertEqual(self.captured_payload["subject"], "Fwd: Contact us submission")
+
+    def test_eml_header_shaped_body_still_uses_the_mime_subject(self):
+        """Regression: a MIME .eml whose body text itself starts with From:/Subject: lines
+        (e.g. a quoted inner message) must still report the REAL Subject: header, not one
+        parsed out of the body text."""
+        msg = email.message.EmailMessage(policy=email.policy.default)
+        msg["From"] = "Sarah Thompson <sarah@example.com>"
+        msg["Subject"] = "RE: Binding nomination"
+        msg.set_content("From: someone@else.com\nSubject: quoted inner subject\n\nSee below.")
+        msg.make_mixed()
+        self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(msg.as_bytes()), "ETag": '"x"'}
+        self.trigger_handler.handler(self._event(), None)
+        self.assertEqual(self.captured_payload["subject"], "RE: Binding nomination")
+
+    def test_legacy_txt_subject_is_delivered_in_the_payload(self):
+        content = b"From: a@b.com\nSubject: RE: Binding nomination\n\nMy basement flooded."
+        self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(content), "ETag": '"x"'}
+        self.trigger_handler.handler(self._event(), None)
+        self.assertEqual(self.captured_payload["subject"], "RE: Binding nomination")
+
+    def test_contact_form_subject_is_omitted(self):
+        content = (
+            b"You've received a new form based mail from https://example\n"
+            b"Values:\nenquiry-sent-from : A member\nemail-address : a@b.com\n"
+            b"member-number : 60010001\nname : A\nphone :\nreason-for-enquiry : Other\n"
+            b"message : hi\n"
+        )
+        self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(content), "ETag": '"x"'}
+        self.trigger_handler.handler(self._event(), None)
+        self.assertEqual(self.captured_payload["subject"], "")
+
     def test_binary_object_is_a_handled_failure_not_a_crash(self):
         binary = b"\xff\xfe\x00\x01not valid utf-8 or mime \x80\x81"
         self.trigger_handler.s3.get_object.return_value = {"Body": _FakeBody(binary), "ETag": '"y"'}

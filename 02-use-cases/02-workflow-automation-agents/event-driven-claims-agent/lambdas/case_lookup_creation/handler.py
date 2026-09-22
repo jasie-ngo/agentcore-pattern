@@ -3,182 +3,140 @@ import os
 from datetime import datetime, timezone
 
 import boto3
-from boto3.dynamodb.conditions import Key
 from botocore.exceptions import ClientError
 
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(os.environ.get("HESTA_CASES_TABLE", "Hesta-cases"))
-
-_MAX_HISTORY_ENTRIES = 30
-_MAX_HISTORY_ENTRY_BYTES = 8_000
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _idempotency_key(event: dict) -> str:
-    explicit = event.get("idempotency_key")
-    if explicit:
-        return str(explicit)
-    source = event.get("source_object_id") or event.get("source") or ""
-    message = event.get("inbound_email") or ""
-    return hashlib.sha256(f"{source}\n{message}".encode("utf-8")).hexdigest()
+def _case_id(member_id: str, thread_key: str) -> str:
+    """Deterministic per-(member, email thread) case id.
 
-
-def _case_id(member_id: str) -> str:
-    """Deterministic per-member case id.
-
-    A member has exactly one case for the life of the relationship, so the id
-    depends only on member_id — not on intent or idempotency_key. That is what
-    makes concurrent first-contact creation for the same never-before-seen
-    member race-safe: two concurrent invocations compute the SAME case_id and
-    collide on the same conditional put_item instead of creating two cases.
+    A case is now identified by the verified member id + the normalized email subject
+    (thread_key) — a member can have several concurrent cases, one per thread. Deterministic
+    so concurrent first contacts on the same thread still collide on the same conditional
+    put_item and resolve to one case, rather than creating two.
     """
-    value = hashlib.sha256(member_id.encode("utf-8")).hexdigest()
+    value = hashlib.sha256(f"{member_id}\n{thread_key}".encode("utf-8")).hexdigest()
     return f"CASE-{value[:20].upper()}"
 
 
-def _history_entry(
-    entry_type: str, content: str, entry_id: str, runtime_version: str,
-    intent_id: str | None = None, attachments_present: int | None = None,
-    attachment_status: str | None = None, form_id: str | None = None,
-    missing_fields: list[str] | None = None,
-) -> dict:
-    entry = {
-        "entry_id": entry_id,
-        "entry_type": entry_type,
-        "content": content[:_MAX_HISTORY_ENTRY_BYTES],
-        "timestamp": _now(),
-        "pipeline_version": runtime_version,
-    }
-    if intent_id:
-        entry["intent_id"] = intent_id
-    # attachments_present stays for backward compatibility with existing rows; the validated
-    # status/form_id/missing_fields (TODO 4) are the fields _previously_valid() actually reads.
-    if attachments_present is not None:
-        entry["attachments_present"] = attachments_present
-    if attachment_status is not None:
-        entry["attachment_status"] = attachment_status
-    if form_id:
-        entry["form_id"] = form_id
-    if missing_fields:
-        entry["missing_fields"] = missing_fields
-    return entry
+# The only two persisted statuses. "valid" wins forever once set (D7); a non-"valid" status
+# sent for a form_id is stored as this generic tag — enough for staff visibility ("a form did
+# arrive, it just wasn't usable") without needing to persist every intermediate reason.
+_RECEIVED_NOT_VALID = "received_not_valid"
 
 
-def _append_history(case_id: str, entries: list[dict], retries: int = 1) -> dict:
-    """Append entries atomically; a duplicate entry_id is a successful no-op.
+def _update_case_facts(case_id: str, case_facts: dict) -> dict:
+    """Update last_intent_id/last_contact_at and any forms_on_file entries.
 
-    Every entry's content is capped here (not just at case-creation via `_history_entry`) —
-    this is the only path that ever runs for a reused case's inbound entry, and for every
-    draft/review entry regardless of whether the case is new or reused, so the cap must be
-    enforced here to actually bound every entry that reaches DynamoDB.
+    The primary update (last_intent_id, last_contact_at, and any *valid* forms) is a single,
+    unconditional ``update_item`` with no prior read — writing "valid" is idempotent regardless
+    of the form's previous status, so it's always race-free. ``forms_on_file`` always exists on
+    a case (initialised to ``{}`` at creation), so the nested path is always valid to SET into.
+
+    A non-valid form status is recorded as ``received_not_valid`` via its OWN small conditional
+    update, separate from the primary one — its ConditionExpression refuses to downgrade a
+    form that's already "valid" (a member re-sending a stale/broken copy after successfully
+    validating must never appear to un-validate it). That check is scoped to just this one
+    attribute, so it can never block the primary update (last_intent_id/last_contact_at/other
+    forms) from landing, and needs no prior read either — DynamoDB evaluates the condition
+    against the item as it stands at write time.
     """
-    item = table.get_item(Key={"case_id": case_id}).get("Item")
-    if not item:
-        return {"error": "Case not found"}
+    set_clauses = ["last_contact_at = :now"]
+    expr_names: dict = {}
+    expr_values = {":now": _now()}
 
-    history = item.get("conversation_history", [])
-    known_ids = {entry.get("entry_id") for entry in history}
-    new_entries = []
-    for entry in entries:
-        if entry.get("entry_id") in known_ids:
-            continue
-        content = entry.get("content")
-        if isinstance(content, str) and len(content) > _MAX_HISTORY_ENTRY_BYTES:
-            entry = {**entry, "content": content[:_MAX_HISTORY_ENTRY_BYTES]}
-        new_entries.append(entry)
-    if not new_entries:
-        return {"status": "history_unchanged", "case": item, "case_id": case_id}
+    last_intent_id = case_facts.get("last_intent_id")
+    if last_intent_id:
+        set_clauses.append("last_intent_id = :last_intent_id")
+        expr_values[":last_intent_id"] = last_intent_id
 
-    kept = (history + new_entries)[-_MAX_HISTORY_ENTRIES:]
+    forms_update = case_facts.get("forms_on_file") or {}
+    valid_form_ids = [form_id for form_id, status in forms_update.items() if status == "valid"]
+    non_valid_forms = [(form_id, status) for form_id, status in forms_update.items() if status != "valid"]
+
+    for i, form_id in enumerate(valid_form_ids):
+        name_key, value_key = f"#f{i}", f":f{i}"
+        expr_names[name_key] = form_id
+        expr_values[value_key] = "valid"
+        set_clauses.append(f"forms_on_file.{name_key} = {value_key}")
+
+    kwargs = {
+        "Key": {"case_id": case_id},
+        "UpdateExpression": "SET " + ", ".join(set_clauses),
+        "ConditionExpression": "attribute_exists(case_id)",
+        "ExpressionAttributeValues": expr_values,
+        "ReturnValues": "ALL_NEW",
+    }
+    if expr_names:
+        kwargs["ExpressionAttributeNames"] = expr_names
+
     try:
-        response = table.update_item(
-            Key={"case_id": case_id},
-            UpdateExpression="SET conversation_history = :history, history_revision = :next_revision",
-            ConditionExpression="attribute_not_exists(history_revision) OR history_revision = :revision",
-            ExpressionAttributeValues={
-                ":history": kept,
-                ":revision": item.get("history_revision", 0),
-                ":next_revision": item.get("history_revision", 0) + 1,
-            },
-            ReturnValues="ALL_NEW",
-        )
-        updated = response.get("Attributes", {**item, "conversation_history": kept})
-        updated["history_revision"] = item.get("history_revision", 0) + 1
-        return {"status": "history_appended", "case": updated, "case_id": case_id}
+        response = table.update_item(**kwargs)
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") == "ConditionalCheckFailedException":
-            if retries:
-                return _append_history(case_id, entries, retries=retries - 1)
-            raise
+            return {"error": "Case not found"}
         raise
+    updated = response.get("Attributes", {})
+
+    for form_id, _status in non_valid_forms:
+        try:
+            response = table.update_item(
+                Key={"case_id": case_id},
+                UpdateExpression="SET forms_on_file.#fid = :status",
+                ConditionExpression="attribute_not_exists(forms_on_file.#fid) OR forms_on_file.#fid <> :valid",
+                ExpressionAttributeNames={"#fid": form_id},
+                ExpressionAttributeValues={":status": _RECEIVED_NOT_VALID, ":valid": "valid"},
+                ReturnValues="ALL_NEW",
+            )
+            updated = response.get("Attributes", updated)
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") != "ConditionalCheckFailedException":
+                raise
+            # Already "valid" — leave it alone; this is the intended outcome, not a failure.
+
+    return {"status": "facts_updated", "case": updated, "case_id": case_id}
 
 
 def handler(event, context):
     event = event or {}
 
-    # History updates are also used after drafting and do not perform a new lookup.
-    if event.get("case_id") and event.get("history_entries"):
-        return _append_history(event["case_id"], event["history_entries"])
+    # Case-facts updates (after drafting) do not perform a new lookup.
+    if event.get("case_id") and event.get("case_facts"):
+        return _update_case_facts(event["case_id"], event["case_facts"])
 
     member_id = event.get("member_id")
     if not member_id:
         return {"error": "verified member_id required; case lookup skipped"}
 
-    intent_id = event.get("primary_intent_id") or "other_unknown"
-    idempotency_key = _idempotency_key(event)
-    response = table.query(
-        IndexName="member_id-index",
-        KeyConditionExpression=Key("member_id").eq(member_id),
-    )
-    items = response.get("Items", [])
+    thread_key = event.get("thread_key")
+    if thread_key is None:
+        return {"error": "thread_key required; case lookup skipped"}
 
-    # One case per member for the life of the relationship: reuse it regardless
-    # of its stored intent or status (open/closed). Deterministic tie-break
-    # (earliest created) covers legacy data that predates this rule.
-    existing = sorted(
-        items,
-        key=lambda item: (item.get("created_at", ""), item.get("case_id", "")),
-    )[0] if items else None
+    case_id = _case_id(member_id, thread_key)
+    existing = table.get_item(Key={"case_id": case_id}).get("Item")
     if existing:
-        return {
-            "status": "existing_cases_found",
-            "case_id": existing["case_id"],
-            "cases": [existing],
-            "conversation_history": existing.get("conversation_history", []),
-        }
+        return {"status": "existing_case_found", "case_id": case_id, "case": existing}
 
-    case_id = _case_id(member_id)
-    runtime_version = event.get("pipeline_version", "hesta-v2")
-    inbound = event.get("inbound_email")
-    history = []
-    if inbound:
-        history.append(
-            _history_entry(
-                "inbound_member_email",
-                str(inbound),
-                f"{idempotency_key}:inbound",
-                runtime_version,
-                intent_id=intent_id,
-                attachments_present=event.get("attachments_present", 0),
-                attachment_status=event.get("attachment_status"),
-                form_id=event.get("form_id"),
-                missing_fields=event.get("missing_fields"),
-            )
-        )
-
+    intent_id = event.get("primary_intent_id") or "other_unknown"
+    now = _now()
     new_case = {
         "case_id": case_id,
         "member_id": member_id,
-        "primary_intent_id": intent_id,
-        "idempotency_key": idempotency_key,
+        "thread_key": thread_key,
+        "subject": event.get("subject") or "",
         "status": "Open",
         "identity_status": "verified",
-        "conversation_history": history,
-        "history_revision": 0,
-        "created_at": _now(),
+        "primary_intent_id": intent_id,
+        "last_intent_id": intent_id,
+        "created_at": now,
+        "last_contact_at": now,
+        "forms_on_file": {},
     }
     if event.get("sender_email"):
         new_case["sender_email"] = event["sender_email"]
@@ -194,16 +152,6 @@ def handler(event, context):
         existing = table.get_item(Key={"case_id": case_id}).get("Item")
         if not existing:
             raise
-        return {
-            "status": "existing_cases_found",
-            "case_id": case_id,
-            "cases": [existing],
-            "conversation_history": existing.get("conversation_history", []),
-        }
+        return {"status": "existing_case_found", "case_id": case_id, "case": existing}
 
-    return {
-        "status": "new_case_created",
-        "case_id": case_id,
-        "case": new_case,
-        "conversation_history": history,
-    }
+    return {"status": "new_case_created", "case_id": case_id, "case": new_case}

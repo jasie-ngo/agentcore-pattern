@@ -10,7 +10,7 @@ import config  # noqa: E402
 from agents import disclosure_check  # noqa: E402
 from agents.attachment_validation import assess  # noqa: E402
 from forms import catalog, parser  # noqa: E402
-from ingestion.email_normalizer import normalize_email  # noqa: E402
+from ingestion.email_normalizer import normalize_email, normalize_subject, strip_reply_prefixes  # noqa: E402
 from knowledge import hesta_snippets  # noqa: E402
 from models import AttachmentAssessment, MemberProfile  # noqa: E402
 from intents import taxonomy  # noqa: E402
@@ -162,12 +162,12 @@ class HestaModelTests(unittest.TestCase):
         result = assess(inbound, _FakeIntent("other_unknown"))
         self.assertEqual(result.status, "not_applicable")
 
-    def test_missing_attachment_satisfied_by_earlier_valid_form_in_case_history(self):
+    def test_missing_attachment_satisfied_by_earlier_valid_form_on_the_case(self):
         """A follow-up with no new attachment doesn't re-flag as missing if the case's
-        history shows a *validated valid* form on file earlier — case-wide."""
+        forms_on_file shows a *validated valid* form earlier — case-wide (D7/TODO 5)."""
         inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
-        case_history = [{"entry_type": "inbound_member_email", "attachment_status": "valid"}]
-        result = assess(inbound, _FakeIntent("death_benefit_nomination"), case_history=case_history)
+        forms_on_file = {"BDBN-NOM-V1": "valid"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
         self.assertEqual(result.status, "valid")
         self.assertEqual(result.attachments_present, 0)
         self.assertIn("already on file", result.notes)
@@ -176,18 +176,74 @@ class HestaModelTests(unittest.TestCase):
         """TODO 4 rule 5: raising the bar — a previously incomplete/wrong form does NOT
         count as already on file, only a previously valid one does."""
         inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
-        case_history = [{"entry_type": "inbound_member_email", "attachment_status": "incomplete"}]
-        result = assess(inbound, _FakeIntent("death_benefit_nomination"), case_history=case_history)
+        forms_on_file = {"BDBN-NOM-V1": "incomplete"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
         self.assertEqual(result.status, "missing")
 
-    def test_missing_attachment_with_no_prior_history_stays_missing(self):
-        inbound = normalize_email("Please send my BDBN form. Member number 60010001.", attachments=[])
-        result = assess(
-            inbound,
-            _FakeIntent("death_benefit_nomination"),
-            case_history=[{"entry_type": "inbound_member_email", "attachment_status": "missing"}],
-        )
+    def test_missing_attachment_not_satisfied_by_a_received_not_valid_tag(self):
+        """The case Lambda persists a non-valid status as the generic 'received_not_valid' tag
+        (never the raw incomplete/wrong_form/unreadable string) — that must not satisfy
+        _previously_valid either."""
+        inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
+        forms_on_file = {"BDBN-NOM-V1": "received_not_valid"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
         self.assertEqual(result.status, "missing")
+
+    def test_missing_attachment_with_no_prior_forms_stays_missing(self):
+        inbound = normalize_email("Please send my BDBN form. Member number 60010001.", attachments=[])
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file={})
+        self.assertEqual(result.status, "missing")
+
+
+class SubjectNormalizationTests(unittest.TestCase):
+    """TODO 1: the case key depends on subject normalization being exactly reproducible."""
+
+    def test_prefix_variants_yield_the_same_thread_key(self):
+        variants = [
+            "Binding nomination",
+            "RE: Binding nomination",
+            "Re: RE: binding  nomination",
+            "FW: Binding nomination",
+            "Fwd: fw: RE: Binding   Nomination",
+            "[EXTERNAL] Binding nomination",
+            "[EXTERNAL] RE: Binding nomination",
+            "RE: [EXTERNAL] Binding nomination",
+            "[external] Re: [EXTERNAL] Fwd: Binding nomination",
+        ]
+        keys = {normalize_subject(v) for v in variants}
+        self.assertEqual(len(keys), 1)
+
+    def test_strip_reply_prefixes_removes_external_tag_in_any_order(self):
+        self.assertEqual(strip_reply_prefixes("[EXTERNAL] Binding nomination"), "Binding nomination")
+        self.assertEqual(strip_reply_prefixes("RE: [EXTERNAL] Binding nomination"), "Binding nomination")
+        self.assertEqual(
+            strip_reply_prefixes("[EXTERNAL] RE: RE: Binding nomination"), "Binding nomination"
+        )
+
+    def test_normalize_subject_casefolds_and_collapses_whitespace(self):
+        self.assertEqual(normalize_subject("  Binding   Nomination  "), "binding nomination")
+
+    def test_blank_subject_normalizes_to_empty_string(self):
+        self.assertEqual(normalize_subject(""), "")
+        self.assertEqual(normalize_subject(None), "")
+
+    def test_inbound_thread_key_matches_normalize_subject(self):
+        inbound = normalize_email("hi", subject="RE: Binding nomination")
+        self.assertEqual(inbound.thread_key, normalize_subject("RE: Binding nomination"))
+
+    def test_strip_reply_prefixes_preserves_casing_and_whitespace(self):
+        self.assertEqual(strip_reply_prefixes("RE: RE:  Binding  Nomination"), "Binding  Nomination")
+
+    def test_reply_subject_thread_key_matches_original_subjects_thread_key(self):
+        """TODO 6 acceptance criterion: normalize_subject(draft.subject) == inbound.thread_key."""
+        from agents.writer import reply_subject
+
+        class _FakeInbound:
+            subject = "RE: RE: Binding nomination"
+
+        draft_subject = reply_subject(_FakeInbound())
+        self.assertEqual(draft_subject, "RE: Binding nomination")
+        self.assertEqual(normalize_subject(draft_subject), normalize_subject(_FakeInbound.subject))
 
 
 class FormCatalogTests(unittest.TestCase):

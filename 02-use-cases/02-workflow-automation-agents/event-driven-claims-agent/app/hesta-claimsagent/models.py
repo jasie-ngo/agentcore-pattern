@@ -64,14 +64,26 @@ class IdentityInfo(BaseModel):
 
 
 class CaseInfo(BaseModel):
-    """Case data from case_lookup_creation."""
+    """Case data from case_lookup_creation.
 
-    status: str = Field(default="unavailable", description="existing_cases_found | new_case_created | unavailable")
-    cases: list[dict] = Field(default_factory=list, description="Existing cases, if any.")
-    new_case: dict | None = Field(default=None, description="Newly created case, if applicable.")
+    The case record holds only small state (D7) — the conversation itself lives in AgentCore
+    Memory, loaded separately (memory/session.py::load_thread) and passed alongside this.
+    """
+
+    status: str = Field(
+        default="unavailable",
+        description="existing_case_found | new_case_created | identity_unverified | unavailable | error",
+    )
+    case: dict | None = Field(default=None, description="The resolved or newly created case record.")
     case_id: str | None = Field(default=None, description="Selected or created case identifier.")
-    conversation_history: list[dict] = Field(
-        default_factory=list, description="Bounded prior conversation entries for the selected case."
+    thread_key: str | None = Field(default=None, description="Normalized subject identifying this case's thread.")
+    subject: str | None = Field(default=None, description="Original (un-normalized) email subject.")
+    forms_on_file: dict = Field(
+        default_factory=dict,
+        description=(
+            "form_id -> 'valid' (never reverted once set) or 'received_not_valid' (the form "
+            "arrived but wasn't complete)."
+        ),
     )
     error: str | None = Field(default=None, description="Error message if lookup failed.")
 
@@ -190,7 +202,9 @@ class EmpathyAssessment(BaseModel):
 class DraftEmail(BaseModel):
     """AI-011 output. In the pilot this is DISPLAYED as agent output — never auto-sent."""
 
-    subject: str = Field(description="Reply subject line.")
+    subject: str = Field(
+        default="", description="Ignored — the reply subject is always set deterministically in code (D1)."
+    )
     body: str = Field(description="Full HESTA-voice reply for a staff member to review and send.")
     intent_id: str = Field(description="The intent this reply addresses.")
     verification_state: str = Field(description="verified | needs_verification — drives what the draft asks for.")

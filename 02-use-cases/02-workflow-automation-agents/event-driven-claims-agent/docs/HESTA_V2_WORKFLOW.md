@@ -164,30 +164,40 @@ Before any model call, `normalize_email()` converts the raw input into an
 This step is deterministic and does not use an LLM. The trigger Lambda is not
 responsible for this normalization; it only forwards the object content.
 
-## 5. Memory session is selected
+## 5. Memory session is case-derived
 
 **AWS service:** AgentCore Memory.  
 **Code:** `memory/session.py` and `main.py`.
 
-The Runtime chooses a stable actor key from:
+Unlike phases 1–4 below, this is not a fixed early step — it happens partway
+through Phase 1 (§7.2), immediately after case lookup, because the Memory
+session id is derived from the resolved case id
+([ADR-0015](decisions/0015-subject-threaded-cases-memory-conversation.md)):
 
-1. the normalized member number, or
-2. the sender email, or
-3. `anonymous` when neither is available.
+* `actor_id = safe_memory_id(member_id)`
+* `session_id = safe_memory_id(case_id)` — stable for the life of the case
+  (every email on the same case shares one Memory session), NOT one per
+  invocation
 
-The identifier is sanitized for AgentCore Memory. A new session ID is created
-for each invocation, while the actor ID allows cross-session recall.
+Only a verified member with a resolved case gets a Memory session — an
+unverified sender gets neither a case nor a session.
 
 The configured Memory resource uses:
 
-* a semantic strategy for member facts
-* a summarization strategy for session history
-* a 90-day event expiry
+* a semantic strategy for member facts (`claims/{actorId}/facts`)
+* a summarization strategy, now effectively a per-case summary since the
+  session id is stable (`claims/{actorId}/{sessionId}`)
+* the existing event expiry configured in `agentcore/agentcore.json`
+  (unchanged — this is a POC, not tuned here)
 
-If Memory cannot be initialized, processing continues without recall and the
-Runtime logs the condition. After the Context Manager produces its summary, the
-current interaction is explicitly recorded because structured-output calls do
-not automatically trigger the session manager's write hook.
+If `MEMORY_ID` is not configured, processing continues without recall and the
+Runtime logs the condition — this is the same graceful degradation as before.
+What changed is that a *configured* Memory session that fails to **load** is
+no longer silently swallowed into an empty history: the Runtime surfaces
+"prior conversation could not be loaded" so a follow-up is never mistaken for
+a first contact. After the pipeline drafts and reviews a reply, the inbound
+email, the draft, and the review outcome are each written as one Memory event
+(`memory/session.py::append_turns`) — see §7.2.
 
 ## 6. Gateway session and authentication
 
@@ -247,13 +257,18 @@ personal-advice request.
 AWS Lambda, DynamoDB.  
 **Code:** `agents/context_manager.py`.
 
-The Context Manager creates a concise operational summary containing:
+The Context Manager is split into a deterministic `lookup()` step and an LLM
+`summarize()` step (`agents/context_manager.py`), so the Runtime can load this
+case's Memory conversation in between them — the case id `lookup()` resolves
+is what the Memory session id is derived from (§5):
 
-* what the member wants
-* the conversation state
-* outstanding items
-
-It then performs two deterministic Gateway tool calls.
+1. `lookup()` — two deterministic Gateway tool calls (below); no LLM.
+2. The Runtime derives the Memory actor/session from the result and loads the
+   case's prior conversation (`memory/session.py::load_thread`).
+3. `summarize()` — the LLM call, given that prior conversation instead of the
+   old DynamoDB `conversation_history` — creates a concise operational summary
+   containing what the member wants, the conversation state, and outstanding
+   items.
 
 #### Member identity lookup
 
@@ -274,18 +289,34 @@ The current table key is `member_id`, with `email` as a global secondary index.
 
 #### Case lookup or creation
 
-The Context Manager calls `case_lookup_creation` with the resolved member ID
-and/or sender email. The Gateway invokes
+A case is identified by the verified member id **and** the normalized email
+subject (`thread_key`) — see [ADR-0015](decisions/0015-subject-threaded-cases-memory-conversation.md).
+One member can have several concurrent cases, one per email thread; a member
+never re-opens an existing thread's case under a new subject (design decision
+D3 in `docs/V2_ENHANCEMENT_TODO.md`).
+
+Only a verified member (`member_lookup` returned a `member_id`) reaches this
+step at all. The Context Manager calls `case_lookup_creation` with the member
+id, `thread_key` (`normalize_subject(subject)`), and the original subject
+(display only). The Gateway invokes
 **`AgentCore-ClaimsAgentV2-dev-CaseLookupCreation`**
 (`lambdas/case_lookup_creation/handler.py`). The Lambda:
 
-1. Queries the `member_id-index` GSI when a member ID is present.
-2. Returns existing cases when any are found.
-3. Otherwise creates a `CASE-XXXXXXXX` record with status `Open`.
-4. Marks the new case as `verified` when a member ID exists, otherwise
-   `unverified`.
+1. Computes `case_id = "CASE-" + sha256(f"{member_id}\n{thread_key}")[:20].upper()`
+   — deterministic, so two concurrent first contacts on the same thread still
+   collide on the same conditional `put_item` and resolve to one case.
+2. `GetItem` on that `case_id`. Found → returns the existing case
+   (`existing_case_found`).
+3. Not found → creates it with status `Open`, `identity_status: "verified"`,
+   and an empty `forms_on_file` map (`new_case_created`).
 
-The result is either `existing_cases_found`, `new_case_created`, or an error.
+The case item holds only small state — no email text (see below); the
+conversation itself lives in AgentCore Memory. A separate route
+(`case_id` + `case_facts`) updates `last_intent_id`/`last_contact_at` and
+`forms_on_file` after a message is processed: a `valid` form is written
+unconditionally (idempotent), while a form that arrived incomplete is tagged
+`received_not_valid` via its own conditional write that refuses to downgrade
+a form already recorded `valid`. Neither path needs a prior read.
 
 ## 8. Phase 2: Decide
 
@@ -372,11 +403,17 @@ empathy result, attachment assessment, and the member's message.
 
 The Writer:
 
-* creates a subject and body
+* creates the body (the subject is NOT the Writer's to decide — see below)
 * asks for identity details when verification is needed
 * avoids promises about eligibility, approval, amounts, or timing
 * uses only supplied HESTA snippets and the member message
 * does not send the email
+
+The reply subject is set deterministically in code, after the Writer runs (and
+after every Reviewer-driven revision): `RE: <original subject, RE:/FW:/FWD:
+prefixes stripped>` — so a member's reply always threads back to the same case
+(`agents/writer.py::reply_subject`, [ADR-0015](decisions/0015-subject-threaded-cases-memory-conversation.md)).
+The Reviewer is never shown the subject and must not flag it.
 
 The Writer model can have the Bedrock `NoPersonalAdvice` guardrail attached.
 There is also an application-level deterministic advice-decline draft. If
@@ -436,7 +473,9 @@ AgentCore evaluation.
 The Runtime renders `## 4 · Learn` and notes that:
 
 * invocation, model, and tool activity is traced with OpenTelemetry
-* the current interaction is written to AgentCore Memory when available
+* the inbound email, the generated draft, and the review outcome are each
+  written as an AgentCore Memory event on the case's session (§5), so the next
+  email on this case sees them via `load_thread`
 * human edits can be captured as feedback in a future post-pilot extension
 
 The Runtime uses one top-level `invoke_agent` span and child structured-output
@@ -456,11 +495,29 @@ Created by CDK as `Hesta-members` with a stack-derived prefix.
 
 ### Cases table
 
-Created by CDK as `Hesta-cases` with a stack-derived prefix.
+Created by CDK as `Hesta-cases` with a stack-derived prefix. A case is keyed
+on `(member_id, thread_key)`, not member id alone — see
+[ADR-0015](decisions/0015-subject-threaded-cases-memory-conversation.md).
 
-* Partition key: `case_id`
-* GSI: `member_id-index`
+* Partition key: `case_id` — `"CASE-" + sha256(f"{member_id}\n{thread_key}")[:20].upper()`
+* GSI: `member_id-index` (kept in CDK; no longer queried by the case Lambda)
+* Item fields: `case_id, member_id, thread_key, subject, status, identity_status,
+  primary_intent_id, last_intent_id, created_at, last_contact_at, forms_on_file`
+  — no email text; the conversation lives in AgentCore Memory (below)
 * Read and written by: `AgentCore-ClaimsAgentV2-dev-CaseLookupCreation`
+
+### Case conversation (AgentCore Memory)
+
+Each case's conversation (inbound emails, generated drafts, review outcomes)
+is stored as AgentCore Memory events, not DynamoDB rows:
+
+* `actor_id = safe_memory_id(member_id)`
+* `session_id = safe_memory_id(case_id)` (`memory/session.py::thread_session_id`)
+  — stable for the life of the case, distinct from the one-per-email Runtime
+  session
+* Written by `memory/session.py::append_turns` (one event per turn; inbound →
+  `USER`, draft → `ASSISTANT`, review outcome → `OTHER`), read back oldest-first
+  by `load_thread`
 
 ### Human-review table
 
@@ -484,11 +541,13 @@ Created by CDK as `Hesta-humanreview` with a stack-derived prefix.
 ### Missing or unverified identity
 
 1. Lookup uses the available email, or reports that no identifier exists.
-2. Case lookup can create an unverified case when no existing case is found.
+2. Case lookup is skipped entirely — only a verified member gets a case or an
+   AgentCore Memory session.
 3. Attachment and empathy analysis are skipped or replaced with safe defaults.
 4. The routing gate escalates because identity verification is required.
 5. The Writer drafts a request for identity details.
-6. The draft is recorded for human review when a case ID is available.
+6. No case ID is available, so the draft cannot be recorded for human review;
+   the Runtime surfaces this rather than inventing a case.
 
 ### Personal advice request
 

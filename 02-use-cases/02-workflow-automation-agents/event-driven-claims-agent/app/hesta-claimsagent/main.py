@@ -22,8 +22,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import re
-import uuid
 from datetime import datetime, timezone
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -32,7 +30,7 @@ from opentelemetry.trace import SpanKind
 from config import ENABLE_HITL_RECORD, MAX_DRAFT_REVISIONS
 from ingestion.email_normalizer import normalize_email
 from intents import taxonomy
-from memory.session import get_memory_session_manager, record_interaction
+from memory.session import append_turns, get_memory_session_manager, load_thread, safe_memory_id, thread_session_id
 from routing import decide
 from tools import gateway
 
@@ -78,17 +76,16 @@ def _parse_payload(payload):
     return payload
 
 
-def _safe_memory_id(value: str | None, fallback: str = "anonymous") -> str:
-    """Sanitize an identifier for AgentCore Memory actorId/sessionId.
+def _filter_own_retry_entries(history: list[dict], idempotency_key: str) -> list[dict]:
+    """Strip any history entry this exact invocation would itself own.
 
-    Memory rejects '@', '.', and other characters (e.g. raw emails), so map any input to
-    [a-zA-Z0-9_-] and guarantee an alphanumeric first character.
+    A retry of THIS SAME inbound email (identical idempotency_key) must never see its own
+    earlier partial write as "prior conversation" — e.g. a first attempt that appended
+    inbound/draft entries to Memory and then crashed before finishing. Without this, the retry's
+    Context Manager/Writer would be shown the current message as if it were a past exchange.
     """
-    safe = re.sub(r"[^a-zA-Z0-9_-]", "-", (value or "").strip())
-    safe = re.sub(r"-{2,}", "-", safe).strip("-_")
-    if not safe or not safe[0].isalnum():
-        safe = f"{fallback}-{safe}".strip("-_") or fallback
-    return safe[:200]
+    prefix = f"{idempotency_key}:"
+    return [entry for entry in history if not str(entry.get("entry_id") or "").startswith(prefix)]
 
 
 def _idempotency_key(payload: dict, raw: str, sender_email: str | None, source: str | None) -> str:
@@ -140,20 +137,43 @@ def _fmt_identity(identity) -> str:
 def _fmt_cases(cases) -> str:
     if cases.error:
         return f"### 📁 Cases (AI-002: case_lookup_creation)\n\n- ⚠️ {cases.error}\n\n"
-    if cases.status == "existing_cases_found":
-        lines = [f"### 📁 Existing cases (case_lookup_creation)\n"]
-        for c in cases.cases:
-            lines.append(f"  - Case ID: `{c.get('case_id', '?')}` · Status: {c.get('status', 'n/a')}")
-        return "\n".join(lines) + "\n\n"
+    case = cases.case or {}
+    subject = case.get("subject") or cases.subject or "(no subject)"
+    if cases.status == "existing_case_found":
+        return (
+            "### 📁 Existing case found (case_lookup_creation)\n\n"
+            f"- **Case ID:** `{case.get('case_id', cases.case_id or '?')}` · **Status:** {case.get('status', 'n/a')}\n"
+            f"- **Thread:** {subject}\n\n"
+        )
     elif cases.status == "new_case_created":
-        new = cases.new_case or {}
         return (
             "### 📁 New case created (case_lookup_creation)\n\n"
-            f"- **Case ID:** `{new.get('case_id', '?')}`\n"
-            f"- **Member ID:** {new.get('member_id', '?')}\n"
-            f"- **Status:** {new.get('status', 'Open')}\n\n"
+            f"- **Case ID:** `{case.get('case_id', cases.case_id or '?')}`\n"
+            f"- **Member ID:** {case.get('member_id', '?')}\n"
+            f"- **Status:** {case.get('status', 'Open')}\n"
+            f"- **Thread:** {subject}\n\n"
         )
     return ""
+
+
+def _fmt_memory_status(actor_id: str, session_id: str, history: list[dict], error: str | None = None) -> str:
+    """Visible Memory status line (implementation rule 4): reported whenever Memory is
+    configured for this case, whether or not the load (or session setup) actually succeeded —
+    a configured Memory that fails must never be silently treated as "no prior history"."""
+    if error:
+        return (
+            f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · "
+            f"⚠️ prior conversation could not be loaded ({error}) — treat this reply as possibly "
+            "incomplete, NOT as a first contact._\n\n"
+        )
+    return f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · {len(history)} prior turn(s) loaded._\n\n"
+
+
+def _fmt_memory_recorded(recorded: bool) -> str:
+    return (
+        "_🧠 This turn recorded to Memory._\n\n" if recorded
+        else "_🧠 This turn was NOT recorded to Memory (see logs)._\n\n"
+    )
 
 
 def _fmt_profile(profile) -> str:
@@ -296,15 +316,7 @@ async def _write_hitl_record(
     email_review to create a review record in the human review table.
     Non-fatal: surfaces the real Gateway error if it fails.
     """
-    # Get case_id from case_lookup_creation result
-    case_id = None
-    if cases.case_id:
-        case_id = cases.case_id
-    elif cases.status == "existing_cases_found" and cases.cases:
-        case_id = cases.cases[0].get("case_id")
-    elif cases.status == "new_case_created" and cases.new_case:
-        case_id = cases.new_case.get("case_id")
-
+    case_id = cases.case_id
     if not case_id:
         return "⚠️ No case_id available for email review (case lookup failed).\n\n"
 
@@ -360,21 +372,30 @@ async def _safe_review(draft, intent_result, profile, attachment):
         return None
 
 
-async def _append_case_history(mcp, cases, entries) -> str:
-    if not cases.case_id:
-        return "⚠️ No verified case available for conversation history.\n\n"
+async def _update_case_facts(mcp, cases, intent_id, attachment=None) -> str:
+    """Case-facts update (TODO 2.5 / TODO 4.3): records last_intent_id and, when the real
+    (post-draft) attachment assessment resolved a form, its forms_on_file entry — "valid" when
+    complete, or "incomplete" (tagged received_not_valid by the case Lambda, which never lets
+    that downgrade an already-valid entry) when the correct form arrived but was left blank.
+    "wrong_form"/"unreadable"/"missing"/"not_applicable" record nothing here — there is no
+    single form_id they can be meaningfully attributed to. The conversation itself is appended
+    to Memory separately (append_turns) — the case item holds no email text (D7). Silent on
+    success; surfaces a real Gateway error rather than hiding it."""
+    if not cases.case_id or mcp is None:
+        return ""
+    case_facts = {"last_intent_id": intent_id}
+    if attachment is not None and attachment.form_id and attachment.status in ("valid", "incomplete"):
+        case_facts["forms_on_file"] = {attachment.form_id: attachment.status}
     result = await gateway.call_tool(
-        mcp,
-        "case_lookup_creation",
-        {"case_id": cases.case_id, "history_entries": entries},
+        mcp, "case_lookup_creation", {"case_id": cases.case_id, "case_facts": case_facts}
     )
     if isinstance(result, dict) and ("_gateway_error" in result or result.get("error")):
         detail = result.get("_gateway_error") or result.get("error")
-        return f"⚠️ Could not save conversation history: {detail}\n\n"
+        return f"⚠️ Could not update case facts: {detail}\n\n"
     return ""
 
 
-async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key, source_object_id):
+async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key):
     """Personal advice requested: HESTA can never give it, so skip every LLM reasoning step
     (Context Manager's summarization, Attachment/Empathy assessment, the Writer's LLM call —
     already bypassed — and the Reviewer) and go straight to a hardcoded decline, always
@@ -384,17 +405,25 @@ async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key
     from models import RoutingDecision
 
     yield "## 2 · Decide\n\n"
-    summary = await context_manager.summarize(
-        inbound, mcp=mcp, session_manager=None,
-        primary_intent_id=intent_result.primary_intent_id,
-        idempotency_key=idempotency_key, source_object_id=source_object_id,
-        skip_summary=True,
-    )
+    identity, cases = await context_manager.lookup(inbound, mcp, primary_intent_id=intent_result.primary_intent_id)
+    summary = await context_manager.summarize(inbound, identity, cases, [], skip_summary=True)
     yield _fmt_identity(summary.identity)
     yield _fmt_cases(summary.cases)
     profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
     yield _fmt_profile(profile)
     verified_member = bool(summary.identity.member_id)
+
+    actor_id = session_id = None
+    memory_configured = False
+    memory_error: str | None = None
+    if verified_member and cases.case_id:
+        actor_id = safe_memory_id(identity.member_id)
+        session_id = thread_session_id(cases.case_id)
+        try:
+            memory_configured = get_memory_session_manager(session_id, actor_id) is not None
+        except Exception as exc:  # noqa: BLE001 — never let memory setup break processing
+            log.warning("Memory session setup failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+            memory_error = f"session setup failed: {exc}"
 
     yield "## 3 · Execute\n\n"
     draft = writer_agent.advice_decline_draft(inbound, intent_result, profile)
@@ -430,8 +459,14 @@ async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key
             "intent_id": intent_result.primary_intent_id,
         },
     ]
+    if memory_error is not None:
+        yield f"_🧠 Memory unavailable — actor `{actor_id}` · session `{session_id}` · ⚠️ {memory_error}._\n\n"
+    if verified_member and actor_id and session_id:
+        recorded = append_turns(actor_id, session_id, history_entries)
+        if memory_configured or memory_error is not None:
+            yield _fmt_memory_recorded(recorded)
     if verified_member and mcp is not None:
-        yield await _append_case_history(mcp, summary.cases, history_entries)
+        yield await _update_case_facts(mcp, cases, intent_result.primary_intent_id, attachment=None)
 
     yield "### 👤 Human-in-the-loop\n\n"
     if ENABLE_HITL_RECORD:
@@ -484,25 +519,19 @@ async def _run_pipeline(payload, context):
     sender_email = payload.get("claimant_email") or payload.get("sender_email")
     source = payload.get("source")
     idempotency_key = _idempotency_key(payload, raw, sender_email, source)
-    source_object_id = payload.get("source_object_id") or source
 
     # Phase 0 — deterministic normalisation. The Trigger Lambda now parses real MIME
-    # attachments off a .eml object (TODO 2) and hands them through in the payload.
+    # attachments off a .eml object (TODO 2) and hands them through in the payload, along
+    # with the original subject (TODO 1) — normalize_email derives the case's thread_key
+    # from it.
     inbound = normalize_email(
-        raw, sender_email=sender_email, source=source, attachments=payload.get("attachments")
+        raw,
+        sender_email=sender_email,
+        source=source,
+        attachments=payload.get("attachments"),
+        subject=payload.get("subject"),
     )
     gateway.reset_tool_log()  # fresh MCP call log for this invocation
-
-    # AgentCore Memory (AI-002): key the actor on the member/policy number if we have one,
-    # else the sender email — so the Context Manager recalls this member's prior contacts.
-    # Graceful: get_memory_session_manager returns None if MEMORY_ID isn't configured.
-    actor_id = _safe_memory_id(inbound.member_number_for_lookup or inbound.from_email)
-    session_id = f"hesta-{actor_id}-{uuid.uuid4().hex}"
-    memory_session = None
-    try:
-        memory_session = get_memory_session_manager(session_id, actor_id)
-    except Exception as exc:  # noqa: BLE001 — never let memory setup break processing
-        log.warning("Memory unavailable (running without recall): %s", exc)
 
     yield "# HESTA Member-Email Agent\n\n"
     yield (
@@ -537,37 +566,52 @@ async def _run_pipeline(payload, context):
             # skipped in favour of a hardcoded decline, always escalated to a human. See
             # _run_personal_advice_path for what still runs (identity/case lookup) and why.
             async for chunk in _run_personal_advice_path(
-                mcp, inbound, intent_result, idempotency_key, source_object_id,
+                mcp, inbound, intent_result, idempotency_key,
             ):
                 yield chunk
         else:
-            # Computed against an EMPTY case history, correct only if this turns out to be a
-            # brand-new case — case_lookup_creation uses it to seed that case's bootstrap
-            # history entry (TODO 6), since the real case history isn't known until after the
-            # lookup below returns. Ignored entirely for an existing case.
-            early_attach = attachment_validation.assess(inbound, intent_result, case_history=[])
+            # AI-002 lookup: identity via member_lookup, then this member's case for THIS email
+            # thread via case_lookup_creation (member_id + thread_key, D8) — deterministic, no LLM.
+            identity, cases = await context_manager.lookup(
+                inbound, mcp, primary_intent_id=intent_result.primary_intent_id
+            )
 
-            # AI-002: Context Manager now pulls identity + cases via member_lookup & case_lookup_creation
+            # Only a verified member with a resolved case gets a Memory session (implementation
+            # rule 3) — the session id is derived from the case id (D8), stable for the case's
+            # whole life, NOT the one-per-email Runtime session (D6). A configured Memory that
+            # fails — either setting up the session or loading it — must be surfaced, never
+            # silently treated as "no prior history".
+            actor_id = session_id = None
+            memory_session = None
+            history: list[dict] = []
+            memory_error: str | None = None
+            if identity.member_id and cases.case_id:
+                actor_id = safe_memory_id(identity.member_id)
+                session_id = thread_session_id(cases.case_id)
+                try:
+                    memory_session = get_memory_session_manager(session_id, actor_id)
+                except Exception as exc:  # noqa: BLE001 — never let memory setup break processing
+                    log.warning("Memory session setup failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+                    memory_error = f"session setup failed: {exc}"
+                if memory_session is not None:
+                    try:
+                        history = load_thread(actor_id, session_id)
+                    except Exception as exc:  # noqa: BLE001 — degrade visibly, not silently
+                        log.warning("Memory load failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+                        memory_error = f"load failed: {exc}"
+                    else:
+                        history = _filter_own_retry_entries(history, idempotency_key)
+
+            # AI-002 summary: the LLM step, now given the case's prior conversation loaded from
+            # Memory (in place of the old DynamoDB conversation_history).
             summary = await context_manager.summarize(
-                inbound,
-                mcp=mcp,
-                session_manager=memory_session,
-                primary_intent_id=intent_result.primary_intent_id,
-                idempotency_key=idempotency_key,
-                source_object_id=source_object_id,
-                early_attachment_assessment=early_attach,
+                inbound, identity, cases, history, session_manager=memory_session,
             )
             yield _fmt_summary(summary)
             yield _fmt_identity(summary.identity)
             yield _fmt_cases(summary.cases)
-            if memory_session is not None:
-                # Explicitly persist this contact (structured_output doesn't fire the session
-                # manager's write hooks), so SEMANTIC/SUMMARIZATION records actually populate.
-                recorded = record_interaction(actor_id, session_id, inbound.latest_message, summary.summary)
-                status = "recorded" if recorded else "not recorded"
-                yield (
-                    f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · turn {status}._\n\n"
-                )
+            if memory_session is not None or memory_error is not None:
+                yield _fmt_memory_status(actor_id, session_id, history, memory_error)
 
             # ── DECIDE ──────────────────────────────────────────────────────
             yield "## 2 · Decide\n\n"
@@ -577,7 +621,7 @@ async def _run_pipeline(payload, context):
             verified_member = bool(summary.identity.member_id)
             attach = (
                 attachment_validation.assess(
-                    inbound, intent_result, case_history=summary.cases.conversation_history
+                    inbound, intent_result, forms_on_file=summary.cases.forms_on_file
                 )
                 if verified_member else None
             )
@@ -608,7 +652,7 @@ async def _run_pipeline(payload, context):
             # ── EXECUTE ───────────────────────────────────────────────────────
             yield "## 3 · Execute\n\n"
             draft = await writer_agent.write(
-                inbound, intent_result, profile, summary, emp, attachment=attach
+                inbound, intent_result, profile, summary, emp, history, attachment=attach
             )
             yield _fmt_draft(
                 "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)", draft
@@ -635,7 +679,7 @@ async def _run_pipeline(payload, context):
                     revision_count += 1
                     draft = await writer_agent.revise(
                         inbound, intent_result, profile, summary, emp, draft, review,
-                        attachment=attach,
+                        history, attachment=attach,
                     )
                     review = await _safe_review(draft, intent_result, profile, attach)
                     reviewer_failed = review is None
@@ -712,8 +756,12 @@ async def _run_pipeline(payload, context):
                         "intent_id": intent_result.primary_intent_id,
                     }
                 )
+            if verified_member and actor_id and session_id:
+                recorded = append_turns(actor_id, session_id, history_entries)
+                if memory_session is not None or memory_error is not None:
+                    yield _fmt_memory_recorded(recorded)
             if verified_member and mcp is not None:
-                yield await _append_case_history(mcp, summary.cases, history_entries)
+                yield await _update_case_facts(mcp, summary.cases, intent_result.primary_intent_id, attachment=attach)
 
             # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
             if decision.escalate_to_human:

@@ -56,6 +56,41 @@ _FOOTER_START = "Issued by H.E.S.T"
 # A leading instruction the current Trigger Lambda may prepend.
 _TRIGGER_PREFIX_RE = re.compile(r"^\s*process this[^\n:]*:\s*", re.IGNORECASE)
 
+# Leading reply/forward prefix, e.g. "RE:", "Re:", "FW:", "Fwd:", or a mail-gateway tag like
+# "[EXTERNAL]" — stripped repeatedly, in any order, so "[EXTERNAL] Re: RE: FW: X" and
+# "Re: [EXTERNAL] X" both fully unwrap to "X".
+_REPLY_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd)\s*:|\[external\])\s*", re.IGNORECASE)
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def strip_reply_prefixes(subject: str | None) -> str:
+    """Repeatedly strip leading RE:/FW:/FWD:/"[EXTERNAL]" prefixes (case-insensitive, optional
+    whitespace, any order), preserving the rest of the subject exactly as received (casing,
+    internal whitespace).
+
+    Used to build the deterministic reply subject (design decision D1): unlike
+    ``normalize_subject``, this does NOT casefold or collapse whitespace — the reply subject is
+    shown to a human, so it should read like the original.
+    """
+    text = subject or ""
+    while True:
+        stripped = _REPLY_PREFIX_RE.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
+    return text.strip()
+
+
+def normalize_subject(subject: str | None) -> str:
+    """Deterministic thread key from an email subject (design decision D2).
+
+    Strips leading RE:/FW:/FWD:/"[EXTERNAL]" prefixes, collapses whitespace, and casefolds.
+    Nothing more — no blank-subject or translated-prefix special-casing for this POC; a blank
+    subject simply normalizes to an empty string like any other value.
+    """
+    text = _WHITESPACE_RE.sub(" ", strip_reply_prefixes(subject)).strip()
+    return text.casefold()
+
 
 @dataclass
 class Attachment:
@@ -74,6 +109,7 @@ class InboundEmail:
     member_number: str | None = None  # raw value as seen (may be a placeholder)
     member_number_for_lookup: str | None = None  # real-looking number, else None
     form_reason: str | None = None  # contact-form hint only
+    thread_key: str = ""  # normalize_subject(subject) — identifies the case's email thread
     latest_message: str = ""
     attachments: list[Attachment] = field(default_factory=list)
     raw: str = ""
@@ -196,7 +232,7 @@ def normalize_email(
     raw = raw or ""
     text = _TRIGGER_PREFIX_RE.sub("", raw, count=1)
 
-    inbound = InboundEmail(raw=raw, subject=subject or "")
+    inbound = InboundEmail(raw=raw, subject=subject or "", thread_key=normalize_subject(subject))
     inbound.attachments = [
         Attachment(
             filename=a.get("filename", "attachment"),

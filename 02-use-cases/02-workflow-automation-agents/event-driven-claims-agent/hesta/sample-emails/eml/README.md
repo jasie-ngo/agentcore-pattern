@@ -29,6 +29,9 @@ never base64.
 | `BDBN_60010001_incomplete.eml` | The right form, one field ("Nomination details") left blank → `incomplete`, naming the blank field. |
 | `BDBN_60010001_wrongform.eml` | A Financial Hardship form attached to a BDBN request → `wrong_form`, naming both forms. |
 | `BDBN_60010001_noattachment.eml` | A BDBN request with nothing attached → `missing`. |
+| `BDBN_60010001_thread_1.eml` | Subject-threaded case pair, part 1: member number 60010001 asks about nominating a beneficiary, subject "Nominating a new beneficiary", no attachment. |
+| `BDBN_60010001_thread_2.eml` | Subject-threaded case pair, part 2: same member, subject `RE: Nominating a new beneficiary`, with a correctly filled BDBN form attached. Same `(member_id, thread_key)` as thread_1 → resolves to the SAME case, and the draft reflects thread_1's exchange (loaded from AgentCore Memory). |
+| `BDBN_60010001_otherthread.eml` | Same member as thread_1/thread_2, but a DIFFERENT subject ("Checking my address on file") → resolves to a SECOND, distinct case, proving cases are keyed on `(member_id, thread_key)` and not on member alone. |
 
 Each filled fixture's sender (`From:`) matches the corresponding seed member in
 `scripts/seed_hesta_members.py`, so identity verification succeeds the same way
@@ -80,3 +83,22 @@ aws s3 cp hesta/sample-emails/eml/BDBN_60010001_filled.eml \
 The existing EventBridge rule (`object.key` prefix `claims-inbox/`) picks it up
 and invokes the Runtime exactly as it does for the `.txt` samples — no
 infrastructure change is needed to test a `.eml` drop.
+
+## Testing subject-threaded cases (drop order matters)
+
+`BDBN_60010001_thread_1.eml` / `_thread_2.eml` / `_otherthread.eml` exercise
+case identity keyed on `(member_id, normalized subject)` (see
+`docs/V2_ENHANCEMENT_TODO.md`). Drop them **in this order** — each drop must
+finish processing before the next:
+
+1. `BDBN_60010001_thread_1.eml` — creates a new case (no prior case for this
+   member + this subject).
+2. `BDBN_60010001_thread_2.eml` — its subject is `RE:` of thread_1's, so it
+   resolves to the **same case**. The agent's draft should reflect thread_1's
+   exchange (the request for the form), loaded from that case's AgentCore
+   Memory session.
+3. `BDBN_60010001_otherthread.eml` — same member, but a different subject, so
+   it resolves to a **second, distinct case** with no memory of thread_1/2.
+
+The same drop order works via `agentcore dev` using each fixture's
+`.dev.json` (see below) instead of S3.

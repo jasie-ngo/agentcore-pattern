@@ -12,17 +12,18 @@ from forms import catalog, parser
 from models import AttachmentAssessment
 
 
-def _previously_valid(case_history: list[dict] | None) -> bool:
-    """True if any earlier turn in this case ever had a *validated valid* form on file.
+def _previously_valid(forms_on_file: dict | None) -> bool:
+    """True if the case record has any form already recorded ``valid`` (D7: this lives on the
+    case's ``forms_on_file``, not scanned out of the conversation history).
 
-    Case-wide, not scoped to the current intent (existing behaviour) — but the bar is
-    raised (TODO 4 rule 5): a previously incomplete or wrong form no longer counts as
-    already on file, only a previously ``valid`` one does.
+    Case-wide, not scoped to the current intent (existing behaviour) — a form once validated
+    stays validated (the case Lambda never reverts a ``valid`` entry), so any entry here is
+    enough; a previously incomplete or wrong form was never recorded here in the first place.
     """
-    return any(entry.get("attachment_status") == "valid" for entry in (case_history or []))
+    return any(status == "valid" for status in (forms_on_file or {}).values())
 
 
-def assess(inbound, intent_result, case_history: list[dict] | None = None) -> AttachmentAssessment:
+def assess(inbound, intent_result, forms_on_file: dict | None = None) -> AttachmentAssessment:
     intent_id = intent_result.primary_intent_id
     spec = catalog.form_for(intent_id)
     received_filenames = [a.filename for a in inbound.attachments]
@@ -39,7 +40,7 @@ def assess(inbound, intent_result, case_history: list[dict] | None = None) -> At
     expected = spec.name
 
     if not inbound.attachments:
-        if _previously_valid(case_history):
+        if _previously_valid(forms_on_file):
             return AttachmentAssessment(
                 attachments_present=0,
                 expected_document=expected,

@@ -69,6 +69,9 @@ class MemberLookupTests(unittest.TestCase):
 
 @unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
 class CaseLookupCreationTests(unittest.TestCase):
+    """TODO 2: a case is keyed on (member_id, thread_key) — a member can have several
+    concurrent cases, one per email thread. No member_id-index query, no history on the item."""
+
     @classmethod
     def setUpClass(cls):
         cls.mod = _load("case_lookup_creation_handler", "lambdas/case_lookup_creation/handler.py")
@@ -82,196 +85,91 @@ class CaseLookupCreationTests(unittest.TestCase):
 
     def test_requires_member_id(self):
         """No verified member_id -> routed away from the case path, nothing created."""
-        result = self.mod.handler({"sender_email": "unknown@example.com"}, None)
+        result = self.mod.handler({"sender_email": "unknown@example.com", "thread_key": "x"}, None)
         self.assertEqual(result, {"error": "verified member_id required; case lookup skipped"})
-        self.mod.table.query.assert_not_called()
+        self.mod.table.get_item.assert_not_called()
         self.mod.table.put_item.assert_not_called()
 
-    def test_creates_verified_case_with_inbound_history(self):
-        self.mod.table.query.return_value = {"Items": []}
+    def test_requires_thread_key(self):
+        result = self.mod.handler({"member_id": "60010001"}, None)
+        self.assertEqual(result, {"error": "thread_key required; case lookup skipped"})
+        self.mod.table.get_item.assert_not_called()
+        self.mod.table.put_item.assert_not_called()
+
+    def test_creates_verified_case_with_no_email_text_on_the_item(self):
+        self.mod.table.get_item.return_value = {}
         result = self.mod.handler(
             {
                 "member_id": "60010001",
+                "thread_key": "binding nomination",
+                "subject": "Binding nomination",
                 "primary_intent_id": "death_benefit_nomination",
-                "inbound_email": "Please send my BDBN form.",
             },
             None,
         )
         self.assertEqual(result["status"], "new_case_created")
-        self.assertTrue(result["case"]["case_id"].startswith("CASE-"))
-        self.assertEqual(result["case"]["member_id"], "60010001")
-        self.assertEqual(result["case"]["identity_status"], "verified")
-        # primary_intent_id is still recorded for audit, but no longer gates reuse.
-        self.assertEqual(result["case"]["primary_intent_id"], "death_benefit_nomination")
-        history = result["conversation_history"]
-        self.assertEqual(len(history), 1)
-        self.assertEqual(history[0]["entry_type"], "inbound_member_email")
-        self.assertEqual(history[0]["content"], "Please send my BDBN form.")
-        self.assertEqual(history[0]["intent_id"], "death_benefit_nomination")
-        # No attachments_present sent -> defaults to 0, not omitted (0 is meaningful, not absent).
-        self.assertEqual(history[0]["attachments_present"], 0)
+        case = result["case"]
+        self.assertTrue(case["case_id"].startswith("CASE-"))
+        self.assertEqual(case["member_id"], "60010001")
+        self.assertEqual(case["thread_key"], "binding nomination")
+        self.assertEqual(case["subject"], "Binding nomination")
+        self.assertEqual(case["identity_status"], "verified")
+        self.assertEqual(case["primary_intent_id"], "death_benefit_nomination")
+        self.assertEqual(case["last_intent_id"], "death_benefit_nomination")
+        self.assertEqual(case["forms_on_file"], {})
+        self.assertNotIn("conversation_history", case)
         self.mod.table.put_item.assert_called_once()
 
-    def test_first_message_attachment_is_recorded_on_the_case_creation_entry(self):
-        """Regression: a brand-new case's very first history entry is written here at case
-        creation, not via the later append call — main.py's later copy of this same entry_id
-        is silently deduped, so if attachments_present isn't captured HERE, it's lost forever
-        and a follow-up message incorrectly re-requests an attachment already on file."""
-        self.mod.table.query.return_value = {"Items": []}
+    def test_same_member_same_thread_reuses_the_same_case(self):
+        """'X' then 'RE: X' normalize to the same thread_key -> the same case_id."""
+        existing = {"case_id": self.mod._case_id("60010001", "binding nomination"), "member_id": "60010001"}
+        self.mod.table.get_item.return_value = {"Item": existing}
         result = self.mod.handler(
-            {
-                "member_id": "60010001",
-                "primary_intent_id": "death_benefit_nomination",
-                "inbound_email": "Please find attached my BDBN form.",
-                "attachments_present": 1,
-            },
+            {"member_id": "60010001", "thread_key": "binding nomination", "primary_intent_id": "death_benefit_nomination"},
             None,
         )
-        self.assertEqual(result["conversation_history"][0]["attachments_present"], 1)
-
-    def test_validated_attachment_status_is_recorded_on_the_case_creation_entry(self):
-        """TODO 6: the same ordering problem as above, now for the validated status/form_id/
-        missing_fields (not just the raw count) — main.py's early, empty-history assessment
-        seeds these on a brand-new case's bootstrap entry."""
-        self.mod.table.query.return_value = {"Items": []}
-        result = self.mod.handler(
-            {
-                "member_id": "60010001",
-                "primary_intent_id": "death_benefit_nomination",
-                "inbound_email": "Please find attached my BDBN form, mostly filled in.",
-                "attachments_present": 1,
-                "attachment_status": "incomplete",
-                "form_id": "BDBN-NOM-V1",
-                "missing_fields": ["Nomination details"],
-            },
-            None,
-        )
-        entry = result["conversation_history"][0]
-        self.assertEqual(entry["attachment_status"], "incomplete")
-        self.assertEqual(entry["form_id"], "BDBN-NOM-V1")
-        self.assertEqual(entry["missing_fields"], ["Nomination details"])
-
-    def test_absent_attachment_status_is_not_written(self):
-        """No attachment_status/form_id/missing_fields sent (e.g. legacy caller) → not written
-        at all, rather than as None/empty — keeps old rows and new rows the same shape."""
-        self.mod.table.query.return_value = {"Items": []}
-        result = self.mod.handler(
-            {"member_id": "60010001", "primary_intent_id": "death_benefit_nomination", "inbound_email": "hi"},
-            None,
-        )
-        entry = result["conversation_history"][0]
-        self.assertNotIn("attachment_status", entry)
-        self.assertNotIn("form_id", entry)
-        self.assertNotIn("missing_fields", entry)
-
-    def test_reuses_the_members_case_regardless_of_intent(self):
-        """One case per member: a different topic on a follow-up still reuses it."""
-        existing = {
-            "case_id": "CASE-EXIST",
-            "member_id": "60010001",
-            "status": "Open",
-            "primary_intent_id": "death_benefit_nomination",
-            "created_at": "2026-09-01T00:00:00+00:00",
-            "idempotency_key": "old-key",
-            "conversation_history": [{"entry_id": "old-key:inbound", "entry_type": "inbound_member_email"}],
-        }
-        self.mod.table.query.return_value = {"Items": [existing]}
-        result = self.mod.handler(
-            {"member_id": "60010001", "primary_intent_id": "beneficiary_update", "inbound_email": "different topic"},
-            None,
-        )
-        self.assertEqual(result["status"], "existing_cases_found")
-        self.assertEqual(result["case_id"], "CASE-EXIST")
-        self.assertEqual(result["cases"], [existing])
-        self.assertEqual(result["conversation_history"], existing["conversation_history"])
+        self.assertEqual(result["status"], "existing_case_found")
+        self.assertEqual(result["case_id"], existing["case_id"])
+        self.assertEqual(result["case"], existing)
         self.mod.table.put_item.assert_not_called()
 
-    def test_reuses_closed_case_instead_of_creating_new(self):
-        """A reply to a closed case reuses that same case (Writer is told it's closed)."""
-        existing = {
-            "case_id": "CASE-EXIST",
-            "member_id": "60010001",
-            "status": "closed",
-            "primary_intent_id": "death_benefit_nomination",
-            "created_at": "2026-09-01T00:00:00+00:00",
-            "idempotency_key": "old-key",
-        }
-        self.mod.table.query.return_value = {"Items": [existing]}
-        result = self.mod.handler(
-            {"member_id": "60010001", "primary_intent_id": "death_benefit_nomination", "inbound_email": "what happened?"},
-            None,
-        )
-        self.assertEqual(result["status"], "existing_cases_found")
-        self.assertEqual(result["case_id"], "CASE-EXIST")
-        self.mod.table.put_item.assert_not_called()
+    def test_same_member_different_thread_is_a_different_case(self):
+        id_a = self.mod._case_id("60010001", "binding nomination")
+        id_b = self.mod._case_id("60010001", "change of address")
+        self.assertNotEqual(id_a, id_b)
 
-    def test_multiple_legacy_cases_pick_earliest_deterministically(self):
-        """Legacy data with >1 case per member (pre-dating this rule) picks one, deterministically."""
-        older = {
-            "case_id": "CASE-OLDER",
-            "member_id": "60010001",
-            "status": "Open",
-            "created_at": "2026-01-01T00:00:00+00:00",
-        }
-        newer = {
-            "case_id": "CASE-NEWER",
-            "member_id": "60010001",
-            "status": "Open",
-            "created_at": "2026-06-01T00:00:00+00:00",
-        }
-        self.mod.table.query.return_value = {"Items": [newer, older]}
-        result = self.mod.handler({"member_id": "60010001", "inbound_email": "hi"}, None)
-        self.assertEqual(result["case_id"], "CASE-OLDER")
-
-    def test_duplicate_trigger_delivery_reuses_same_case(self):
-        """Replaying the same idempotency_key (e.g. a re-delivered trigger event) is a no-op."""
-        existing = {
-            "case_id": "CASE-REPLAY",
-            "member_id": "60010001",
-            "status": "closed",
-            "primary_intent_id": "beneficiary_update",
-            "created_at": "2026-09-01T00:00:00+00:00",
-            "idempotency_key": "fixed-idempotency-key",
-        }
-        self.mod.table.query.return_value = {"Items": [existing]}
-        result = self.mod.handler(
-            {
-                "member_id": "60010001",
-                "primary_intent_id": "death_benefit_nomination",
-                "idempotency_key": "fixed-idempotency-key",
-            },
-            None,
-        )
-        self.assertEqual(result["status"], "existing_cases_found")
-        self.assertEqual(result["case_id"], "CASE-REPLAY")
-        self.mod.table.put_item.assert_not_called()
+    def test_different_member_same_subject_is_a_different_case(self):
+        id_a = self.mod._case_id("60010001", "binding nomination")
+        id_b = self.mod._case_id("60010002", "binding nomination")
+        self.assertNotEqual(id_a, id_b)
 
     def test_concurrent_creation_falls_back_to_existing_case(self):
         """A conditional-write race on put_item resolves to the winner's case, not a duplicate."""
-        self.mod.table.query.return_value = {"Items": []}
-        expected_case_id = self.mod._case_id("60010001")
-        winner = {"case_id": expected_case_id, "member_id": "60010001", "status": "Open"}
+        self.mod.table.get_item.side_effect = [
+            {},  # initial lookup: not found
+            {"Item": {"case_id": self.mod._case_id("60010001", "x"), "member_id": "60010001"}},  # re-read after race
+        ]
         self.mod.table.put_item.side_effect = ClientError(
             {"Error": {"Code": "ConditionalCheckFailedException", "Message": "exists"}}, "PutItem"
         )
-        self.mod.table.get_item.return_value = {"Item": winner}
         result = self.mod.handler(
-            {
-                "member_id": "60010001",
-                "primary_intent_id": "death_benefit_nomination",
-                "idempotency_key": "fixed-key",
-            },
+            {"member_id": "60010001", "thread_key": "x", "primary_intent_id": "death_benefit_nomination"},
             None,
         )
-        self.assertEqual(result["status"], "existing_cases_found")
-        self.assertEqual(result["case_id"], expected_case_id)
+        self.assertEqual(result["status"], "existing_case_found")
+        self.assertEqual(result["case_id"], self.mod._case_id("60010001", "x"))
 
 
 @unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
-class CaseHistoryAppendTests(unittest.TestCase):
+class CaseFactsUpdateTests(unittest.TestCase):
+    """TODO 2.5 / TODO 4.3: case_id + case_facts sets last_intent_id/last_contact_at, marks
+    'valid' forms_on_file entries via an unconditional per-key SET (idempotent, no prior read),
+    and tags any other status 'received_not_valid' via its OWN small conditional update that
+    can never downgrade a form already recorded 'valid'."""
+
     @classmethod
     def setUpClass(cls):
-        cls.mod = _load("case_lookup_creation_history_handler", "lambdas/case_lookup_creation/handler.py")
+        cls.mod = _load("case_lookup_creation_facts_handler", "lambdas/case_lookup_creation/handler.py")
 
     def setUp(self):
         self.original_table = self.mod.table
@@ -281,82 +179,118 @@ class CaseHistoryAppendTests(unittest.TestCase):
         self.mod.table = self.original_table
 
     def test_case_not_found(self):
-        self.mod.table.get_item.return_value = {}
+        self.mod.table.update_item.side_effect = ClientError(
+            {"Error": {"Code": "ConditionalCheckFailedException", "Message": "missing"}}, "UpdateItem"
+        )
         result = self.mod.handler(
-            {"case_id": "CASE-MISSING", "history_entries": [{"entry_id": "a"}]}, None
+            {"case_id": "CASE-MISSING", "case_facts": {"last_intent_id": "death_benefit_nomination"}}, None
         )
         self.assertEqual(result, {"error": "Case not found"})
 
-    def test_appends_new_entries(self):
-        self.mod.table.get_item.return_value = {
-            "Item": {"case_id": "CASE-1", "conversation_history": [], "history_revision": 0}
-        }
-        self.mod.table.update_item.return_value = {
-            "Attributes": {
-                "case_id": "CASE-1",
-                "conversation_history": [{"entry_id": "k:draft", "entry_type": "generated_draft"}],
-            }
-        }
-        result = self.mod.handler(
+    def test_no_prior_read_is_performed(self):
+        """Race-free by design: never a get_item first, for either write."""
+        self.mod.table.update_item.return_value = {"Attributes": {"case_id": "CASE-1"}}
+        self.mod.handler(
             {
                 "case_id": "CASE-1",
-                "history_entries": [{"entry_id": "k:draft", "entry_type": "generated_draft", "content": "hi"}],
+                "case_facts": {"last_intent_id": "beneficiary_update", "forms_on_file": {"BDBN-NOM-V1": "incomplete"}},
             },
             None,
         )
-        self.assertEqual(result["status"], "history_appended")
+        self.mod.table.get_item.assert_not_called()
+
+    def test_sets_last_intent_id_and_last_contact_at(self):
+        self.mod.table.update_item.return_value = {"Attributes": {"case_id": "CASE-1"}}
+        result = self.mod.handler(
+            {"case_id": "CASE-1", "case_facts": {"last_intent_id": "beneficiary_update"}}, None
+        )
+        self.assertEqual(result["status"], "facts_updated")
+        kwargs = self.mod.table.update_item.call_args.kwargs
+        self.assertEqual(kwargs["ExpressionAttributeValues"][":last_intent_id"], "beneficiary_update")
+        self.assertIn(":now", kwargs["ExpressionAttributeValues"])
+        self.assertEqual(kwargs["ConditionExpression"], "attribute_exists(case_id)")
         self.mod.table.update_item.assert_called_once()
-        kwargs = self.mod.table.update_item.call_args.kwargs
-        self.assertEqual(kwargs["ExpressionAttributeValues"][":next_revision"], 1)
 
-    def test_reprocessing_same_entry_id_does_not_duplicate(self):
-        self.mod.table.get_item.return_value = {
-            "Item": {
-                "case_id": "CASE-1",
-                "conversation_history": [{"entry_id": "k:inbound", "entry_type": "inbound_member_email"}],
-                "history_revision": 1,
-            }
-        }
-        result = self.mod.handler(
-            {"case_id": "CASE-1", "history_entries": [{"entry_id": "k:inbound", "entry_type": "inbound_member_email"}]},
-            None,
-        )
-        self.assertEqual(result["status"], "history_unchanged")
-        self.mod.table.update_item.assert_not_called()
-
-    def test_history_stays_bounded(self):
-        existing_history = [{"entry_id": f"old-{i}", "entry_type": "generated_draft"} for i in range(30)]
-        self.mod.table.get_item.return_value = {
-            "Item": {"case_id": "CASE-1", "conversation_history": existing_history, "history_revision": 5}
-        }
+    def test_marks_a_form_valid_via_a_nested_set_not_a_whole_map_overwrite(self):
         self.mod.table.update_item.return_value = {"Attributes": {}}
-        self.mod.handler(
-            {"case_id": "CASE-1", "history_entries": [{"entry_id": "new-1", "entry_type": "generated_draft"}]},
-            None,
-        )
-        kwargs = self.mod.table.update_item.call_args.kwargs
-        written_history = kwargs["ExpressionAttributeValues"][":history"]
-        self.assertEqual(len(written_history), self.mod._MAX_HISTORY_ENTRIES)
-        self.assertEqual(written_history[-1]["entry_id"], "new-1")
-
-    def test_appended_entry_content_is_capped(self):
-        """Draft/review entries (and a reused case's inbound entry) only ever reach DynamoDB
-        via this append path — the byte cap must be enforced here, not only at case creation."""
-        self.mod.table.get_item.return_value = {
-            "Item": {"case_id": "CASE-1", "conversation_history": [], "history_revision": 0}
-        }
-        self.mod.table.update_item.return_value = {"Attributes": {}}
-        oversized = "x" * (self.mod._MAX_HISTORY_ENTRY_BYTES + 500)
         self.mod.handler(
             {
                 "case_id": "CASE-1",
-                "history_entries": [{"entry_id": "k:draft", "entry_type": "generated_draft", "content": oversized}],
+                "case_facts": {"last_intent_id": "death_benefit_nomination", "forms_on_file": {"BDBN-NOM-V1": "valid"}},
             },
             None,
         )
         kwargs = self.mod.table.update_item.call_args.kwargs
-        written_history = kwargs["ExpressionAttributeValues"][":history"]
-        self.assertEqual(len(written_history[0]["content"]), self.mod._MAX_HISTORY_ENTRY_BYTES)
+        self.assertIn("forms_on_file.#f0 = :f0", kwargs["UpdateExpression"])
+        self.assertEqual(kwargs["ExpressionAttributeNames"]["#f0"], "BDBN-NOM-V1")
+        self.assertEqual(kwargs["ExpressionAttributeValues"][":f0"], "valid")
+        self.mod.table.update_item.assert_called_once()  # a 'valid' entry needs no second call
+
+    def test_a_non_valid_status_is_tagged_received_not_valid_not_coerced_to_valid(self):
+        """Regression: this route must never claim a form is 'valid' just because SOME status
+        was sent — only an actually-valid assessment may ever write 'valid'."""
+        self.mod.table.update_item.return_value = {"Attributes": {}}
+        self.mod.handler(
+            {"case_id": "CASE-1", "case_facts": {"forms_on_file": {"BDBN-NOM-V1": "incomplete"}}}, None
+        )
+        # Primary call: no form fields at all (only 'valid' forms go in it).
+        primary_kwargs = self.mod.table.update_item.call_args_list[0].kwargs
+        self.assertNotIn("forms_on_file", primary_kwargs["UpdateExpression"])
+        # Secondary call: the specific conditional write that tags it.
+        secondary_kwargs = self.mod.table.update_item.call_args_list[1].kwargs
+        self.assertEqual(secondary_kwargs["UpdateExpression"], "SET forms_on_file.#fid = :status")
+        self.assertEqual(secondary_kwargs["ExpressionAttributeNames"]["#fid"], "BDBN-NOM-V1")
+        self.assertEqual(secondary_kwargs["ExpressionAttributeValues"][":status"], "received_not_valid")
+        self.assertEqual(
+            secondary_kwargs["ConditionExpression"],
+            "attribute_not_exists(forms_on_file.#fid) OR forms_on_file.#fid <> :valid",
+        )
+
+    def test_a_valid_form_is_not_reverted_by_a_later_incomplete(self):
+        """The conditional write for the non-valid tag is refused (ConditionalCheckFailedException)
+        when the form is already 'valid' — the handler must treat that as success, not an error,
+        and the primary update (last_intent_id etc.) must still have gone through."""
+        self.mod.table.update_item.side_effect = [
+            {"Attributes": {"case_id": "CASE-1", "forms_on_file": {"BDBN-NOM-V1": "valid"}}},
+            ClientError({"Error": {"Code": "ConditionalCheckFailedException", "Message": "already valid"}}, "UpdateItem"),
+        ]
+        result = self.mod.handler(
+            {
+                "case_id": "CASE-1",
+                "case_facts": {"last_intent_id": "death_benefit_nomination", "forms_on_file": {"BDBN-NOM-V1": "incomplete"}},
+            },
+            None,
+        )
+        self.assertEqual(result["status"], "facts_updated")
+        self.assertEqual(self.mod.table.update_item.call_count, 2)
+
+    def test_multiple_forms_get_distinct_placeholders(self):
+        self.mod.table.update_item.return_value = {"Attributes": {}}
+        self.mod.handler(
+            {
+                "case_id": "CASE-1",
+                "case_facts": {"forms_on_file": {"BDBN-NOM-V1": "valid", "COD-V1": "valid"}},
+            },
+            None,
+        )
+        kwargs = self.mod.table.update_item.call_args.kwargs
+        self.assertEqual(set(kwargs["ExpressionAttributeNames"].values()), {"BDBN-NOM-V1", "COD-V1"})
+        self.assertTrue(all(v == "valid" for k, v in kwargs["ExpressionAttributeValues"].items() if k != ":now"))
+
+    def test_mixed_valid_and_non_valid_forms_in_one_call(self):
+        self.mod.table.update_item.return_value = {"Attributes": {}}
+        self.mod.handler(
+            {
+                "case_id": "CASE-1",
+                "case_facts": {"forms_on_file": {"BDBN-NOM-V1": "valid", "COD-V1": "incomplete"}},
+            },
+            None,
+        )
+        self.assertEqual(self.mod.table.update_item.call_count, 2)
+        primary_kwargs = self.mod.table.update_item.call_args_list[0].kwargs
+        self.assertEqual(primary_kwargs["ExpressionAttributeNames"]["#f0"], "BDBN-NOM-V1")
+        secondary_kwargs = self.mod.table.update_item.call_args_list[1].kwargs
+        self.assertEqual(secondary_kwargs["ExpressionAttributeNames"]["#fid"], "COD-V1")
 
 
 @unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")

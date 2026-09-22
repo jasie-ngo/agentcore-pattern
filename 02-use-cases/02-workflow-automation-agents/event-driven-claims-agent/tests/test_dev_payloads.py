@@ -26,6 +26,21 @@ from handler import parse_eml  # noqa: E402
 from agents import attachment_validation  # noqa: E402
 from ingestion.email_normalizer import normalize_email  # noqa: E402
 
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
+try:
+    import importlib.util as _importlib_util
+
+    _case_lookup_spec = _importlib_util.spec_from_file_location(
+        "case_lookup_creation_handler_for_fixtures",
+        os.path.join(ROOT, "lambdas", "case_lookup_creation", "handler.py"),
+    )
+    _case_lookup_mod = _importlib_util.module_from_spec(_case_lookup_spec)
+    _case_lookup_spec.loader.exec_module(_case_lookup_mod)
+    _CASE_LOOKUP_AVAILABLE = True
+except ImportError:
+    _case_lookup_mod = None
+    _CASE_LOOKUP_AVAILABLE = False
+
 EML_DIR = os.path.join(ROOT, "hesta", "sample-emails", "eml")
 
 # Mirrors _INTENT_CODE in scripts/generate_sample_emails.py.
@@ -108,6 +123,37 @@ class DevJsonValidationStatusTests(unittest.TestCase):
                 checked += 1
 
         self.assertGreater(checked, 0, "no fixtures matched the expected naming convention")
+
+
+@unittest.skipUnless(_CASE_LOOKUP_AVAILABLE, "boto3 not installed")
+class ThreadFixtureCaseIdentityTests(unittest.TestCase):
+    """TODO 7: dropping thread_1 then thread_2 must resolve to ONE case; the different-subject
+    fixture for the same member must resolve to a DIFFERENT case."""
+
+    def _case_id_for(self, fname: str) -> str:
+        json_path = os.path.join(EML_DIR, fname[: -len(".eml")] + ".dev.json")
+        with open(json_path, encoding="utf-8") as fh:
+            payload = json.load(fh)
+        inbound = normalize_email(
+            payload["prompt"],
+            sender_email=payload.get("claimant_email"),
+            source=payload.get("source"),
+            attachments=payload.get("attachments"),
+            subject=payload.get("subject"),
+        )
+        return _case_lookup_mod._case_id("60010001", inbound.thread_key)
+
+    def test_thread_1_and_thread_2_resolve_to_the_same_case(self):
+        self.assertEqual(
+            self._case_id_for("BDBN_60010001_thread_1.eml"),
+            self._case_id_for("BDBN_60010001_thread_2.eml"),
+        )
+
+    def test_otherthread_resolves_to_a_different_case(self):
+        self.assertNotEqual(
+            self._case_id_for("BDBN_60010001_thread_1.eml"),
+            self._case_id_for("BDBN_60010001_otherthread.eml"),
+        )
 
 
 if __name__ == "__main__":

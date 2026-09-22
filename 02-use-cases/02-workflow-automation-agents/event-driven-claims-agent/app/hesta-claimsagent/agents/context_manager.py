@@ -1,7 +1,13 @@
 """AI-002 — Conversation Context Manager.
 
-Reconstructs the (possibly threaded) email into a concise operational summary,
-then pulls member identity via member_lookup and cases via case_lookup_creation.
+``lookup`` is deterministic (no LLM): resolves member identity via member_lookup, then the
+member's case for this email thread via case_lookup_creation. ``summarize`` is the LLM step —
+it reconstructs the (possibly threaded) email plus the case's prior conversation (loaded from
+AgentCore Memory by the caller) into a concise operational brief.
+
+Split so main.py can load that case's Memory conversation IN BETWEEN the two calls — the case
+id (from ``lookup``) is what derives the Memory session id, and that history is what
+``summarize`` needs for its prompt.
 """
 
 from __future__ import annotations
@@ -40,33 +46,35 @@ def _get(session_manager=None):
     return _agent
 
 
+async def lookup(inbound, mcp=None, *, primary_intent_id=None) -> tuple[IdentityInfo, CaseInfo]:
+    """Deterministic identity + case resolution — no LLM, no Memory access.
+
+    Only a verified member (member_lookup returned a member_id) gets a case: case_lookup_creation
+    is skipped entirely for an unverified sender (implementation rule 3), the same as today.
+    """
+    identity = await _lookup_member(mcp, inbound)
+    cases = await _lookup_cases(mcp, identity, inbound, intent_id=primary_intent_id)
+    return identity, cases
+
+
 async def summarize(
-    inbound, mcp=None, session_manager=None, *, primary_intent_id=None, idempotency_key=None,
-    source_object_id=None, skip_summary=False, early_attachment_assessment=None,
+    inbound, identity: IdentityInfo, cases: CaseInfo, history: list[dict] | None = None, *,
+    session_manager=None, skip_summary=False,
 ) -> CaseSummary:
-    """Summarize context and pull member identity + cases.
+    """Summarize the current email in light of the case's prior conversation.
 
     Args:
         inbound: normalized email
-        mcp: MCP Gateway client for member_lookup and case_lookup_creation
-        session_manager: optional AgentCore Memory session
-        skip_summary: when True, still runs member_lookup/case_lookup_creation (the identity
-            and case record are needed regardless — e.g. to know which case a personal-advice
-            escalation belongs to) but skips the LLM summarization call entirely. Used for the
-            personal-advice short-circuit, where no LLM reasoning about the request is needed.
-        early_attachment_assessment: an AttachmentAssessment computed by the caller against an
-            EMPTY case history (TODO 6) — correct only for a genuinely brand-new case, which is
-            exactly the one case where case_lookup_creation needs it, to record the validated
-            status on that case's bootstrap history entry. Ignored when the case already exists;
-            the real assessment (using the real case history) that main.py computes afterward is
-            what drives the Writer/Reviewer/decision and any history APPEND for that case.
+        identity: resolved by ``lookup``
+        cases: resolved by ``lookup``
+        history: this case's prior conversation, loaded from AgentCore Memory by the caller
+            (memory/session.py::load_thread) — oldest-first, already bounded.
+        session_manager: optional AgentCore Memory session (Strands session manager)
+        skip_summary: when True, skips the LLM summarization call entirely (identity/cases are
+            still required by the caller regardless — e.g. to know which case a personal-advice
+            escalation belongs to). Used for the personal-advice short-circuit, where no LLM
+            reasoning about the request is needed.
     """
-    identity = await _lookup_member(mcp, inbound)
-    cases = await _lookup_cases(
-        mcp, identity, inbound, intent_id=primary_intent_id,
-        idempotency_key=idempotency_key, source_object_id=source_object_id,
-        early_attachment_assessment=early_attachment_assessment,
-    )
     if skip_summary:
         result = CaseSummary(
             summary="Personal financial advice requested — routed to human review without further analysis.",
@@ -77,16 +85,17 @@ async def summarize(
         result.cases = cases
         return result
 
-    history = "\n\n".join(
+    history = history or []
+    history_text = "\n\n".join(
         f"[{entry.get('timestamp', 'unknown')} | {entry.get('entry_type', 'unknown')}"
         f"{' | intent: ' + entry['intent_id'] if entry.get('intent_id') else ''}]\n"
         f"{entry.get('content', '')}"
-        for entry in cases.conversation_history
+        for entry in history
     ) or "(none)"
     prompt = (
         f"Channel: {inbound.channel}\nSender type: {inbound.sender_type}\n\n"
         "BEGIN HISTORICAL CASE CONVERSATION (do not confuse with current email):\n"
-        f"{history}\nEND HISTORICAL CASE CONVERSATION\n\n"
+        f"{history_text}\nEND HISTORICAL CASE CONVERSATION\n\n"
         f"CURRENT EMAIL:\n{inbound.latest_message}"
     )
     try:
@@ -100,7 +109,6 @@ async def summarize(
             outstanding_items=[],
         )
 
-    # Now pull member identity and cases
     result.identity = identity
     result.cases = cases
     return result
@@ -141,41 +149,23 @@ async def _lookup_member(mcp, inbound) -> IdentityInfo:
     )
 
 
-async def _lookup_cases(
-    mcp, identity: IdentityInfo, inbound, *, intent_id=None, idempotency_key=None,
-    source_object_id=None, early_attachment_assessment=None,
-) -> CaseInfo:
-    """Call case_lookup_creation via MCP Gateway."""
+async def _lookup_cases(mcp, identity: IdentityInfo, inbound, *, intent_id=None) -> CaseInfo:
+    """Call case_lookup_creation via MCP Gateway — keyed on (member_id, thread_key), not
+    member_id alone (D8): one member can have several concurrent cases, one per email thread."""
     if mcp is None:
         return CaseInfo(error="Gateway unavailable", status="unavailable")
     if not identity.member_id:
         return CaseInfo(error="Member identity was not established; case lookup skipped.", status="identity_unverified")
-    case_input = {}
-    case_input["member_id"] = identity.member_id
+
+    case_input = {
+        "member_id": identity.member_id,
+        "thread_key": inbound.thread_key,
+        "subject": inbound.subject,
+    }
     if intent_id:
         case_input["primary_intent_id"] = intent_id
     if inbound.from_email:
         case_input["sender_email"] = inbound.from_email
-    if inbound.latest_message:
-        case_input["inbound_email"] = inbound.latest_message
-    if idempotency_key:
-        case_input["idempotency_key"] = idempotency_key
-    if source_object_id:
-        case_input["source_object_id"] = source_object_id
-    # Always sent (not conditional on truthiness) — 0 is a meaningful value here, not "absent".
-    # Needed so a brand-new case's very first history entry records whether an attachment was
-    # present; without it, that entry is later written by main.py's own append call, but
-    # discarded as a duplicate entry_id, silently losing the field (see attachment_validation).
-    case_input["attachments_present"] = inbound.attachment_count
-    # TODO 6: same reasoning, for the validated status — only meaningful (and only used by the
-    # handler) when this turns out to be a brand-new case, which is exactly when this early,
-    # empty-history assessment is correct.
-    if early_attachment_assessment is not None:
-        case_input["attachment_status"] = early_attachment_assessment.status
-        if early_attachment_assessment.form_id:
-            case_input["form_id"] = early_attachment_assessment.form_id
-        if early_attachment_assessment.missing_fields:
-            case_input["missing_fields"] = early_attachment_assessment.missing_fields
     case_input["pipeline_version"] = "hesta-v2"
     result = await gateway.call_tool(mcp, "case_lookup_creation", case_input)
 
@@ -185,21 +175,15 @@ async def _lookup_cases(
         return CaseInfo(error=result["error"], status="error")
 
     status = result.get("status", "unknown")
-    cases = result.get("cases", []) if status == "existing_cases_found" else []
-    new_case = result.get("case") if status == "new_case_created" else None
-
-    # `case_lookup_creation` always includes both keys at the top level of every success
-    # response (handler.py), so read them directly rather than falling back into `new_case`/
-    # `cases[0]` — an `or` chain here is a bug: an empty conversation_history ([]) is falsy in
-    # Python, so it would fall through to a fallback source that can be genuinely absent
-    # (e.g. a legacy case predating this field), returning None and failing CaseInfo validation.
+    case = result.get("case")
     try:
         return CaseInfo(
             status=status,
-            cases=cases,
-            new_case=new_case,
+            case=case,
             case_id=result.get("case_id"),
-            conversation_history=result.get("conversation_history", []),
+            thread_key=(case or {}).get("thread_key", inbound.thread_key),
+            subject=(case or {}).get("subject", inbound.subject),
+            forms_on_file=(case or {}).get("forms_on_file") or {},
         )
     except Exception as exc:  # noqa: BLE001 — an unexpected Gateway response shape must not
         # crash the whole invocation; fail closed the same way the error branches above do.

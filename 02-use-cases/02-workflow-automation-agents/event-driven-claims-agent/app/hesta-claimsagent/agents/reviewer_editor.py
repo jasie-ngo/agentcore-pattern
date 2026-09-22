@@ -64,7 +64,11 @@ def _get():
 async def review(draft, intent_result, profile, attachment=None) -> ReviewResult:
     """Review a draft. Raises on failure (rather than swallowing) so the orchestrator's bounded
     revision loop can distinguish "Reviewer failed" from "Reviewer rejected the draft" — the two
-    call for different handling (stop immediately vs. revise and re-review)."""
+    call for different handling (stop immediately vs. revise and re-review).
+
+    The subject line is deliberately NOT shown here (TODO 6 / D1): it is set deterministically
+    in code, never by the Writer or flagged by the Reviewer.
+    """
     regulated = taxonomy.is_regulated(intent_result.primary_intent_id)
     prompt = (
         f"Intent: {draft.intent_id} ({taxonomy.name_for(draft.intent_id)}); regulated: {regulated}\n"
@@ -72,7 +76,6 @@ async def review(draft, intent_result, profile, attachment=None) -> ReviewResult
         f"Disclosure state: {profile.disclosure_state}\n"
         f"Attachment assessment: {attachment.status if attachment else 'not assessed'}; "
         f"{attachment.notes if attachment else 'No attachment assessment was run.'}\n\n"
-        f"DRAFT SUBJECT: {draft.subject}\n\n"
         f"DRAFT BODY:\n{draft.body}"
     )
     return await _get().structured_output_async(ReviewResult, prompt)

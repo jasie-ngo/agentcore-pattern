@@ -363,14 +363,16 @@ def _write_eml(out_dir: str, fname: str, data: bytes) -> None:
 
 def _write_dev_json(out_dir: str, fname: str, eml_bytes: bytes) -> None:
     """Write <fname minus .eml>.dev.json: the exact payload the Trigger Lambda would send for
-    this .eml, so pasting it into `agentcore dev` carries real attachments without S3. Reuses
-    parse_eml()/_from_address() (handler.py) rather than a second MIME parser."""
+    this .eml, so pasting it into `agentcore dev` carries real attachments (and the subject,
+    TODO 1) without S3. Reuses parse_eml()/_from_address() (handler.py) rather than a second
+    MIME parser."""
     msg = email.message_from_bytes(eml_bytes, policy=email.policy.default)
     body, attachments = parse_eml(msg)
     payload = {
         "prompt": body,
         "claimant_email": _from_address(msg),
         "source": f"eml:{fname}",
+        "subject": msg.get("Subject", "") or "",
         "attachments": attachments,
     }
     json_fname = fname[: -len(".eml")] + ".dev.json"
@@ -430,6 +432,71 @@ def build_eml_fixtures() -> int:
     return written
 
 
+# ── TODO 7: subject-threaded case fixtures ────────────────────────────────────
+# Reuses the same member as the BDBN "filled" fixture. thread_1 -> thread_2 (RE: subject)
+# proves (member_id, thread_key) resolves ONE case across two messages; otherthread (a
+# DIFFERENT subject, same member) proves a second, distinct case.
+_THREAD_FIXTURE_MEMBER = "60010001"
+_THREAD_FIXTURE_SUBJECT = "Nominating a new beneficiary"
+_THREAD_FIXTURE_OTHER_SUBJECT = "Checking my address on file"
+
+
+def build_thread_fixtures() -> int:
+    out = os.path.abspath(EML_OUT_DIR)
+    os.makedirs(out, exist_ok=True)
+    written = 0
+
+    member = BY_NUM[_THREAD_FIXTURE_MEMBER]
+    form_spec = catalog.form_for("death_benefit_nomination")
+
+    # thread_1: original subject, no attachment — the member asks for the form.
+    body_1 = (
+        f"Hi,\n\nI don't currently have anyone nominated as a beneficiary on my account and "
+        f"I'd like to nominate my spouse. Member number {member['member_id']}.\n\n"
+        "Can you send me the form to fill in?\n\n"
+        f"Thanks,\n{member['name']}"
+    )
+    eml_1 = _build_eml(member, _THREAD_FIXTURE_SUBJECT, body_1, None)
+    fname_1 = f"BDBN_{_THREAD_FIXTURE_MEMBER}_thread_1.eml"
+    _write_eml(out, fname_1, eml_1)
+    _write_dev_json(out, fname_1, eml_1)
+    written += 1
+
+    # thread_2: RE: subject, same member, correctly filled form attached — the follow-up
+    # that should thread back to the SAME case as thread_1.
+    filled = _fill_form(
+        "death_benefit_nomination", member, "Nominate my spouse Michael Thompson as 100% beneficiary"
+    )
+    body_2 = (
+        "Hi,\n\nThanks for sending the form through, please find my completed and signed "
+        f"nomination attached. Member number {member['member_id']}.\n\n"
+        f"Kind regards,\n{member['name']}"
+    )
+    eml_2 = _build_eml(
+        member, f"RE: {_THREAD_FIXTURE_SUBJECT}", body_2, (f"{form_spec.form_id}.txt", filled)
+    )
+    fname_2 = f"BDBN_{_THREAD_FIXTURE_MEMBER}_thread_2.eml"
+    _write_eml(out, fname_2, eml_2)
+    _write_dev_json(out, fname_2, eml_2)
+    written += 1
+
+    # otherthread: a DIFFERENT subject, same member — dropping this (instead of a thread_2
+    # reply) proves case identity is per-thread, not per-member: it must create a SECOND case.
+    body_3 = (
+        "Hi,\n\nCan you confirm the residential address you have on file for me is still "
+        f"correct? Member number {member['member_id']}.\n\n"
+        f"Thanks,\n{member['name']}"
+    )
+    eml_3 = _build_eml(member, _THREAD_FIXTURE_OTHER_SUBJECT, body_3, None)
+    fname_3 = f"BDBN_{_THREAD_FIXTURE_MEMBER}_otherthread.eml"
+    _write_eml(out, fname_3, eml_3)
+    _write_dev_json(out, fname_3, eml_3)
+    written += 1
+
+    print(f"Wrote {written} thread fixtures to {out}")
+    return written
+
+
 def main() -> None:
     out = os.path.abspath(OUT_DIR)
     os.makedirs(out, exist_ok=True)
@@ -449,6 +516,7 @@ def main() -> None:
         written += 1
 
     build_eml_fixtures()
+    build_thread_fixtures()
 
     print(f"Wrote {written} sample emails to {out}")
     if skipped_no_member:

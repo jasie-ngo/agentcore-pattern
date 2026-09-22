@@ -254,6 +254,16 @@ def handler(event, context):
                 ),
             }
 
+    # Subject: for a genuine MIME message, ALWAYS read it off the real Subject header,
+    # regardless of what shape its body text happens to look like (a MIME contact-form
+    # forward or a MIME body that starts with header-style lines still has a real Subject:
+    # header on the envelope — reading it from the body text, or not at all, would silently
+    # drop it). Legacy (non-MIME) text falls back to whatever parse_email finds in the body.
+    if mime_msg is not None:
+        subject = mime_msg.get("Subject", "") or ""
+    else:
+        subject = ""
+
     # Determine format and extract claim info
     if is_hesta_form_format(content):
         fields = parse_hesta_form(content)
@@ -264,6 +274,8 @@ def handler(event, context):
         headers, body = parse_email(content)
         prompt = f"Process this insurance claim from email:\n\n{body}"
         claimant_email = mime_claimant_email or headers.get("from", "")
+        if mime_msg is None:
+            subject = headers.get("subject", "")
         source = f"email:{headers.get('subject', 'No Subject')}"
     elif mime_msg is not None:
         # A MIME message whose text/plain body doesn't itself look like a legacy shape —
@@ -289,6 +301,7 @@ def handler(event, context):
         "source_object_id": f"s3://{bucket}/{key}:{etag}" if etag else f"s3://{bucket}/{key}",
         "idempotency_key": f"s3:{bucket}:{key}:{etag}" if etag else f"s3:{bucket}:{key}",
         "attachments": attachments,
+        "subject": subject,
     }
     if claimant_email:
         payload["claimant_email"] = claimant_email
