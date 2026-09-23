@@ -150,11 +150,11 @@
       <div class="kicker">The Baseline · What It Does Today</div>
       <h2>An autonomous, event-driven claims pipeline</h2>
       <div class="grid g3">
-        <div class="card"><h3><span class="dot" style="background:var(--cyan)"></span>Event-driven intake</h3><p>A member email → S3 → EventBridge → Lambda → AgentCore Runtime. Any file dropped in the inbox is treated as an email. No human trigger.</p></div>
-        <div class="card"><h3><span class="dot" style="background:var(--primary)"></span>Multi-agent pipeline</h3><p>Specialist agents run <b>understand → decide → execute → learn</b>: intent, context, identity, attachments, empathy, writer, reviewer.</p></div>
-        <div class="card"><h3><span class="dot" style="background:var(--amber)"></span>Human-in-the-loop + guardrails</h3><p>Regulated, unverified or advice-seeking cases route to a human; a <b>Cedar policy engine</b> and a <b>Bedrock Guardrail</b> (no personal advice) enforce the rules.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--cyan)"></span>Event-driven intake</h3><p>A claim arrives by email → S3 → EventBridge → Lambda → AgentCore Runtime. No human trigger.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--primary)"></span>Dual-agent decision</h3><p>A Processor makes an ACCEPT/REJECT decision; an independent Validator reviews it and scores confidence.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--amber)"></span>Confidence routing</h3><p>Auto-approve, escalate to human review, or reject — enforced by a Cedar policy engine.</p></div>
       </div>
-      <p class="sub">One-command deploy provisions the AWS estate and uses <b>7 AgentCore services</b> + a <b>Bedrock Guardrail</b>. That breadth is exactly what makes it a strong framework seed.</p>
+      <p class="sub">One-command deploy provisions ~76 AWS resources and uses <b>7 AgentCore services</b>. That breadth is exactly what makes it a strong framework seed.</p>
     </div>
   </section>
 
@@ -173,17 +173,16 @@
         </div>
         <div class="lane">
           <div class="lh">2 · Processing (Runtime)</div>
-          <div class="node"><b>Understand</b><small>intent + context (Memory)</small></div>
-          <div class="node"><b>Decide</b><small>identity · attachments · empathy → gate</small></div>
-          <div class="node"><b>Execute</b><small>writer · reviewer · human-in-the-loop</small></div>
-          <div class="node"><b>Learn</b><small>memory write-back · observability</small></div>
+          <div class="node"><b>Phase 1 · Claims Processor</b><small>evaluate + decide</small></div>
+          <div class="node"><b>Phase 2 · Validation Agent</b><small>review + confidence</small></div>
+          <div class="node"><b>Phase 3 · Execution</b><small>route by confidence</small></div>
         </div>
         <div class="lane">
-          <div class="lh">3 · Tools &amp; Guardrails</div>
+          <div class="lh">3 · Tools</div>
           <div class="node"><b>MCP Gateway</b><small>Cognito JWT auth</small></div>
-          <div class="node"><b>6 Lambda tools</b><small>policy, claim, review, notify, list, resolve</small></div>
+          <div class="node"><b>6 Lambda tools</b><small>policy, claim, review, notify…</small></div>
           <div class="node"><b>DynamoDB · SNS · SES</b><small>state + notifications</small></div>
-          <div class="node"><b>Cedar Policy + Bedrock Guardrail</b><small>pre-tool authz · no personal advice</small></div>
+          <div class="node"><b>Cedar Policy Engine</b><small>blocks tool calls</small></div>
         </div>
       </div>
     </div>
@@ -194,7 +193,7 @@
     <div class="inner" style="max-width:1240px">
       <div class="kicker">Current Architecture · AWS Components &amp; Data Flow</div>
       <div class="diagram-wrap">
-        <img src="architecture-diagram.svg" alt="AWS architecture diagram of the event-driven claims agent: ingress (SES, S3, EventBridge, Lambda); processing (AgentCore Runtime multi-agent pipeline — understand, decide, execute, learn — plus Bedrock with Guardrail, Identity, Memory, Cedar Policy Engine); and tools (Gateway, Cognito, Lambda tools, DynamoDB, SNS, SES)." />
+        <img src="architecture-diagram.svg" alt="AWS architecture diagram of the event-driven claims agent: ingress (SES, S3, EventBridge, Lambda), processing (Bedrock AgentCore runtime, memory, identity, policy engine), and tools (Gateway, Cognito, Lambda tools, DynamoDB, SNS, SES)." />
       </div>
     </div>
   </section>
@@ -202,15 +201,14 @@
   <!-- 5 DUAL AGENT -->
   <section class="slide">
     <div class="inner">
-      <div class="kicker">Processing · The Multi-Agent Pipeline</div>
-      <h2>Understand → decide → execute → learn</h2>
-      <div class="grid g4">
-        <div class="card"><h3><span class="tag">Understand</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Intent + Context</b><br><b>AI-001</b> maps the intent(s) &amp; detects attachments; <b>AI-002</b> reconstructs the thread (with Memory recall).</p></div>
-        <div class="card"><h3><span class="tag">Decide</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Verify + assess</b><br><b>AI-003</b> Identity (reuses the DynamoDB lookup), <b>AI-004</b> Attachments, <b>AI-005</b> Empathy → a routing gate.</p></div>
-        <div class="card"><h3><span class="tag">Execute</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Draft + review</b><br><b>AI-011</b> Writer drafts a reply for staff (shown, not sent); <b>AI-012</b> Reviewer checks it; case written for a human.</p></div>
-        <div class="card"><h3><span class="tag">Learn</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Feedback</b><br>Contacts &amp; human edits recorded to Memory; traces &amp; evaluation feed continuous improvement.</p></div>
+      <div class="kicker">Processing · The Dual-Agent Pipeline</div>
+      <h2>Decide → independently validate → execute</h2>
+      <div class="grid g3">
+        <div class="card"><h3><span class="tag">Phase 1</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Claims Processor</b><br>Extracts details, looks up the policy via a Gateway tool, and makes an <b>ACCEPT / REJECT</b> decision as structured output.</p></div>
+        <div class="card"><h3><span class="tag">Phase 2</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Validation Agent</b><br>Independently reviews the decision (reduces single-model bias) and assigns a <b>confidence score</b> + routing.</p></div>
+        <div class="card"><h3><span class="tag">Phase 3</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Execution</b><br>Deterministic: <b>auto-approve</b>, <b>escalate to human</b>, or <b>reject</b> — then create the claim & notify via tools.</p></div>
       </div>
-      <p class="sub">Specialist-agent stages are a <b>reusable orchestration pattern</b> — humans stay responsible for every regulated decision.</p>
+      <p class="sub">This "propose then check" shape is a <b>reusable orchestration pattern</b>, not something specific to claims.</p>
     </div>
   </section>
 
@@ -220,14 +218,14 @@
       <div class="kicker">Platform · AgentCore Services In Use</div>
       <h2>Seven capabilities the framework inherits</h2>
       <div class="grid g4">
-        <div class="card"><h3>Runtime</h3><p>Hosts the multi-agent container; SigV4 inbound auth; streaming.</p></div>
+        <div class="card"><h3>Runtime</h3><p>Hosts the dual-agent container; SigV4 inbound auth; streaming.</p></div>
         <div class="card"><h3>Gateway</h3><p>MCP tool discovery + invocation over Lambda targets.</p></div>
         <div class="card"><h3>Identity</h3><p>Manages Runtime → Gateway OAuth tokens; no secrets in env.</p></div>
-        <div class="card"><h3>Memory</h3><p>Semantic + summarization recall; used by the Context agent.</p></div>
+        <div class="card"><h3>Memory</h3><p>Semantic + summarization recall across sessions.</p></div>
         <div class="card"><h3>Policy Engine</h3><p>Cedar policies enforced before every tool call.</p></div>
-        <div class="card"><h3>Guardrail</h3><p>Bedrock Guardrail blocks personal financial advice in drafts.</p></div>
-        <div class="card"><h3>Observability &amp; Eval</h3><p>Traces, logs, transaction search + built-in quality metrics.</p></div>
-        <div class="card" style="background:linear-gradient(180deg,rgba(124,140,255,.14),rgba(124,140,255,.03))"><h3>+ CDK deploy</h3><p>One-command infra: repeatable across clients.</p></div>
+        <div class="card"><h3>Evaluation</h3><p>Built-in quality metrics on each invocation.</p></div>
+        <div class="card"><h3>Observability</h3><p>Traces + logs + transaction search.</p></div>
+        <div class="card" style="background:linear-gradient(180deg,rgba(124,140,255,.14),rgba(124,140,255,.03))"><h3>+ CDK deploy</h3><p>One-command infra: 76 resources, repeatable.</p></div>
       </div>
     </div>
   </section>
@@ -241,7 +239,7 @@
         <div class="colbox core">
           <h3>♻️ Framework core <span class="muted" style="font-size:13px">(keep &amp; generalize)</span></h3>
           <div class="cd">Same for every client</div>
-          <li>Multi-agent orchestration pattern (understand → decide → execute → learn)</li>
+          <li>Dual/multi-agent orchestration pattern</li>
           <li>Event-driven pipeline (ingress → runtime → tools)</li>
           <li>MCP Gateway + Lambda-tools mechanism</li>
           <li>Cedar policy engine + Identity + Memory</li>
@@ -267,7 +265,7 @@
       <div class="kicker">Our Approach · Decisions Made</div>
       <h2>A config-driven engine, deployed per client</h2>
       <div class="grid g3">
-        <div class="card"><h3><span class="dot" style="background:var(--violet)"></span>Flexible architecture</h3><p>Support variable agent counts, multiple trigger types (API, schedule, queue), and optional features — not just the current email + multi-agent shape.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--violet)"></span>Flexible architecture</h3><p>Support variable agent counts, multiple trigger types (API, schedule, queue), and optional features — not just the email/dual-agent shape.</p></div>
         <div class="card"><h3><span class="dot" style="background:var(--cyan)"></span>Internal delivery team</h3><p>Engineers clone the template, fill a <b>client-config</b>, and deploy per engagement. Optimize for repeatability.</p></div>
         <div class="card"><h3><span class="dot" style="background:var(--green)"></span>Isolated per client</h3><p>One deployment (account/stack) per client — clean data isolation, security, and cost attribution.</p></div>
       </div>

@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 680" font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arw" markerUnits="userSpaceOnUse" markerWidth="11" markerHeight="10" refX="8.5" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 Z" fill="#7c8cff"/></marker>
+    <style>
+      .name{fill:#eaf0fb;font-size:14px;font-weight:700}
+      .sub{fill:#93a1bd;font-size:11px}
+      .zt{fill:#3fd6e0;font-size:12.5px;font-weight:700;letter-spacing:1.3px}
+      .item{fill:#cdd7ec;font-size:12.5px}
+      .cap{fill:#eaf0fb;font-size:13px;font-weight:700}
+      .capsub{fill:#9fb0d6;font-size:10px}
+      .lbl{fill:#c3ccff;font-size:11px;font-weight:600}
+      .note{fill:#7d8aa8;font-size:11px;font-style:italic}
+      .tag{fill:#d7c9ff;font-size:12px;font-weight:700}
+      .edge{stroke:#7c8cff;stroke-width:2;fill:none;marker-end:url(#arw)}
+      .bus{stroke:#7c8cff;stroke-width:2;fill:none;stroke-opacity:.5}
+      .flow{fill:none;stroke:#cdd4ff;stroke-width:2.6;stroke-linecap:round;stroke-dasharray:3 97;animation:flow 2.6s linear infinite}
+      @keyframes flow{to{stroke-dashoffset:-100}}
+      @media (prefers-reduced-motion:reduce){.flow{animation:none;opacity:0}}
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="680" fill="#0f1729"/>
+
+  <!-- zone labels -->
+  <text class="zt" x="56" y="52">1 · CLIENT CONFIG SPEC</text>
+  <text class="zt" x="404" y="52">2 · ACCELERATOR ENGINE · WRITE ONCE, REUSE</text>
+  <text class="zt" x="968" y="52">3 · ISOLATED DEPLOYMENTS</text>
+
+  <!-- ============ 1 · CONFIG SPEC (stacked to imply many clients) ============ -->
+  <rect x="80" y="90" width="268" height="404" rx="14" fill="#141d33" stroke="#f5b13d" stroke-opacity=".25"/>
+  <rect x="68" y="80" width="268" height="404" rx="14" fill="#16203a" stroke="#f5b13d" stroke-opacity=".4"/>
+  <rect x="56" y="70" width="268" height="404" rx="14" fill="#18233f" stroke="#f5b13d" stroke-opacity=".7"/>
+  <rect x="56" y="70" width="268" height="30" rx="14" fill="#f5b13d" fill-opacity=".12"/>
+  <text class="name" x="72" y="90" fill="#f7d38a">client-config.yaml</text>
+  <text class="sub" x="72" y="122">declarative · one per client</text>
+  <g>
+    <rect x="72" y="140" width="9" height="9" rx="2" fill="#3fd6e0"/><text class="item" x="90" y="149">identity &amp; branding</text>
+    <rect x="72" y="172" width="9" height="9" rx="2" fill="#7c8cff"/><text class="item" x="90" y="181">agents &amp; prompts</text>
+    <rect x="72" y="204" width="9" height="9" rx="2" fill="#ed7100"/><text class="item" x="90" y="213">tools &amp; schemas</text>
+    <rect x="72" y="236" width="9" height="9" rx="2" fill="#4ade80"/><text class="item" x="90" y="245">trigger adapter</text>
+    <rect x="72" y="268" width="9" height="9" rx="2" fill="#4b61d1"/><text class="item" x="90" y="277">data model</text>
+    <rect x="72" y="300" width="9" height="9" rx="2" fill="#fb7185"/><text class="item" x="90" y="309">routing &amp; policies</text>
+    <rect x="72" y="332" width="9" height="9" rx="2" fill="#b18cff"/><text class="item" x="90" y="341">guardrails</text>
+    <rect x="72" y="364" width="9" height="9" rx="2" fill="#01a88d"/><text class="item" x="90" y="373">models</text>
+  </g>
+  <line x1="72" y1="398" x2="308" y2="398" stroke="#ffffff" stroke-opacity=".08"/>
+  <text class="sub" x="72" y="424" fill="#b7c2db">Everything client-specific</text>
+  <text class="sub" x="72" y="444">lives here — no core edits.</text>
+  <text class="note" x="56" y="520">Clients A · B · C … N — one spec each</text>
+
+  <!-- ============ 2 · ENGINE ============ -->
+  <rect x="384" y="70" width="524" height="470" rx="16" fill="#01a88d" fill-opacity=".055" stroke="#01a88d" stroke-opacity=".45"/>
+
+  <!-- scaffolding band -->
+  <rect x="400" y="86" width="492" height="52" rx="11" fill="#16203a" stroke="#8c4fff" stroke-opacity=".6"/>
+  <text class="cap" x="418" y="110" fill="#d7c9ff">🛠  create-client generator · config validator</text>
+  <text class="capsub" x="418" y="127">reads the spec → scaffolds a deployable client project</text>
+
+  <!-- reusable core capabilities -->
+  <g>
+    <rect x="400" y="156" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="416" y="186">Orchestration pattern</text><text class="capsub" x="416" y="206">understand → decide →</text><text class="capsub" x="416" y="220">execute → learn</text>
+    <rect x="656" y="156" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="672" y="186">Trigger adapters</text><text class="capsub" x="672" y="206">email · API · queue ·</text><text class="capsub" x="672" y="220">schedule (pluggable)</text>
+    <rect x="400" y="244" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="416" y="274">MCP tool registry</text><text class="capsub" x="416" y="294">AgentCore Gateway +</text><text class="capsub" x="416" y="308">Lambda tool targets</text>
+    <rect x="656" y="244" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="672" y="274">Identity · Memory</text><text class="capsub" x="672" y="294">OAuth tokens ·</text><text class="capsub" x="672" y="308">semantic recall</text>
+    <rect x="400" y="332" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="416" y="362">Cedar policy · Guardrail</text><text class="capsub" x="416" y="382">pre-tool authz ·</text><text class="capsub" x="416" y="396">safe output</text>
+    <rect x="656" y="332" width="236" height="76" rx="11" fill="#16203a" stroke="#01a88d" stroke-opacity=".6"/><text class="cap" x="672" y="362">Observability · Eval</text><text class="capsub" x="672" y="382">traces · logs ·</text><text class="capsub" x="672" y="396">quality gates</text>
+  </g>
+  <text class="note" x="400" y="432" fill="#7d9a92">Reusable core — written once, unchanged across clients.</text>
+  <rect x="400" y="452" width="492" height="70" rx="11" fill="#0f1a30" stroke="#01a88d" stroke-opacity=".35"/>
+  <rect x="412" y="466" width="20" height="20" rx="5" fill="#ed7100"/>
+  <text class="cap" x="442" y="480">One-command deploy · AWS CDK</text>
+  <text class="capsub" x="442" y="500">provisions the full AgentCore estate from the bound config</text>
+
+  <!-- ============ 3 · DEPLOYMENTS ============ -->
+  <g><rect x="956" y="90" width="284" height="96" rx="12" fill="#16203a" stroke="#3fd6e0" stroke-opacity=".7"/><rect x="972" y="108" width="20" height="20" rx="5" fill="#3fd6e0"/><text class="name" x="1002" y="122">Client A · isolated stack</text><text class="sub" x="1002" y="142">own AWS account</text><text class="sub" x="972" y="168">data · security · cost isolation</text></g>
+  <g><rect x="956" y="198" width="284" height="96" rx="12" fill="#16203a" stroke="#7c8cff" stroke-opacity=".7"/><rect x="972" y="216" width="20" height="20" rx="5" fill="#7c8cff"/><text class="name" x="1002" y="230">Client B · isolated stack</text><text class="sub" x="1002" y="250">own AWS account</text><text class="sub" x="972" y="276">data · security · cost isolation</text></g>
+  <g><rect x="956" y="306" width="284" height="96" rx="12" fill="#16203a" stroke="#b18cff" stroke-opacity=".7"/><rect x="972" y="324" width="20" height="20" rx="5" fill="#b18cff"/><text class="name" x="1002" y="338">Client C · isolated stack</text><text class="sub" x="1002" y="358">own AWS account</text><text class="sub" x="972" y="384">data · security · cost isolation</text></g>
+  <rect x="956" y="414" width="284" height="52" rx="12" fill="#0f1a30" stroke="#ffffff" stroke-opacity=".12" stroke-dasharray="5 4"/>
+  <text class="sub" x="1098" y="445" text-anchor="middle" fill="#93a1bd">+ every future client · same engine</text>
+
+  <!-- ============ FLOWS ============ -->
+  <!-- spec -> engine -->
+  <path class="edge" d="M324,300 L382,300"/>
+  <text class="lbl" x="330" y="292">validate + bind</text>
+  <!-- engine -> deployments (trunk + bus + branches) -->
+  <path class="edge" d="M908,300 L934,300"/>
+  <text class="lbl" x="912" y="292">generate</text><text class="lbl" x="912" y="332">+ deploy</text>
+  <path class="bus" d="M934,138 L934,462"/>
+  <path class="edge" d="M934,138 L954,138"/>
+  <path class="edge" d="M934,246 L954,246"/>
+  <path class="edge" d="M934,354 L954,354"/>
+  <path class="edge" d="M934,440 L954,440"/>
+
+  <!-- flow comets -->
+  <g>
+    <path class="flow" pathLength="100" d="M324,300 L382,300"/>
+    <path class="flow" pathLength="100" style="animation-delay:.9s" d="M908,300 L934,300"/>
+    <path class="flow" pathLength="100" style="animation-delay:1.2s" d="M934,138 L954,138"/>
+    <path class="flow" pathLength="100" style="animation-delay:1.4s" d="M934,246 L954,246"/>
+    <path class="flow" pathLength="100" style="animation-delay:1.6s" d="M934,354 L954,354"/>
+  </g>
+
+  <!-- tagline -->
+  <text x="640" y="628" text-anchor="middle" fill="#c7d2e8" font-size="16" font-weight="700">Same engine · different config · isolated per client</text>
+  <text x="640" y="652" text-anchor="middle" fill="#7d8aa8" font-size="12.5">Reuse instead of rebuild — every new client is a config file, not a project from scratch.</text>
+</svg>

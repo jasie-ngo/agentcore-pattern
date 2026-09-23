@@ -1,0 +1,5 @@
+{
+  "prompt": "You've received a new form based mail.\n\nValues:\nenquiry-sent-from\tMember\nemail-address\tjane.doe@example.com\nmember-number\tPOL-12345\nname\tJane Doe\nphone\t0400 000 000\nreason-for-enquiry\tAccessing super\nmessage\tI would like to know if you received my application to withdraw some money from my account. I sent the form three weeks ago and it still isn't showing in Member Online.",
+  "claimant_email": "jane.doe@example.com",
+  "source": "s3://hesta-inbox/2026/09/contact-form-00412.txt"
+}

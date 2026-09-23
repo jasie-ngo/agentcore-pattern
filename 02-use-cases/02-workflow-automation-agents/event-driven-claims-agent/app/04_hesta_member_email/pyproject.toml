@@ -1,0 +1,13 @@
+[project]
+name = "hesta-member-email-agent"
+version = "0.1.0"
+description = "HESTA member-email agentic pilot, composed entirely in YAML"
+requires-python = ">=3.11"
+dependencies = [
+    "strands-compose-agentcore>=0.10.0,<1.0.0",
+    # AgentCore Memory session manager (agents.context_manager.session_manager)
+    # and the Identity M2M token for the Gateway (hesta/gateway.py).
+    "bedrock-agentcore",
+    # MCP streamable-HTTP transport used to reach the AgentCore Gateway.
+    "mcp",
+]
