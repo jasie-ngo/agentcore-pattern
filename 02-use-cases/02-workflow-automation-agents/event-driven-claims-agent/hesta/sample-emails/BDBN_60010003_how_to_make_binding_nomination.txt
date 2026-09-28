@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : patricia.green@example.org
+member-number : 60010003
+name : Patricia Green
+phone : 0400 111 003
+reason-for-enquiry : Other
+message : Hello, I don't currently have any beneficiary listed. How do I make a binding death benefit nomination? Can you send me the form?

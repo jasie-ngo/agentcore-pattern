@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : tom.fletcher@example.com
+member-number : 60030001
+name : Tom Fletcher
+phone : 0400 333 001
+reason-for-enquiry : Updating my account details
+message : Hi there, my mobile number has changed. I tried to update it in the portal but it says I need to call. Could you please update my number so I can log in again?

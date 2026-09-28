@@ -1,0 +1,1 @@
+[{"name": "member_lookup", "description": "Look up member information by member_id or email", "inputSchema": {"type": "object", "properties": {"member_id": {"type": "string", "description": "The member identifier (optional if email provided)"}, "email": {"type": "string", "description": "The member email address (optional if member_id provided)"}}, "required": []}}]

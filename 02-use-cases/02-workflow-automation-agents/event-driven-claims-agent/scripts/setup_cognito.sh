@@ -20,11 +20,11 @@ REGION="${1:-${AWS_REGION:-us-west-2}}"
 STATE_FILE="$PROJECT_DIR/.cognito-state.json"
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
-POOL_NAME="ClaimsAgent-UserPool"
-DOMAIN_PREFIX="claims-agent-${ACCOUNT_ID}"
+POOL_NAME="ClaimsAgentV2-UserPool"
+DOMAIN_PREFIX="claims-agent-v2-${ACCOUNT_ID}"
 RESOURCE_SERVER_ID="agentcore"
 SCOPE_NAME="invoke"
-CLIENT_NAME="ClaimsAgent-M2M"
+CLIENT_NAME="ClaimsAgentV2-M2M"
 
 echo "🔐 Setting up Cognito User Pool for Gateway auth..."
 echo "   Region: $REGION"

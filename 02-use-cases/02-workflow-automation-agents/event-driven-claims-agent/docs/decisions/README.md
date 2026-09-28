@@ -18,3 +18,4 @@ Each ADR captures a non-trivial architectural choice, the reasoning behind it, t
 | [0012](0012-gsi-over-scan-for-status-queries.md) | GSI Over Scan for Status Queries | Eliminates full table scans — uses DynamoDB GSIs for O(results) instead of O(table) |
 | [0013](0013-cost-routing-fast-model-for-validator.md) | Cost-Based Model Routing — Fast Model for Validator | Uses Haiku for the classification-only Validation Agent (Phase 2), saving 3–8s and ~80% cost per invocation |
 | [0014](0014-deterministic-phase3-no-llm.md) | Deterministic Phase 3 — Direct MCP Tool Calls | Eliminates the 3rd LLM call; executes tool calls directly via MCPClient with known parameters from structured output |
+| [0015](0015-subject-threaded-cases-memory-conversation.md) | Subject-Threaded Cases + Memory-Backed Conversation | Keys a case on (member, email thread) instead of member alone; moves the conversation out of DynamoDB into AgentCore Memory |

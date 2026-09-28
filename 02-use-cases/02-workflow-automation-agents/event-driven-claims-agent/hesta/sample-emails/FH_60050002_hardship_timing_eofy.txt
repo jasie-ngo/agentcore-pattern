@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : nicole.adams@example.net
+member-number : 60050002
+name : Nicole Adams
+phone : 0400 555 002
+reason-for-enquiry : Accessing super
+message : I received a $10,000 financial hardship payment last year. When can I apply again, and will I be able to before the end of the financial year? Member number 60050002.

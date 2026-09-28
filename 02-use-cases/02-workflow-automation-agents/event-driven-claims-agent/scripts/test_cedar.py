@@ -16,6 +16,7 @@ import json
 import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import boto3
 
@@ -23,7 +24,7 @@ import boto3
 def get_cognito_token(region: str) -> tuple[str, str]:
     """Get M2M token and runtime ARN from CloudFormation outputs."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgentV2-dev")["Stacks"][0]["Outputs"]
     output_map = {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
     # CDK auto-generates output keys with hash suffixes — find by prefix
@@ -33,9 +34,12 @@ def get_cognito_token(region: str) -> tuple[str, str]:
                 return val
         return ""
 
-    user_pool_id = find_output("InfraUserPoolId")
-    client_id = find_output("InfraUserPoolClientId")
     runtime_arn = find_output("RuntimeArn")
+
+    state_path = Path(__file__).resolve().parents[1] / ".cognito-state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    user_pool_id = state["user_pool_id"]
+    client_id = state["client_id"]
 
     cognito = boto3.client("cognito-idp", region_name=region)
     client_info = cognito.describe_user_pool_client(UserPoolId=user_pool_id, ClientId=client_id)
@@ -111,27 +115,18 @@ def run_tests(region: str) -> bool:
 
     tests = [
         {
-            "name": "High-value claim ($150k) — should be BLOCKED",
-            "prompt": (
-                "File a claim for POL-12345. My car was completely totaled in a highway accident. "
-                "The estimated repair cost is $150,000."
-            ),
-            "expect_blocked": True,
-        },
-        {
-            "name": "Normal claim ($5k) — should SUCCEED",
-            "prompt": (
-                "File a claim for POL-12345. A storm caused a tree branch to fall on my car, "
-                "cracking the windshield and denting the roof. Estimated damage is $5,000."
-            ),
+            "name": "Member lookup is permitted",
+            "prompt": "Look up member 60010001 using member_lookup.",
             "expect_blocked": False,
         },
         {
-            "name": "Boundary claim ($99,999) — should SUCCEED (just under $100k threshold)",
-            "prompt": (
-                "File a claim for POL-11111. My car was badly damaged in a collision. "
-                "The estimated repair cost is $99,999."
-            ),
+            "name": "Case creation is permitted",
+            "prompt": "Create or find my HESTA case using member_lookup and case_lookup_creation for member 60010001.",
+            "expect_blocked": False,
+        },
+        {
+            "name": "Anonymous case creation is permitted",
+            "prompt": "I cannot provide my member number yet. Please create a case for sender unknown@example.com.",
             "expect_blocked": False,
         },
     ]
@@ -156,7 +151,7 @@ def run_tests(region: str) -> bool:
                     "not authorized",
                     "forbidden",
                     "exceed",
-                    "human review",  # agent routes to human review when create_claim is blocked
+                    "human review",  # anonymous or unverified requests are routed to human review
                 ]
             )
 

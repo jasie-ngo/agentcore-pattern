@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : gary.nguyen@example.com
+member-number : 60080004
+name : Gary Nguyen
+phone : 0400 888 004
+reason-for-enquiry : Other
+message : I have super with AustralianSuper and HostPlus that I want to consolidate into HESTA. Please advise how to combine them. Member number 60080004.

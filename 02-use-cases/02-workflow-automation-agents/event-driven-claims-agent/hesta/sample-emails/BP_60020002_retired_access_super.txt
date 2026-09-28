@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : linda.carmody@example.net
+member-number : 60020002
+name : Linda Carmody
+phone : 0400 222 002
+reason-for-enquiry : Accessing super
+message : I have permanently retired and would like to access some of my super. What is the process and how long does it take?

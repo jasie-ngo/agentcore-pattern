@@ -1,149 +1,368 @@
-"""Unit tests for the structured-output tools in app/claimsagent/tools/structured_output.py.
+"""Unit tests for the HESTA structured models and deterministic attachment step."""
 
-Covers state capture, confidence clamping, value normalization (uppercasing),
-copy semantics, and reset behavior. These tools require the Strands SDK
-(`@tool` decorator), so the whole module is skipped when Strands isn't installed
-(e.g., running `python3 -m unittest` outside the agent venv). Run under the
-agent venv (`app/claimsagent/.venv`) to exercise them.
-
-Run:
-    app/claimsagent/.venv/bin/python -m unittest discover -s tests
-"""
-
-import json
 import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "claimsagent"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "hesta-claimsagent"))
 
-try:
-    from tools.structured_output import (
-        get_last_decision,
-        get_last_validation,
-        reset_state,
-        submit_decision,
-        submit_validation,
-    )
-
-    _STRANDS_AVAILABLE = True
-except ImportError:
-    _STRANDS_AVAILABLE = False
+import config  # noqa: E402
+from agents import disclosure_check  # noqa: E402
+from agents.attachment_validation import assess  # noqa: E402
+from forms import catalog, parser  # noqa: E402
+from ingestion.email_normalizer import normalize_email, normalize_subject, strip_reply_prefixes  # noqa: E402
+from knowledge import hesta_snippets  # noqa: E402
+from models import AttachmentAssessment, MemberProfile  # noqa: E402
+from intents import taxonomy  # noqa: E402
 
 
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class SubmitDecisionTests(unittest.TestCase):
-    def setUp(self):
-        reset_state()
+class _FakeIntent:
+    def __init__(self, intent_id):
+        self.primary_intent_id = intent_id
 
-    def test_records_decision_fields(self):
-        submit_decision(
-            decision="accept",
-            amount=2000,
-            policy_number="POL-12345",
-            category="auto_collision",
-            description="fender bender",
-            reasoning="within limits",
-            coverage_check="active, $500 deductible",
+
+def _filled_form(intent_id: str, *, drop_field: str | None = None, values: dict[str, str] | None = None) -> str:
+    """Fill in a blank catalog template for `intent_id`, leaving `drop_field` blank."""
+    spec = catalog.form_for(intent_id)
+    text = catalog.blank_template(intent_id)
+    defaults = {
+        "Member name": "Sarah Thompson",
+        "Member email": "sarah@example.com",
+        "Member number": "60010001",
+    }
+    if values:
+        defaults.update(values)
+    for field in spec.fields:
+        value = "______________________________" if field.label == drop_field else defaults.get(
+            field.label, "Some detail text"
         )
-        captured = get_last_decision()
-        self.assertEqual(captured["decision"], "ACCEPT")
-        self.assertEqual(captured["amount"], 2000)
-        self.assertEqual(captured["policy_number"], "POL-12345")
-        self.assertEqual(captured["category"], "auto_collision")
+        text = text.replace("______________________________", value, 1)
+    return text
 
-    def test_decision_uppercased(self):
-        submit_decision(
-            decision="reject",
-            amount=0,
-            policy_number="POL-1",
-            category="theft",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+
+class HestaModelTests(unittest.TestCase):
+    def test_member_profile_uses_member_id_contract(self):
+        profile = MemberProfile(
+            member_number="60010001",
+            matched=True,
+            match_key="member_id",
+            factors_matched=["member_id", "email"],
+            verification_level="verified",
+            verification_required=False,
         )
-        self.assertEqual(get_last_decision()["decision"], "REJECT")
+        self.assertEqual(profile.match_key, "member_id")
+        self.assertEqual(profile.factors_matched, ["member_id", "email"])
 
-    def test_returns_status_json(self):
-        result = submit_decision(
-            decision="accept",
-            amount=100,
-            policy_number="POL-1",
-            category="medical",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+    def test_marker_convention_is_gone(self):
+        """D5: a body that still contains a literal [ATTACHMENT ...] marker reports zero
+        attachments — only entries in the real `attachments` list count."""
+        inbound = normalize_email("Please find attached my form. [ATTACHMENT form.pdf]")
+        self.assertEqual(inbound.attachment_count, 0)
+        self.assertEqual(inbound.attachments, [])
+
+    def test_attachment_missing_for_expected_document(self):
+        inbound = normalize_email("Please send my BDBN form. Member number 60010001.", attachments=[])
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertIsInstance(result, AttachmentAssessment)
+        self.assertEqual(result.status, "missing")
+        self.assertEqual(result.expected_document, taxonomy.expected_attachment("death_benefit_nomination"))
+
+    def test_attachment_valid_when_form_matches_and_is_filled_in(self):
+        filled = _filled_form("death_benefit_nomination")
+        inbound = normalize_email(
+            "Please find attached my form.",
+            attachments=[{"filename": "bdbn.txt", "content_type": "text/plain", "text": filled}],
         )
-        parsed = json.loads(result)
-        self.assertEqual(parsed["status"], "recorded")
-        self.assertEqual(parsed["decision"], "ACCEPT")
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "valid")
+        self.assertEqual(result.attachments_present, 1)
+        self.assertEqual(result.form_id, "BDBN-NOM-V1")
+        self.assertIn("not been semantically verified", result.notes)
 
-    def test_get_returns_copy_not_reference(self):
-        submit_decision(
-            decision="accept",
-            amount=100,
-            policy_number="POL-1",
-            category="medical",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+    def test_matching_form_wins_regardless_of_attachment_order(self):
+        """A member attaching their correct filled form PLUS an unrelated one must still be
+        told 'valid' — the matching form wins no matter which MIME part comes first."""
+        correct = _filled_form("death_benefit_nomination")
+        wrong = _filled_form("financial_hardship")
+
+        inbound_wrong_first = normalize_email(
+            "here",
+            attachments=[
+                {"filename": "fh.txt", "content_type": "text/plain", "text": wrong},
+                {"filename": "bdbn.txt", "content_type": "text/plain", "text": correct},
+            ],
         )
-        snapshot = get_last_decision()
-        snapshot["decision"] = "MUTATED"
-        # Mutating the returned dict must not affect internal state.
-        self.assertEqual(get_last_decision()["decision"], "ACCEPT")
+        result_a = assess(inbound_wrong_first, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result_a.status, "valid")
+        self.assertEqual(result_a.form_id, "BDBN-NOM-V1")
 
-
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class SubmitValidationTests(unittest.TestCase):
-    def setUp(self):
-        reset_state()
-
-    def test_records_validation_fields(self):
-        submit_validation(
-            confidence=92,
-            routing="auto_approve",
-            validation_notes="clean",
-            concerns="None",
+        inbound_correct_first = normalize_email(
+            "here",
+            attachments=[
+                {"filename": "bdbn.txt", "content_type": "text/plain", "text": correct},
+                {"filename": "fh.txt", "content_type": "text/plain", "text": wrong},
+            ],
         )
-        captured = get_last_validation()
-        self.assertEqual(captured["confidence"], 92)
-        self.assertEqual(captured["routing"], "AUTO_APPROVE")
+        result_b = assess(inbound_correct_first, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result_b.status, "valid")
 
-    def test_confidence_clamped_above_100(self):
-        submit_validation(confidence=150, routing="auto_approve", validation_notes="n", concerns="None")
-        self.assertEqual(get_last_validation()["confidence"], 100)
-
-    def test_confidence_clamped_below_0(self):
-        submit_validation(confidence=-10, routing="human_review", validation_notes="n", concerns="c")
-        self.assertEqual(get_last_validation()["confidence"], 0)
-
-    def test_routing_uppercased(self):
-        submit_validation(confidence=50, routing="human_review", validation_notes="n", concerns="c")
-        self.assertEqual(get_last_validation()["routing"], "HUMAN_REVIEW")
-
-
-@unittest.skipUnless(_STRANDS_AVAILABLE, "Strands SDK not installed (run under agent venv)")
-class ResetStateTests(unittest.TestCase):
-    def test_reset_clears_both(self):
-        submit_decision(
-            decision="accept",
-            amount=1,
-            policy_number="POL-1",
-            category="auto",
-            description="d",
-            reasoning="r",
-            coverage_check="c",
+    def test_attachment_incomplete_names_the_blank_field(self):
+        filled = _filled_form("death_benefit_nomination", drop_field="Nomination details")
+        inbound = normalize_email(
+            "here", attachments=[{"filename": "bdbn.txt", "content_type": "text/plain", "text": filled}]
         )
-        submit_validation(confidence=90, routing="auto_approve", validation_notes="n", concerns="None")
-        reset_state()
-        self.assertEqual(get_last_decision(), {})
-        self.assertEqual(get_last_validation(), {})
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "incomplete")
+        self.assertEqual(result.missing_fields, ["Nomination details"])
 
-    def test_empty_state_before_submit(self):
-        reset_state()
-        self.assertEqual(get_last_decision(), {})
-        self.assertEqual(get_last_validation(), {})
+    def test_attachment_wrong_form_names_both_forms(self):
+        wrong = _filled_form("financial_hardship")
+        inbound = normalize_email(
+            "here", attachments=[{"filename": "fh.txt", "content_type": "text/plain", "text": wrong}]
+        )
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "wrong_form")
+        self.assertIn("Binding Death Benefit Nomination Form", result.notes)
+        self.assertIn("Financial Hardship Form", result.notes)
+
+    def test_attachment_unreadable_when_undecodable(self):
+        inbound = normalize_email(
+            "here",
+            attachments=[
+                {"filename": "form.pdf", "content_type": "application/pdf", "text": None, "skipped_reason": "unsupported content type"}
+            ],
+        )
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "unreadable")
+
+    def test_attachment_unreadable_when_not_a_hesta_form(self):
+        inbound = normalize_email(
+            "here", attachments=[{"filename": "note.txt", "content_type": "text/plain", "text": "just some notes"}]
+        )
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "unreadable")
+
+    def test_unreadable_note_reports_all_reasons_not_just_one(self):
+        """Regression: a mix of 'too large' and 'not a form' must both surface, not just
+        whichever one `any_readable` happened to pick last."""
+        inbound = normalize_email(
+            "here",
+            attachments=[
+                {"filename": "big.pdf", "content_type": "application/pdf", "text": None, "skipped_reason": "attachment exceeds the 262144 byte limit (300000 bytes)"},
+                {"filename": "note.txt", "content_type": "text/plain", "text": "just some notes"},
+            ],
+        )
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"))
+        self.assertEqual(result.status, "unreadable")
+        self.assertIn("exceeds the 262144 byte limit", result.notes)
+        self.assertIn("not recognisable as a HESTA form", result.notes)
+
+    def test_not_applicable_when_no_form_for_intent(self):
+        inbound = normalize_email("hi", attachments=[])
+        result = assess(inbound, _FakeIntent("other_unknown"))
+        self.assertEqual(result.status, "not_applicable")
+
+    def test_missing_attachment_satisfied_by_earlier_valid_form_on_the_case(self):
+        """A follow-up with no new attachment doesn't re-flag as missing if the case's
+        forms_on_file shows a *validated valid* form earlier — case-wide (D7/TODO 5)."""
+        inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
+        forms_on_file = {"BDBN-NOM-V1": "valid"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
+        self.assertEqual(result.status, "valid")
+        self.assertEqual(result.attachments_present, 0)
+        self.assertIn("already on file", result.notes)
+
+    def test_missing_attachment_not_satisfied_by_earlier_incomplete_form(self):
+        """TODO 4 rule 5: raising the bar — a previously incomplete/wrong form does NOT
+        count as already on file, only a previously valid one does."""
+        inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
+        forms_on_file = {"BDBN-NOM-V1": "incomplete"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
+        self.assertEqual(result.status, "missing")
+
+    def test_missing_attachment_not_satisfied_by_a_received_not_valid_tag(self):
+        """The case Lambda persists a non-valid status as the generic 'received_not_valid' tag
+        (never the raw incomplete/wrong_form/unreadable string) — that must not satisfy
+        _previously_valid either."""
+        inbound = normalize_email("Just checking in on this. Member number 60010001.", attachments=[])
+        forms_on_file = {"BDBN-NOM-V1": "received_not_valid"}
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file=forms_on_file)
+        self.assertEqual(result.status, "missing")
+
+    def test_missing_attachment_with_no_prior_forms_stays_missing(self):
+        inbound = normalize_email("Please send my BDBN form. Member number 60010001.", attachments=[])
+        result = assess(inbound, _FakeIntent("death_benefit_nomination"), forms_on_file={})
+        self.assertEqual(result.status, "missing")
+
+
+class SubjectNormalizationTests(unittest.TestCase):
+    """TODO 1: the case key depends on subject normalization being exactly reproducible."""
+
+    def test_prefix_variants_yield_the_same_thread_key(self):
+        variants = [
+            "Binding nomination",
+            "RE: Binding nomination",
+            "Re: RE: binding  nomination",
+            "FW: Binding nomination",
+            "Fwd: fw: RE: Binding   Nomination",
+            "[EXTERNAL] Binding nomination",
+            "[EXTERNAL] RE: Binding nomination",
+            "RE: [EXTERNAL] Binding nomination",
+            "[external] Re: [EXTERNAL] Fwd: Binding nomination",
+        ]
+        keys = {normalize_subject(v) for v in variants}
+        self.assertEqual(len(keys), 1)
+
+    def test_strip_reply_prefixes_removes_external_tag_in_any_order(self):
+        self.assertEqual(strip_reply_prefixes("[EXTERNAL] Binding nomination"), "Binding nomination")
+        self.assertEqual(strip_reply_prefixes("RE: [EXTERNAL] Binding nomination"), "Binding nomination")
+        self.assertEqual(
+            strip_reply_prefixes("[EXTERNAL] RE: RE: Binding nomination"), "Binding nomination"
+        )
+
+    def test_normalize_subject_casefolds_and_collapses_whitespace(self):
+        self.assertEqual(normalize_subject("  Binding   Nomination  "), "binding nomination")
+
+    def test_blank_subject_normalizes_to_empty_string(self):
+        self.assertEqual(normalize_subject(""), "")
+        self.assertEqual(normalize_subject(None), "")
+
+    def test_inbound_thread_key_matches_normalize_subject(self):
+        inbound = normalize_email("hi", subject="RE: Binding nomination")
+        self.assertEqual(inbound.thread_key, normalize_subject("RE: Binding nomination"))
+
+    def test_strip_reply_prefixes_preserves_casing_and_whitespace(self):
+        self.assertEqual(strip_reply_prefixes("RE: RE:  Binding  Nomination"), "Binding  Nomination")
+
+    def test_reply_subject_thread_key_matches_original_subjects_thread_key(self):
+        """TODO 6 acceptance criterion: normalize_subject(draft.subject) == inbound.thread_key."""
+        from agents.writer import reply_subject
+
+        class _FakeInbound:
+            subject = "RE: RE: Binding nomination"
+
+        draft_subject = reply_subject(_FakeInbound())
+        self.assertEqual(draft_subject, "RE: Binding nomination")
+        self.assertEqual(normalize_subject(draft_subject), normalize_subject(_FakeInbound.subject))
+
+
+class FormCatalogTests(unittest.TestCase):
+    """TODO 1 acceptance criteria: catalog/template consistency."""
+
+    def test_every_intent_resolves_to_a_form(self):
+        for intent in taxonomy.INTENTS:
+            spec = catalog.form_for(intent.id)
+            self.assertIsNotNone(spec, f"missing FormSpec for {intent.id}")
+            self.assertTrue(catalog.blank_template(intent.id))
+
+    def test_other_unknown_has_no_form(self):
+        self.assertIsNone(catalog.form_for("other_unknown"))
+
+    def test_form_ids_are_unique(self):
+        form_ids = [catalog.form_for(i.id).form_id for i in taxonomy.INTENTS]
+        self.assertEqual(len(form_ids), len(set(form_ids)))
+
+    def test_template_declares_exactly_its_spec_fields(self):
+        for intent in taxonomy.INTENTS:
+            spec = catalog.form_for(intent.id)
+            text = catalog.blank_template(intent.id)
+            self.assertIn(f"HESTA-FORM-ID: {spec.form_id}", text)
+            for field in spec.fields:
+                self.assertIn(field.label, text)
+
+    def test_field_colons_are_column_aligned(self):
+        """Cosmetic, but member-facing: every 'Label : value' line in a template should
+        have its colon in the same column, not just parse correctly."""
+        for intent in taxonomy.INTENTS:
+            text = catalog.blank_template(intent.id)
+            colon_columns = {
+                line.index(":")
+                for line in text.splitlines()
+                if ":" in line and "______" in line
+            }
+            self.assertEqual(len(colon_columns), 1, f"{intent.id} template has misaligned field colons")
+
+
+class FormParserTests(unittest.TestCase):
+    def test_blank_template_fields_are_blank(self):
+        parsed = parser.parse_form(catalog.blank_template("death_benefit_nomination"))
+        self.assertEqual(parsed.form_id, "BDBN-NOM-V1")
+        for value in parsed.fields.values():
+            self.assertTrue(parser.is_blank(value))
+
+    def test_bracketed_placeholder_is_blank(self):
+        self.assertTrue(parser.is_blank("[MEMBER NAME]"))
+
+    def test_filled_value_is_not_blank(self):
+        self.assertFalse(parser.is_blank("Sarah Thompson"))
+
+    def test_non_form_text_returns_none(self):
+        self.assertIsNone(parser.parse_form("just a plain note with no header"))
+
+
+class MaxDraftRevisionsConfigTests(unittest.TestCase):
+    """TODO 4 rule 2: MAX_DRAFT_REVISIONS must validate as a non-negative bounded integer."""
+
+    def test_default_is_a_small_non_negative_int(self):
+        self.assertIsInstance(config.MAX_DRAFT_REVISIONS, int)
+        self.assertGreaterEqual(config.MAX_DRAFT_REVISIONS, 0)
+
+    def test_negative_env_value_is_clamped_to_min(self):
+        self.assertEqual(config._bounded_int("X", -3, min_value=0, max_value=5), 0)
+
+    def test_oversized_env_value_is_clamped_to_max(self):
+        self.assertEqual(config._bounded_int("X", 999, min_value=0, max_value=5), 5)
+
+    def test_non_integer_falls_back_to_default(self):
+        import os
+
+        os.environ["_TEST_MAX_DRAFT_REVISIONS"] = "not-a-number"
+        try:
+            self.assertEqual(
+                config._bounded_int("_TEST_MAX_DRAFT_REVISIONS", 2, min_value=0, max_value=5), 2
+            )
+        finally:
+            del os.environ["_TEST_MAX_DRAFT_REVISIONS"]
+
+
+class DisclosureCheckTests(unittest.TestCase):
+    """TODO 5 rule 7: deterministic post-generation sensitive-detail scan."""
+
+    def test_static_boilerplate_never_flags(self):
+        static_text = (
+            hesta_snippets.LEGAL_FOOTER
+            + hesta_snippets.GREETING
+            + hesta_snippets.SIGNOFF
+            + hesta_snippets.IDENTITY_VERIFICATION_REQUEST
+            + hesta_snippets.PERSONAL_ADVICE_DECLINE
+            + "".join(hesta_snippets._SNIPPETS.values())
+        )
+        self.assertEqual(disclosure_check.scan("Re: your HESTA enquiry", static_text), [])
+
+    def test_member_repeating_own_number_does_not_flag(self):
+        body = "Thanks, we have your member number 60010001 on file and are reviewing your request."
+        self.assertEqual(disclosure_check.scan("", body), [])
+
+    def test_flags_specific_dollar_amount(self):
+        findings = disclosure_check.scan("", "Your balance is $12,345.67 as of today.")
+        self.assertIn("possible specific dollar amount", findings)
+
+    def test_flags_bsb_number(self):
+        findings = disclosure_check.scan("", "Please note our BSB is 063-000 for the transfer.")
+        self.assertIn("possible BSB number", findings)
+
+    def test_flags_bank_account_number(self):
+        findings = disclosure_check.scan("", "The account number on file is 123456789.")
+        self.assertIn("possible bank account number", findings)
+
+    def test_flags_tax_file_number(self):
+        findings = disclosure_check.scan("", "Your TFN 123 456 789 has been recorded.")
+        self.assertIn("possible tax file number (TFN)", findings)
+
+    def test_findings_are_labels_not_the_matched_value(self):
+        findings = disclosure_check.scan("", "Your TFN 123 456 789 has been recorded.")
+        joined = " ".join(findings)
+        self.assertNotIn("123 456 789", joined)
 
 
 if __name__ == "__main__":

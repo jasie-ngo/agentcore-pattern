@@ -1,0 +1,813 @@
+"""HESTA Member-Email Agentic Pilot — AgentCore Runtime entrypoint.
+
+Reworked from the original dual-agent claims demo into HESTA's member-email pipeline.
+It runs the full agent set over each inbound "email" (any file dropped in the S3 inbox),
+following the plan's UNDERSTAND → DECIDE → EXECUTE → LEARN flow:
+
+  UNDERSTAND  AI-001 Intent Identifier · AI-002 Conversation Context Manager
+  DECIDE      AI-003 Identity (REUSES lookup_policy/DynamoDB) · AI-004 Attachments · AI-005 Empathy
+              → routing gate (human-in-the-loop)
+  EXECUTE     AI-011 Writer → draft email DISPLAYED as output (never sent)
+              AI-012 Reviewer & Editor → checks the draft
+              → human-in-the-loop = WRITE a record to DynamoDB via the MCP Gateway
+                 (reuses create_claim + request_human_review)
+  LEARN       reuse existing Memory / observability (no new build)
+
+Reuse decisions (see app/hesta-claimsagent/IMPLEMENTATION_PLAN.md §0): identity reuses the
+existing DynamoDB check, the human hand-off is a DynamoDB record written via MCP, and the
+Writer's draft is displayed — nothing is auto-sent. No AWS resources are created or changed.
+"""
+
+from __future__ import annotations
+
+import json
+import hashlib
+from datetime import datetime, timezone
+
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from opentelemetry import trace as otel_trace
+from opentelemetry.trace import SpanKind
+from config import ENABLE_HITL_RECORD, MAX_DRAFT_REVISIONS
+from ingestion.email_normalizer import normalize_email
+from intents import taxonomy
+from memory.session import append_turns, get_memory_session_manager, load_thread, safe_memory_id, thread_session_id
+from routing import decide
+from tools import gateway
+
+from agents import (
+    attachment_validation,
+    context_manager,
+    disclosure_check,
+    empathy as empathy_agent,
+    intent_identifier,
+    reviewer_editor,
+    writer as writer_agent,
+)
+
+app = BedrockAgentCoreApp()
+log = app.logger
+
+# Scope name must start with "opentelemetry.instrumentation." — AgentCore Evaluation's
+# generic-framework support only reads spans under that prefix (or "openinference.instrumentation.").
+_tracer = otel_trace.get_tracer("opentelemetry.instrumentation.hesta_claims_agent")
+
+
+# ─── Payload parsing (handles agentcore dev wrapping + S3 trigger payload) ────
+
+
+def _parse_payload(payload):
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return {"prompt": payload}
+    if not isinstance(payload, dict):
+        return {"prompt": str(payload)}
+    # Unwrap agentcore dev's {"prompt": "<json>"} wrapper.
+    if "prompt" in payload and "source" not in payload and "claimant_email" not in payload:
+        value = payload["prompt"]
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+    return payload
+
+
+def _filter_own_retry_entries(history: list[dict], idempotency_key: str) -> list[dict]:
+    """Strip any history entry this exact invocation would itself own.
+
+    A retry of THIS SAME inbound email (identical idempotency_key) must never see its own
+    earlier partial write as "prior conversation" — e.g. a first attempt that appended
+    inbound/draft entries to Memory and then crashed before finishing. Without this, the retry's
+    Context Manager/Writer would be shown the current message as if it were a past exchange.
+    """
+    prefix = f"{idempotency_key}:"
+    return [entry for entry in history if not str(entry.get("entry_id") or "").startswith(prefix)]
+
+
+def _idempotency_key(payload: dict, raw: str, sender_email: str | None, source: str | None) -> str:
+    explicit = payload.get("idempotency_key")
+    if explicit:
+        return str(explicit)
+    source_object_id = payload.get("source_object_id") or source or ""
+    return hashlib.sha256(f"{source_object_id}\n{sender_email or ''}\n{raw}".encode("utf-8")).hexdigest()
+
+
+# ─── Formatting helpers (readable markdown for the streamed output) ───────────
+
+
+def _fmt_intents(result) -> str:
+    lines = ["### 🎯 Intent (AI-001)\n"]
+    lines.append(f"- **Primary:** `{result.primary_intent_id}` ({taxonomy.name_for(result.primary_intent_id)})")
+    lines.append(f"- **Sender type:** {result.sender_type}")
+    for i in result.intents:
+        lines.append(f"  - `{i.intent_id}` — {i.confidence}/100 · {i.rationale}")
+    if result.needs_human_triage:
+        lines.append("- ⚠️ flagged for human triage")
+    if getattr(result, "personal_advice_requested", False):
+        lines.append("- ⛔ **personal advice requested** — advice will be declined (Guardrail) and escalated to a human")
+    return "\n".join(lines) + "\n\n"
+
+
+def _fmt_summary(summary) -> str:
+    items = ", ".join(summary.outstanding_items) or "none"
+    return (
+        "### 🧵 Context (AI-002)\n\n"
+        f"- **Summary:** {summary.summary}\n"
+        f"- **State:** {summary.conversation_state}\n"
+        f"- **Outstanding:** {items}\n\n"
+    )
+
+
+def _fmt_identity(identity) -> str:
+    if identity.error:
+        return f"### 🪪 Identity (AI-002: member_lookup)\n\n- ⚠️ {identity.error}\n\n"
+    return (
+        "### 🪪 Identity (AI-002: member_lookup)\n\n"
+        f"- **Member ID:** {identity.member_id or '—'}\n"
+        f"- **Email:** {identity.email or '—'}\n"
+        f"- **Name:** {identity.name or '—'}\n"
+        f"- **Status:** {identity.status or '—'}\n\n"
+    )
+
+
+def _fmt_cases(cases) -> str:
+    if cases.error:
+        return f"### 📁 Cases (AI-002: case_lookup_creation)\n\n- ⚠️ {cases.error}\n\n"
+    case = cases.case or {}
+    subject = case.get("subject") or cases.subject or "(no subject)"
+    if cases.status == "existing_case_found":
+        return (
+            "### 📁 Existing case found (case_lookup_creation)\n\n"
+            f"- **Case ID:** `{case.get('case_id', cases.case_id or '?')}` · **Status:** {case.get('status', 'n/a')}\n"
+            f"- **Thread:** {subject}\n\n"
+        )
+    elif cases.status == "new_case_created":
+        return (
+            "### 📁 New case created (case_lookup_creation)\n\n"
+            f"- **Case ID:** `{case.get('case_id', cases.case_id or '?')}`\n"
+            f"- **Member ID:** {case.get('member_id', '?')}\n"
+            f"- **Status:** {case.get('status', 'Open')}\n"
+            f"- **Thread:** {subject}\n\n"
+        )
+    return ""
+
+
+def _fmt_memory_status(actor_id: str, session_id: str, history: list[dict], error: str | None = None) -> str:
+    """Visible Memory status line (implementation rule 4): reported whenever Memory is
+    configured for this case, whether or not the load (or session setup) actually succeeded —
+    a configured Memory that fails must never be silently treated as "no prior history"."""
+    if error:
+        return (
+            f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · "
+            f"⚠️ prior conversation could not be loaded ({error}) — treat this reply as possibly "
+            "incomplete, NOT as a first contact._\n\n"
+        )
+    return f"_🧠 Memory active — actor `{actor_id}` · session `{session_id}` · {len(history)} prior turn(s) loaded._\n\n"
+
+
+def _fmt_memory_recorded(recorded: bool) -> str:
+    return (
+        "_🧠 This turn recorded to Memory._\n\n" if recorded
+        else "_🧠 This turn was NOT recorded to Memory (see logs)._\n\n"
+    )
+
+
+def _fmt_profile(profile) -> str:
+    factors = ", ".join(profile.factors_matched) or "none"
+    return (
+        "### 🪪 Identity (AI-003 · reuses lookup_policy/DynamoDB)\n\n"
+        f"- **Member/policy #:** {profile.member_number or '—'}\n"
+        f"- **Record matched:** {profile.matched} · **factors:** {factors}\n"
+        f"- **Verification:** **{profile.verification_level}** "
+        f"(human verification required: {profile.verification_required})\n"
+        f"- {profile.notes}\n\n"
+    )
+
+
+def _fmt_attach(attach) -> str:
+    lines = [
+        "### 📎 Attachments (AI-004)\n",
+        f"- **Detected:** {attach.attachments_present} · **expected:** {attach.expected_document} · "
+        f"**status:** {attach.status}",
+    ]
+    if attach.received_filenames:
+        lines.append(f"- **Received:** {', '.join(attach.received_filenames)}")
+    if attach.missing_fields:
+        lines.append(f"- **Blank field(s):** {', '.join(attach.missing_fields)}")
+    lines.append(f"- {attach.notes}")
+    return "\n".join(lines) + "\n\n"
+
+
+def _fmt_empathy(emp) -> str:
+    flags = ", ".join(emp.vulnerability_flags) or "none"
+    return (
+        "### 💛 Empathy (AI-005)\n\n"
+        f"- **Sentiment:** {emp.sentiment} · **priority:** {emp.priority} · **complaint:** {emp.complaint_indicator}\n"
+        f"- **Vulnerability:** {flags}\n"
+        f"- {emp.recommended_attention}\n\n"
+    )
+
+
+def _fmt_decision(decision) -> str:
+    if decision.escalate_to_human:
+        reasons = "\n".join(f"  - {r}" for r in decision.reasons)
+        return f"### 🚦 Routing\n\n- **Human-in-the-loop:** YES\n{reasons}\n\n"
+    return "### 🚦 Routing\n\n- **Human-in-the-loop:** no — draft ready for a quick staff check\n\n"
+
+
+def _fmt_tool_log(calls) -> str:
+    """Complete per-call log of every MCP Gateway call (name + Input + Output).
+
+    Shows ALL calls — the console "tools used" panel only captures the first (runtime-side,
+    not controllable from agent code). Plain markdown (this renderer shows <details> literally).
+    """
+    return ""
+    # out = [f"---\n## 🔧 MCP tool calls ({len(calls)})\n"]
+    # for i, c in enumerate(calls, 1):
+    #     out.append(f"### {i}. `{c['name']}`\n")
+    #     out.append("**Input**\n")
+    #     out.append("```json\n" + c["input"] + "\n```\n")
+    #     out.append("**Output**\n")
+    #     out.append("```\n" + c["output"] + "\n```\n")
+    # return "\n".join(out) + "\n"
+
+
+def _fmt_draft(heading: str, draft) -> str:
+    out = f"{heading}\n\n**Subject:** {draft.subject}\n\n```text\n{draft.body}\n```\n\n"
+    if draft.enclosures:
+        out += "_📎 Enclose before sending:_ " + "; ".join(draft.enclosures) + "\n\n"
+    if draft.assumptions:
+        out += "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
+    return out
+
+
+def _fmt_review(review, revision_count: int = 0) -> str:
+    checks = f"accuracy={review.accuracy_ok} · tone={review.tone_ok} · compliance={review.compliance_ok}"
+    out = [
+        "### 🔎 Review (AI-012)\n",
+        f"- **Approved for a human to send:** {review.approved_for_human_send} ({checks})",
+        f"- **Revisions:** {revision_count} (max {MAX_DRAFT_REVISIONS})",
+    ]
+    if review.edits:
+        out.append(f"- **Suggested edits:** {review.edits}")
+    if review.issues:
+        out.append("- **Issues:** " + "; ".join(review.issues))
+    return "\n".join(out) + "\n\n"
+
+
+# ─── Convert identity info to MemberProfile for routing/writer ──────────────────
+
+
+def _disclosure_state(identity) -> str:
+    """TODO 5: the four explicit disclosure states, application-enforced (not left to the
+    Guardrail). A system failure is distinguished from a genuine not-found — both disclose
+    nothing, but only the former is a fault worth surfacing distinctly."""
+    if identity.lookup_failed:
+        return "lookup_failed"
+    if not identity.member_id:
+        return "unverified"
+    return "verified" if identity.status == "active" else "partially_verified"
+
+
+def _convert_identity_to_profile(identity, inbound, intent_result):
+    """Convert IdentityInfo from member_lookup into MemberProfile for routing."""
+    from models import MemberProfile
+
+    disclosure_state = _disclosure_state(identity)
+
+    if identity.error:
+        return MemberProfile(
+            member_number=inbound.member_number_for_lookup,
+            matched=False,
+            verification_level="unverified",
+            verification_required=True,
+            disclosure_state=disclosure_state,
+            notes=identity.error,
+        )
+
+    return MemberProfile(
+        member_number=identity.member_id,
+        matched=True if identity.member_id else False,
+        match_key="member_id" if identity.member_id else None,
+        factors_matched=[k for k in ["member_id", "email"] if getattr(identity, k)],
+        account_type=None,
+        member_status=identity.status,
+        verification_level="verified" if identity.status == "active" else "unverified",
+        verification_required=False if identity.status == "active" else True,
+        disclosure_state=disclosure_state,
+        notes=f"Member lookup found: {identity.member_id}",
+    )
+
+
+# ─── Human-in-the-loop: write a record to DynamoDB via the MCP Gateway ────────
+
+
+async def _write_hitl_record(
+    mcp, inbound, intent_result, profile, decision, draft, cases, attachment=None,
+    revision_count: int = 0, review_result=None,
+) -> str:
+    """Write draft for human review via email_review tool.
+
+    Gets the case_id from case_lookup_creation result (in cases), then calls
+    email_review to create a review record in the human review table.
+    Non-fatal: surfaces the real Gateway error if it fails.
+    """
+    case_id = cases.case_id
+    if not case_id:
+        return "⚠️ No case_id available for email review (case lookup failed).\n\n"
+
+    tool_input = {
+        "case_id": case_id,
+        "draft_subject": draft.subject,
+        "draft_body": draft.body,
+        "escalation_reasons": "; ".join(
+            decision.reasons + ([f"attachment: {attachment.notes}"] if attachment else [])
+        ) or "Manual review required",
+        "revision_count": revision_count,
+    }
+    if attachment is not None:
+        tool_input["attachment_status"] = attachment.status
+        tool_input["attachment_notes"] = attachment.notes
+        if attachment.form_id:
+            tool_input["form_id"] = attachment.form_id
+        if attachment.form_name:
+            tool_input["form_name"] = attachment.form_name
+        if attachment.missing_fields:
+            tool_input["missing_fields"] = attachment.missing_fields
+        if attachment.received_filenames:
+            tool_input["received_filenames"] = attachment.received_filenames
+    if review_result is not None:
+        tool_input["review_result"] = review_result.model_dump()
+
+    review = await gateway.call_tool(mcp, "email_review", tool_input)
+
+    if isinstance(review, dict) and "_gateway_error" in review:
+        return f"⚠️ Could not write review record (Gateway error): {review['_gateway_error']}\n\n"
+    if isinstance(review, dict) and review.get("error"):
+        return f"⚠️ email_review returned an error: {review['error']}\n\n"
+
+    review_id = review.get("review_id") if isinstance(review, dict) else None
+    if not review_id:
+        return f"⚠️ email_review did not return a review_id. Raw response: {json.dumps(review)[:600]}\n\n"
+
+    return (
+        f"📧 Draft queued for human review\n\n"
+        f"- **Case ID:** `{case_id}`\n"
+        f"- **Review ID:** `{review_id}`\n"
+        f"- **Escalation reasons:** {'; '.join(decision.reasons) or 'Manual review required'}\n\n"
+    )
+
+
+async def _safe_review(draft, intent_result, profile, attachment):
+    """Run the Reviewer, converting a raised failure into None so the caller can distinguish
+    "Reviewer failed" (stop the loop, escalate) from "Reviewer rejected" (revise and re-review)."""
+    try:
+        return await reviewer_editor.review(draft, intent_result, profile, attachment=attachment)
+    except Exception as exc:  # noqa: BLE001 — includes guardrail interventions that break structured output
+        log.warning("Reviewer failed: %s", exc)
+        return None
+
+
+async def _update_case_facts(mcp, cases, intent_id, attachment=None) -> str:
+    """Case-facts update (TODO 2.5 / TODO 4.3): records last_intent_id and, when the real
+    (post-draft) attachment assessment resolved a form, its forms_on_file entry — "valid" when
+    complete, or "incomplete" (tagged received_not_valid by the case Lambda, which never lets
+    that downgrade an already-valid entry) when the correct form arrived but was left blank.
+    "wrong_form"/"unreadable"/"missing"/"not_applicable" record nothing here — there is no
+    single form_id they can be meaningfully attributed to. The conversation itself is appended
+    to Memory separately (append_turns) — the case item holds no email text (D7). Silent on
+    success; surfaces a real Gateway error rather than hiding it."""
+    if not cases.case_id or mcp is None:
+        return ""
+    case_facts = {"last_intent_id": intent_id}
+    if attachment is not None and attachment.form_id and attachment.status in ("valid", "incomplete"):
+        case_facts["forms_on_file"] = {attachment.form_id: attachment.status}
+    result = await gateway.call_tool(
+        mcp, "case_lookup_creation", {"case_id": cases.case_id, "case_facts": case_facts}
+    )
+    if isinstance(result, dict) and ("_gateway_error" in result or result.get("error")):
+        detail = result.get("_gateway_error") or result.get("error")
+        return f"⚠️ Could not update case facts: {detail}\n\n"
+    return ""
+
+
+async def _run_personal_advice_path(mcp, inbound, intent_result, idempotency_key):
+    """Personal advice requested: HESTA can never give it, so skip every LLM reasoning step
+    (Context Manager's summarization, Attachment/Empathy assessment, the Writer's LLM call —
+    already bypassed — and the Reviewer) and go straight to a hardcoded decline, always
+    escalated to a human. Identity/case lookup still runs (deterministic Gateway calls, not an
+    LLM agent) — needed to know which case this belongs to and to store the record against it.
+    """
+    from models import RoutingDecision
+
+    yield "## 2 · Decide\n\n"
+    identity, cases = await context_manager.lookup(inbound, mcp, primary_intent_id=intent_result.primary_intent_id)
+    summary = await context_manager.summarize(inbound, identity, cases, [], skip_summary=True)
+    yield _fmt_identity(summary.identity)
+    yield _fmt_cases(summary.cases)
+    profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
+    yield _fmt_profile(profile)
+    verified_member = bool(summary.identity.member_id)
+
+    actor_id = session_id = None
+    memory_configured = False
+    memory_error: str | None = None
+    if verified_member and cases.case_id:
+        actor_id = safe_memory_id(identity.member_id)
+        session_id = thread_session_id(cases.case_id)
+        try:
+            memory_configured = get_memory_session_manager(session_id, actor_id) is not None
+        except Exception as exc:  # noqa: BLE001 — never let memory setup break processing
+            log.warning("Memory session setup failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+            memory_error = f"session setup failed: {exc}"
+
+    yield "## 3 · Execute\n\n"
+    draft = writer_agent.advice_decline_draft(inbound, intent_result, profile)
+    yield "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)\n\n"
+    yield f"**Subject:** {draft.subject}\n\n"
+    yield "```text\n" + draft.body + "\n```\n\n"
+    if draft.assumptions:
+        yield "_Assumptions to confirm:_ " + "; ".join(draft.assumptions) + "\n\n"
+
+    decision = RoutingDecision(
+        escalate_to_human=True,
+        reasons=["PERSONAL ADVICE requested — do NOT provide personal financial advice"],
+        regulated=taxonomy.is_regulated(intent_result.primary_intent_id),
+    )
+    yield _fmt_decision(decision)
+
+    history_entries = [
+        {
+            "entry_id": f"{idempotency_key}:inbound",
+            "entry_type": "inbound_member_email",
+            "content": inbound.latest_message,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pipeline_version": "hesta-v2",
+            "intent_id": intent_result.primary_intent_id,
+            "attachments_present": inbound.attachment_count,
+        },
+        {
+            "entry_id": f"{idempotency_key}:draft",
+            "entry_type": "generated_draft",
+            "content": json.dumps({"subject": draft.subject, "body": draft.body}),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "pipeline_version": "hesta-v2",
+            "intent_id": intent_result.primary_intent_id,
+        },
+    ]
+    if memory_error is not None:
+        yield f"_🧠 Memory unavailable — actor `{actor_id}` · session `{session_id}` · ⚠️ {memory_error}._\n\n"
+    if verified_member and actor_id and session_id:
+        recorded = append_turns(actor_id, session_id, history_entries)
+        if memory_configured or memory_error is not None:
+            yield _fmt_memory_recorded(recorded)
+    if verified_member and mcp is not None:
+        yield await _update_case_facts(mcp, cases, intent_result.primary_intent_id, attachment=None)
+
+    yield "### 👤 Human-in-the-loop\n\n"
+    if ENABLE_HITL_RECORD:
+        yield await _write_hitl_record(
+            mcp, inbound, intent_result, profile, decision, draft, summary.cases,
+            attachment=None, revision_count=0, review_result=None,
+        )
+    else:
+        yield (
+            "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
+            + "; ".join(decision.reasons)
+            + "_\n\n"
+        )
+
+
+# ─── Entrypoint ───────────────────────────────────────────────────────────────
+
+
+@app.entrypoint
+async def invoke(payload, context):
+    """Entrypoint wrapper: opens the session's one required `invoke_agent` span.
+
+    AgentCore Evaluation needs exactly one span per session tagged
+    gen_ai.operation.name=invoke_agent to know what to evaluate. _run_pipeline's sub-agents
+    only ever emit execute_structured_output spans (Agent.structured_output_async), so
+    without this wrapper no session ever has an invoke_agent span and every evaluator fails
+    with "no spans to evaluate".
+    """
+    raw = _parse_payload(payload).get("prompt", "") or ""
+    output_chunks: list[str] = []
+    with _tracer.start_as_current_span(
+        "invoke_agent",
+        kind=SpanKind.SERVER,
+        attributes={
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "HestaMemberEmailAgent",
+            "gen_ai.task.input": raw,
+        },
+    ) as agent_span:
+        async for chunk in _run_pipeline(payload, context):
+            output_chunks.append(chunk)
+            yield chunk
+        agent_span.set_attribute("gen_ai.task.output", "".join(output_chunks))
+
+
+async def _run_pipeline(payload, context):
+    """Run the HESTA member-email pipeline over one inbound email and stream the result."""
+    payload = _parse_payload(payload)
+    raw = payload.get("prompt", "") or ""
+    sender_email = payload.get("claimant_email") or payload.get("sender_email")
+    source = payload.get("source")
+    idempotency_key = _idempotency_key(payload, raw, sender_email, source)
+
+    # Phase 0 — deterministic normalisation. The Trigger Lambda now parses real MIME
+    # attachments off a .eml object (TODO 2) and hands them through in the payload, along
+    # with the original subject (TODO 1) — normalize_email derives the case's thread_key
+    # from it.
+    inbound = normalize_email(
+        raw,
+        sender_email=sender_email,
+        source=source,
+        attachments=payload.get("attachments"),
+        subject=payload.get("subject"),
+    )
+    gateway.reset_tool_log()  # fresh MCP call log for this invocation
+
+    yield "# HESTA Member-Email Agent\n\n"
+    yield (
+        f"**Channel:** {inbound.channel} · **Sender:** {inbound.sender_type} · "
+        f"**Attachments:** {inbound.attachment_count}"
+        + (f" · **Source:** {source}" if source else "")
+        + "\n\n"
+    )
+
+    # Build + start the MCP Gateway client HERE, on the runtime request thread, so the
+    # Cognito M2M token fetch has the workload-identity context (matches claimsagent).
+    # Do NOT move this into a worker thread — the token exchange fails without that context.
+    mcp = gateway.get_mcp_client()
+    
+    started = False
+    if mcp is not None:
+        try:
+            mcp.start()
+            started = True
+        except Exception as exc:  # noqa: BLE001 — degrade gracefully; surface the reason
+            log.warning("Could not start Gateway session: %s", exc)
+            gateway.LAST_ERROR = f"could not start Gateway session: {exc!r}"
+            mcp = None
+
+    try:
+        # ── UNDERSTAND ──────────────────────────────────────────────────────
+        yield "## 1 · Understand\n\n"
+        intent_result = await intent_identifier.identify(inbound)
+        yield _fmt_intents(intent_result)
+        if intent_result.personal_advice_requested:
+            # HESTA can never give personal advice, so every LLM reasoning step below is
+            # skipped in favour of a hardcoded decline, always escalated to a human. See
+            # _run_personal_advice_path for what still runs (identity/case lookup) and why.
+            async for chunk in _run_personal_advice_path(
+                mcp, inbound, intent_result, idempotency_key,
+            ):
+                yield chunk
+        else:
+            # AI-002 lookup: identity via member_lookup, then this member's case for THIS email
+            # thread via case_lookup_creation (member_id + thread_key, D8) — deterministic, no LLM.
+            identity, cases = await context_manager.lookup(
+                inbound, mcp, primary_intent_id=intent_result.primary_intent_id
+            )
+
+            # Only a verified member with a resolved case gets a Memory session (implementation
+            # rule 3) — the session id is derived from the case id (D8), stable for the case's
+            # whole life, NOT the one-per-email Runtime session (D6). A configured Memory that
+            # fails — either setting up the session or loading it — must be surfaced, never
+            # silently treated as "no prior history".
+            actor_id = session_id = None
+            memory_session = None
+            history: list[dict] = []
+            memory_error: str | None = None
+            if identity.member_id and cases.case_id:
+                actor_id = safe_memory_id(identity.member_id)
+                session_id = thread_session_id(cases.case_id)
+                try:
+                    memory_session = get_memory_session_manager(session_id, actor_id)
+                except Exception as exc:  # noqa: BLE001 — never let memory setup break processing
+                    log.warning("Memory session setup failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+                    memory_error = f"session setup failed: {exc}"
+                if memory_session is not None:
+                    try:
+                        history = load_thread(actor_id, session_id)
+                    except Exception as exc:  # noqa: BLE001 — degrade visibly, not silently
+                        log.warning("Memory load failed (actor=%s session=%s): %s", actor_id, session_id, exc)
+                        memory_error = f"load failed: {exc}"
+                    else:
+                        history = _filter_own_retry_entries(history, idempotency_key)
+
+            # AI-002 summary: the LLM step, now given the case's prior conversation loaded from
+            # Memory (in place of the old DynamoDB conversation_history).
+            summary = await context_manager.summarize(
+                inbound, identity, cases, history, session_manager=memory_session,
+            )
+            yield _fmt_summary(summary)
+            yield _fmt_identity(summary.identity)
+            yield _fmt_cases(summary.cases)
+            if memory_session is not None or memory_error is not None:
+                yield _fmt_memory_status(actor_id, session_id, history, memory_error)
+
+            # ── DECIDE ──────────────────────────────────────────────────────
+            yield "## 2 · Decide\n\n"
+            # AI-003 is now part of context_manager (member_lookup), convert to MemberProfile for routing
+            profile = _convert_identity_to_profile(summary.identity, inbound, intent_result)
+            yield _fmt_profile(profile)
+            verified_member = bool(summary.identity.member_id)
+            attach = (
+                attachment_validation.assess(
+                    inbound, intent_result, forms_on_file=summary.cases.forms_on_file
+                )
+                if verified_member else None
+            )
+            if attach is not None:
+                yield _fmt_attach(attach)
+            if verified_member:
+                emp = await empathy_agent.assess(inbound)
+                yield _fmt_empathy(emp)
+            else:
+                from models import EmpathyAssessment
+
+                emp = EmpathyAssessment(
+                    sentiment="neutral",
+                    priority="normal",
+                    recommended_attention="Identity verification is required before processing the request.",
+                )
+            # Computed now (needs profile/empathy) but NOT shown yet — the Writer/Reviewer loop
+            # below can still add its own escalation reasons, and printing this now would show a
+            # stale "no escalation needed" verdict that the later Human-in-the-loop section then
+            # contradicts. The single, final verdict is shown after the review loop completes.
+            decision = decide(intent_result, profile, emp)
+            # An unreadable attachment or a mismatched form needs a human's judgment call —
+            # unlike missing/incomplete, the Writer cannot safely resolve these on its own.
+            if attach is not None and attach.status in ("unreadable", "wrong_form"):
+                decision.reasons.append(f"attachment {attach.status}: {attach.notes}")
+                decision.escalate_to_human = True
+
+            # ── EXECUTE ───────────────────────────────────────────────────────
+            yield "## 3 · Execute\n\n"
+            draft = await writer_agent.write(
+                inbound, intent_result, profile, summary, emp, history, attachment=attach
+            )
+            yield _fmt_draft(
+                "### ✉️ Draft reply — for HESTA staff to review & send (NOT sent by the agent)", draft
+            )
+
+            # Bounded Writer↔Reviewer revision loop: revision 0 is the draft above. The Reviewer
+            # only checks and flags issues (accuracy/tone/compliance/etc.) — it never rewrites
+            # the email; the Writer, which has the full context, addresses the flags on each
+            # revision. Re-run the Reviewer after every revision; stop as soon as it approves,
+            # the Reviewer itself fails (never revise blindly against a failure), or
+            # MAX_DRAFT_REVISIONS is reached. Rounds run silently — only the final review verdict
+            # and the final (possibly revised) draft are shown, in that order.
+            revision_count = 0
+            review = None
+            reviewer_failed = False
+            if verified_member:
+                review = await _safe_review(draft, intent_result, profile, attach)
+                reviewer_failed = review is None
+                while (
+                    review is not None
+                    and not review.approved_for_human_send
+                    and revision_count < MAX_DRAFT_REVISIONS
+                ):
+                    revision_count += 1
+                    draft = await writer_agent.revise(
+                        inbound, intent_result, profile, summary, emp, draft, review,
+                        history, attachment=attach,
+                    )
+                    review = await _safe_review(draft, intent_result, profile, attach)
+                    reviewer_failed = review is None
+
+            if review is not None:
+                yield _fmt_review(review, revision_count)
+            if revision_count:
+                yield _fmt_draft(f"### ✏️ Final draft — after Reviewer feedback ({revision_count} revision(s))", draft)
+
+            if reviewer_failed:
+                yield "_⚠️ Automated review unavailable — routed to human review._\n\n"
+                decision.reasons.append("automated review unavailable")
+                decision.escalate_to_human = True
+            elif review is not None and not review.approved_for_human_send:
+                decision.reasons.append(
+                    f"draft not approved after {revision_count} revision(s)" if revision_count
+                    else "draft not approved for human send"
+                )
+                decision.escalate_to_human = True
+
+            # TODO 5 rule 7: deterministic backstop for obvious account-detail leaks (dollar
+            # amounts, BSB, bank account numbers, TFN) — independent of verification state,
+            # since nothing in this pipeline legitimately sources such values for the Writer.
+            disclosure_findings = disclosure_check.scan(draft.subject, draft.body)
+            if disclosure_findings:
+                yield (
+                    "_⚠️ Possible sensitive account detail(s) in the draft — routed to human review: "
+                    + "; ".join(disclosure_findings) + "._\n\n"
+                )
+                decision.reasons.append("possible sensitive account detail(s): " + "; ".join(disclosure_findings))
+                decision.escalate_to_human = True
+
+            # Final routing verdict — now reflects both the pre-draft checks (intent/identity/
+            # vulnerability) and anything the review loop above added.
+            yield _fmt_decision(decision)
+
+            # Each entry carries the CURRENT message's intent — cases now span a member's
+            # whole relationship, not one topic, so the Writer needs to see how intent
+            # has shifted message to message across the history, not just today's intent.
+            inbound_entry = {
+                "entry_id": f"{idempotency_key}:inbound",
+                "entry_type": "inbound_member_email",
+                "content": inbound.latest_message,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "pipeline_version": "hesta-v2",
+                "intent_id": intent_result.primary_intent_id,
+                "attachments_present": inbound.attachment_count,
+            }
+            if attach is not None:
+                inbound_entry["attachment_status"] = attach.status
+                if attach.form_id:
+                    inbound_entry["form_id"] = attach.form_id
+                if attach.missing_fields:
+                    inbound_entry["missing_fields"] = attach.missing_fields
+            history_entries = [
+                inbound_entry,
+                {
+                    "entry_id": f"{idempotency_key}:draft",
+                    "entry_type": "generated_draft",
+                    "content": json.dumps({"subject": draft.subject, "body": draft.body}),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "pipeline_version": "hesta-v2",
+                    "intent_id": intent_result.primary_intent_id,
+                }
+            ]
+            if review is not None:
+                history_entries.append(
+                    {
+                        "entry_id": f"{idempotency_key}:review",
+                        "entry_type": "review_outcome",
+                        "content": json.dumps({**review.model_dump(), "revision_count": revision_count}),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "pipeline_version": "hesta-v2",
+                        "intent_id": intent_result.primary_intent_id,
+                    }
+                )
+            if verified_member and actor_id and session_id:
+                recorded = append_turns(actor_id, session_id, history_entries)
+                if memory_session is not None or memory_error is not None:
+                    yield _fmt_memory_recorded(recorded)
+            if verified_member and mcp is not None:
+                yield await _update_case_facts(mcp, summary.cases, intent_result.primary_intent_id, attachment=attach)
+
+            # Human-in-the-loop hand-off = write a record to DynamoDB via email_review tool.
+            if decision.escalate_to_human:
+                yield "### 👤 Human-in-the-loop\n\n"
+                if ENABLE_HITL_RECORD:
+                    yield await _write_hitl_record(
+                        mcp, inbound, intent_result, profile, decision, draft, summary.cases, attachment=attach,
+                        revision_count=revision_count, review_result=review,
+                    )
+                else:
+                    yield (
+                        "_HITL record disabled (ENABLE_HITL_RECORD=false). Escalation reasons: "
+                        + "; ".join(decision.reasons)
+                        + "_\n\n"
+                    )
+
+        # ── LEARN ───────────────────────────────────────────────────────────
+        yield "## 4 · Learn\n\n"
+        yield (
+            "_Observability via the existing OTEL traces; human edits to the draft can be captured to "
+            "AgentCore Memory (reuse) as feedback — post-pilot._\n\n"
+        )
+    finally:
+        if started and mcp is not None:
+            # Flush pending OTEL spans (incl. the LAST Gateway call) BEFORE closing the MCP
+            # session — otherwise the runtime's "tools used" capture drops the final tool span
+            # (the reason the panel showed 2 of 3). This makes the panel match the actual calls.
+            try:
+                from opentelemetry import trace as _otel_trace
+
+                provider = _otel_trace.get_tracer_provider()
+                if hasattr(provider, "force_flush"):
+                    provider.force_flush()
+            except Exception as exc:  # noqa: BLE001 — flush is best-effort
+                log.debug("Span flush before Gateway stop failed (non-fatal): %s", exc)
+            try:
+                mcp.stop()
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Error stopping Gateway session: %s", exc)
+
+    # Complete per-call log of every MCP Gateway call (input + output) made this invocation.
+    if gateway.TOOL_CALL_LOG:
+        yield _fmt_tool_log(gateway.TOOL_CALL_LOG)
+
+    yield "✅ Processing complete.\n"
+
+
+if __name__ == "__main__":
+    app.run()

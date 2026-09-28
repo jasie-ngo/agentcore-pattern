@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : simon.clarke@example.net
+member-number : 60070005
+name : Simon Clarke
+phone : 0400 777 005
+reason-for-enquiry : Other
+message : I'm trying to submit my Notice of Intent but the form won't go through. Is the issue with the online portal or should I send a paper copy? Member number 60070005.

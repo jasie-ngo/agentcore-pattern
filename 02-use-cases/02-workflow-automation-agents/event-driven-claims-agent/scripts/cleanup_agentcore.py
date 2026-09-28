@@ -12,19 +12,15 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 
 import boto3
 from botocore.exceptions import ClientError
 
-STACK_NAME = "AgentCore-ClaimsAgent-dev"
-PROJECT_PREFIX = "ClaimsAgent"
-CREDENTIAL_NAME = "cognito-gateway-m2m"
+STACK_NAME = "AgentCore-ClaimsAgentV2-dev"
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,9 +40,9 @@ def agentcore_client(region: str):
 
 
 def matches_project(name: str) -> bool:
-    """Check if a resource name belongs to this project."""
+    """Match only V2 resources; never match the live old ClaimsAgent stack."""
     lower = name.lower()
-    return "claimsagent" in lower or "claims" in lower
+    return "claimsagentv2" in lower or lower == "hestaclaimsagent_v2"
 
 
 # ─── Step 1: CloudFormation Stack ─────────────────────────────────────────────
@@ -196,11 +192,9 @@ def cleanup_agentcore_resources(region: str):
         _delete_safe(client, "delete_memory", memoryId=mem["memoryId"])
         print(f"   Deleted memory: {mem.get('name')}")
 
-    # Credential provider
-    _delete_safe(client, "delete_oauth2_credential_provider", name=CREDENTIAL_NAME)
-    print(f"   Deleted credential: {CREDENTIAL_NAME}")
-
-    print("   ✓ AgentCore resource cleanup complete.")
+    # The OAuth credential provider is shared with the old stack and must survive.
+    print("   Preserved shared OAuth credential provider.")
+    print("   ✓ V2 AgentCore resource cleanup complete.")
 
 
 def _list_safe(client, method: str, key: str, **kwargs) -> list:
@@ -223,37 +217,8 @@ def _delete_safe(client, method: str, **kwargs):
 
 
 def teardown_cognito(project_dir: str):
-    """Delete Cognito User Pool if created by setup_cognito.sh."""
-    state_file = os.path.join(project_dir, ".cognito-state.json")
-    if not os.path.exists(state_file):
-        print("\n   Cognito: not script-created — skipping.")
-        return
-
-    with open(state_file) as f:
-        state = json.load(f)
-
-    region = state["region"]
-    pool_id = state["user_pool_id"]
-    domain = state.get("domain_prefix", "")
-
-    print(f"\n   Deleting Cognito pool {pool_id} in {region}...")
-    cognito = boto3.client("cognito-idp", region_name=region)
-
-    # Delete domain first (required before pool)
-    if domain:
-        try:
-            cognito.delete_user_pool_domain(Domain=domain, UserPoolId=pool_id)
-        except ClientError:
-            pass
-
-    # Delete pool (cascades clients + resource servers)
-    try:
-        cognito.delete_user_pool(UserPoolId=pool_id)
-        print(f"   ✓ Cognito pool deleted: {pool_id}")
-    except ClientError as e:
-        print(f"   ⚠️  Cognito delete failed: {e}")
-
-    os.remove(state_file)
+    """Preserve Cognito because V2 intentionally reuses the old pool/client."""
+    print("\n   Cognito: shared with the existing deployment — preserved.")
 
 
 # ─── Step 4: Local State ─────────────────────────────────────────────────────
@@ -283,7 +248,7 @@ def clean_local_state(project_dir: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Full Claims Agent teardown")
+    parser = argparse.ArgumentParser(description="ClaimsAgentV2 HESTA teardown")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
     parser.add_argument("--project-dir", default=".", help="Project root directory")
     args = parser.parse_args()

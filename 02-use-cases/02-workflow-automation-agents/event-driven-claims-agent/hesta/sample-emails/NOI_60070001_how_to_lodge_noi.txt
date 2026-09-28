@@ -1,0 +1,9 @@
+You've received a new form based mail from https://www.hesta.com.au/content/hesta/about-us/contact-us.html
+Values:
+enquiry-sent-from : A member
+email-address : daniel.foster@example.com
+member-number : 60070001
+name : Daniel Foster
+phone : 0400 777 001
+reason-for-enquiry : Other
+message : Hi, I made a $15,000 personal contribution this year and want to claim a tax deduction. How do I lodge a Notice of Intent? Member number 60070001.

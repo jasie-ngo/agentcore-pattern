@@ -2,19 +2,19 @@
 set -euo pipefail
 
 # ============================================================================
-# Event-Driven Claims Agent — One-Command Deploy
+# ClaimsAgentV2 HESTA Member-Email Agent — One-Command Deploy
 # Usage: ./deploy.sh [region]
 # Example: ./deploy.sh us-west-2
 #
 # Deploys:
 # - Cognito User Pool (interactive — creates if needed, or uses existing)
 # - AgentCore Identity credential (registers Cognito as OAuth provider)
-# - Infrastructure (DynamoDB, S3, SNS, EventBridge) via CDK
-# - 7 Lambda functions (6 tools + 1 trigger)
-# - AgentCore Runtime (dual-agent, SigV4 inbound, Identity-managed outbound)
-# - AgentCore Gateway (MCP, 6 targets, CUSTOM_JWT from Cognito)
+# - Infrastructure (DynamoDB, S3, EventBridge) via CDK
+# - 4 Lambda functions (3 tools + 1 trigger)
+# - AgentCore Runtime (HESTA member-email pipeline)
+# - AgentCore Gateway (MCP, 3 targets, CUSTOM_JWT from Cognito)
 # - AgentCore Memory (SEMANTIC + SUMMARIZATION)
-# - AgentCore Policy Engine (Cedar: AllowAll + BlockExcessiveClaims)
+# - AgentCore Policy Engine (Cedar: authenticated tool access)
 # - AgentCore Online Evaluation (built-in + custom LLM-as-judge)
 # ============================================================================
 
@@ -27,7 +27,7 @@ export CDK_DEFAULT_REGION="$REGION"
 # Use Finch or Docker for container builds
 export CDK_DOCKER="${CDK_DOCKER:-docker}"
 
-echo "🚀 Deploying Claims Agent to $REGION..."
+echo "🚀 Deploying ClaimsAgentV2 HESTA agent to $REGION..."
 echo ""
 
 # ─── Load .env if it exists ────────────────────────────────────────────────
@@ -112,7 +112,7 @@ if [ "$NEEDS_COGNITO" = "true" ]; then
   fi
 fi
 
-echo "   ✓ Cognito configured (Client ID: ${AGENTCORE_GATEWAY_CLIENT_ID:0:8}...)"
+echo "   ✓ Cognito configured for ClaimsAgentV2 (Client ID: ${AGENTCORE_GATEWAY_CLIENT_ID:0:8}...)"
 echo ""
 
 # ─── Step 2: Register credential with AgentCore Identity ──────────────────
@@ -144,7 +144,7 @@ echo ""
 
 # ─── Step 4: Install agent Python dependencies ────────────────────────────
 echo "🐍 Step 4: Installing agent dependencies..."
-cd app/claimsagent
+cd app/hesta-claimsagent
 if [ ! -d ".venv" ]; then
   uv venv
 fi
@@ -175,20 +175,20 @@ echo ""
 
 # ─── Step 8: Seed DynamoDB ─────────────────────────────────────────────────
 echo "🌱 Step 8: Seeding DynamoDB..."
-python3 scripts/seed_dynamodb.py --region "$REGION"
+python3 scripts/seed_hesta_members.py --region "$REGION"
 echo ""
 
 # ─── Done ─────────────────────────────────────────────────────────────────
-echo "✅ Done! Claims Agent deployed to $REGION"
+echo "✅ Done! ClaimsAgentV2 HESTA agent deployed to $REGION"
 echo ""
 echo "📋 Test with:"
-echo "   python3 scripts/test_invoke.py --region $REGION"
+echo "   python3 scripts/test_invoke.py --region $REGION --prompt \"Please confirm receipt of my HESTA form. Member number 60010001.\""
 echo ""
-echo "🛡️  Test Cedar policy (should block \$100k+ claims):"
-echo "   python3 scripts/test_invoke.py --region $REGION --prompt \"File a claim for POL-12345. Car totaled. \$150000 damage.\""
+echo "🛡️  Test Gateway policy and HESTA tools:"
+echo "   python3 scripts/test_cedar.py --region $REGION"
 echo ""
 echo "🔭 Enable full observability (optional — adds Gateway/Memory trace + log delivery):"
-echo "   python3 scripts/enable_observability.py --region $REGION --stack-name AgentCore-ClaimsAgent-dev"
+echo "   python3 scripts/enable_observability.py --region $REGION --stack-name AgentCore-ClaimsAgentV2-dev"
 echo ""
 echo "🧹 Teardown:"
 echo "   ./scripts/destroy.sh $REGION"

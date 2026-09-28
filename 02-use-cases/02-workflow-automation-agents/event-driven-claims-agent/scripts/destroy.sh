@@ -10,7 +10,7 @@ set -euo pipefail
 # - CloudWatch observability deliveries
 # - CloudFormation stack (with DELETE_FAILED auto-recovery)
 # - Orphaned AgentCore control-plane resources (Gateway, Runtime, Memory, etc.)
-# - Cognito User Pool (if created by setup_cognito.sh)
+# - Shared Cognito User Pool is preserved
 # - Local state files
 # ============================================================================
 
@@ -24,7 +24,7 @@ echo ""
 # Step 1: Observability (non-critical — skip if already gone)
 echo "🔭 Step 1: Removing observability deliveries..."
 python3 "$SCRIPT_DIR/disable_observability.py" --region "$REGION" \
-  --stack-name "AgentCore-ClaimsAgent-dev" 2>/dev/null || \
+  --stack-name "AgentCore-ClaimsAgentV2-dev" 2>/dev/null || \
   echo "   Skipped (already removed or never enabled)"
 echo ""
 

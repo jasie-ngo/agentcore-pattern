@@ -2,12 +2,11 @@
  * InfraConstruct: Supplementary infrastructure for the Claims Agent.
  *
  * Creates resources that the AgentCore CLI cannot manage natively:
- * - DynamoDB tables (Policies, Claims, Reviews)
+ * - DynamoDB tables (Members, Cases, HumanReview)
  * - S3 bucket (claims email inbox, EventBridge enabled)
- * - Lambda tool functions (6 tools wired to Gateway via lambdaArnMap)
+ * - Lambda tool functions wired to Gateway via lambdaArnMap
  * - Trigger Lambda (EventBridge → Runtime invocation)
  * - EventBridge rule (S3 PutObject → Trigger)
- * - SNS topic (human review notifications)
  *
  * Cognito is managed externally (scripts/setup_cognito.sh) and its values
  * are passed via environment variables at synth time.
@@ -19,12 +18,11 @@ import * as cdk from 'aws-cdk-lib';
 import * as dynamodb from 'aws-cdk-lib/aws-dynamodb';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as lambda_ from 'aws-cdk-lib/aws-lambda';
-import * as sns from 'aws-cdk-lib/aws-sns';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
-import * as iam from 'aws-cdk-lib/aws-iam';
 import * as events from 'aws-cdk-lib/aws-events';
 import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
+import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -42,11 +40,15 @@ export class InfraConstruct extends Construct {
   public readonly cognitoDiscoveryUrl: string;
   /** Cognito app client ID — read from env, used for Gateway allowedClients */
   public readonly cognitoClientId: string;
+  /** Bedrock Guardrail that denies personal financial advice (attached to the Writer model) */
+  public readonly adviceGuardrail: bedrock.CfnGuardrail;
 
   constructor(scope: Construct, id: string, props: InfraConstructProps = {}) {
     super(scope, id);
 
     const stack = cdk.Stack.of(this);
+    const resourcePrefix = stack.stackName;
+    cdk.Tags.of(this).add('id', '2520121');
     const destroyOnDelete = props.destroyOnDelete ?? true;
     const removalPolicy = destroyOnDelete ? cdk.RemovalPolicy.DESTROY : cdk.RemovalPolicy.RETAIN;
 
@@ -55,52 +57,41 @@ export class InfraConstruct extends Construct {
 
     // ─── DynamoDB Tables ───────────────────────────────────────────
 
-    const policiesTable = new dynamodb.Table(this, 'PoliciesTable', {
-      tableName: `ClaimsAgent-${stack.stackName.split('-').pop() || 'dev'}-Policies`,
-      partitionKey: { name: 'policy_number', type: dynamodb.AttributeType.STRING },
+    const membersTable = new dynamodb.Table(this, 'MembersTable', {
+      tableName: `${resourcePrefix}-Hesta-members`,
+      partitionKey: { name: 'member_id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
-
-    const claimsTable = new dynamodb.Table(this, 'ClaimsTable', {
-      tableName: `ClaimsAgent-${stack.stackName.split('-').pop() || 'dev'}-Claims`,
-      partitionKey: { name: 'claim_id', type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      removalPolicy,
-    });
-
-    // Add GSI for listing claims by status (avoids full table scan)
-    claimsTable.addGlobalSecondaryIndex({
-      indexName: 'status-index',
-      partitionKey: { name: 'status', type: dynamodb.AttributeType.STRING },
-      sortKey: { name: 'created_at', type: dynamodb.AttributeType.STRING },
+    membersTable.addGlobalSecondaryIndex({
+      indexName: 'email-index',
+      partitionKey: { name: 'email', type: dynamodb.AttributeType.STRING },
       projectionType: dynamodb.ProjectionType.ALL,
     });
 
-    const reviewsTable = new dynamodb.Table(this, 'ReviewsTable', {
-      tableName: `ClaimsAgent-${stack.stackName.split('-').pop() || 'dev'}-Reviews`,
+    const casesTable = new dynamodb.Table(this, 'CasesTable', {
+      tableName: `${resourcePrefix}-Hesta-cases`,
+      partitionKey: { name: 'case_id', type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      removalPolicy,
+    });
+    casesTable.addGlobalSecondaryIndex({
+      indexName: 'member_id-index',
+      partitionKey: { name: 'member_id', type: dynamodb.AttributeType.STRING },
+      projectionType: dynamodb.ProjectionType.ALL,
+    });
+
+    const humanReviewTable = new dynamodb.Table(this, 'HumanReviewTable', {
+      tableName: `${resourcePrefix}-Hesta-humanreview`,
       partitionKey: { name: 'review_id', type: dynamodb.AttributeType.STRING },
       billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
       removalPolicy,
     });
 
-    // Add GSI for finding reviews by claim_id (avoids full table scan)
-    reviewsTable.addGlobalSecondaryIndex({
-      indexName: 'claim-id-index',
-      partitionKey: { name: 'claim_id', type: dynamodb.AttributeType.STRING },
-      projectionType: dynamodb.ProjectionType.ALL,
-    });
-
-    // ─── SNS Topic (human review alerts) ──────────────────────────
-
-    const reviewTopic = new sns.Topic(this, 'ReviewTopic', {
-      topicName: 'ClaimsAgent-HumanReview',
-    });
-
     // ─── S3 Bucket (claims email inbox) ───────────────────────────
 
     const inboxBucket = new s3.Bucket(this, 'InboxBucket', {
-      bucketName: `claims-inbox-${stack.account}-${stack.region}`,
+      bucketName: 'hesta-poc-agentcore-s3',
       removalPolicy,
       autoDeleteObjects: destroyOnDelete,
       eventBridgeEnabled: true,
@@ -116,101 +107,55 @@ export class InfraConstruct extends Construct {
 
     const lambdasPath = path.join(projectRoot, 'lambdas');
 
-    const policyLookupFn = new lambda_.Function(this, 'PolicyLookupFn', {
-      functionName: 'ClaimsAgent-PolicyLookup',
+    const memberLookupFn = new lambda_.Function(this, 'MemberLookupFn', {
+      functionName: `${resourcePrefix}-MemberLookup`,
       runtime: lambda_.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'policy_lookup')),
-      environment: { POLICIES_TABLE: policiesTable.tableName },
+      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'member_lookup')),
+      environment: { HESTA_MEMBERS_TABLE: membersTable.tableName },
       timeout: cdk.Duration.seconds(10),
     });
-    policiesTable.grantReadData(policyLookupFn);
+    membersTable.grantReadData(memberLookupFn);
 
-    const createClaimFn = new lambda_.Function(this, 'CreateClaimFn', {
-      functionName: 'ClaimsAgent-CreateClaim',
+    const caseLookupCreationFn = new lambda_.Function(this, 'CaseLookupCreationFn', {
+      functionName: `${resourcePrefix}-CaseLookupCreation`,
       runtime: lambda_.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'create_claim')),
-      environment: { CLAIMS_TABLE: claimsTable.tableName },
+      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'case_lookup_creation')),
+      environment: { HESTA_CASES_TABLE: casesTable.tableName },
       timeout: cdk.Duration.seconds(10),
     });
-    claimsTable.grantReadWriteData(createClaimFn);
+    casesTable.grantReadWriteData(caseLookupCreationFn);
 
-    const humanReviewFn = new lambda_.Function(this, 'HumanReviewFn', {
-      functionName: 'ClaimsAgent-HumanReview',
+    const emailReviewFn = new lambda_.Function(this, 'EmailReviewFn', {
+      functionName: `${resourcePrefix}-EmailReview`,
       runtime: lambda_.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'human_review')),
-      environment: {
-        REVIEWS_TABLE: reviewsTable.tableName,
-        REVIEW_SNS_TOPIC_ARN: reviewTopic.topicArn,
-      },
+      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'email_review')),
+      environment: { HESTA_HUMANREVIEW_TABLE: humanReviewTable.tableName },
       timeout: cdk.Duration.seconds(10),
     });
-    reviewsTable.grantReadWriteData(humanReviewFn);
-    reviewTopic.grantPublish(humanReviewFn);
-
-    const notificationFn = new lambda_.Function(this, 'NotificationFn', {
-      functionName: 'ClaimsAgent-Notification',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'notification')),
-      environment: { SENDER_EMAIL: process.env.SENDER_EMAIL || 'noreply@example.com' },
-      timeout: cdk.Duration.seconds(10),
-    });
-    notificationFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ses:SendEmail', 'ses:SendRawEmail'],
-        resources: [`arn:aws:ses:${stack.region}:${stack.account}:identity/*`],
-      })
-    );
-
-    const listPendingFn = new lambda_.Function(this, 'ListPendingFn', {
-      functionName: 'ClaimsAgent-ListPending',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'list_pending_claims')),
-      environment: { CLAIMS_TABLE: claimsTable.tableName },
-      timeout: cdk.Duration.seconds(10),
-    });
-    claimsTable.grantReadData(listPendingFn);
-
-    const resolveClaimFn = new lambda_.Function(this, 'ResolveClaimFn', {
-      functionName: 'ClaimsAgent-ResolveClaim',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'resolve_claim')),
-      environment: {
-        CLAIMS_TABLE: claimsTable.tableName,
-        REVIEWS_TABLE: reviewsTable.tableName,
-      },
-      timeout: cdk.Duration.seconds(10),
-    });
-    claimsTable.grantReadWriteData(resolveClaimFn);
-    reviewsTable.grantReadWriteData(resolveClaimFn);
+    humanReviewTable.grantReadWriteData(emailReviewFn);
 
     // ─── Lambda ARN Map (gateway target name → function ARN) ──────
 
     this.lambdaArnMap = {
-      'policy-lookup': policyLookupFn.functionArn,
-      'create-claim': createClaimFn.functionArn,
-      'human-review': humanReviewFn.functionArn,
-      'notification': notificationFn.functionArn,
-      'list-pending-claims': listPendingFn.functionArn,
-      'resolve-claim': resolveClaimFn.functionArn,
+      'member-lookup': memberLookupFn.functionArn,
+      'case-lookup-creation': caseLookupCreationFn.functionArn,
+      'email-review': emailReviewFn.functionArn,
     };
 
     // ─── Dead-Letter Queue (failed claim triggers) ────────────────
 
     const triggerDlq = new sqs.Queue(this, 'TriggerDLQ', {
-      queueName: 'ClaimsAgent-TriggerDLQ',
+      queueName: `${resourcePrefix}-TriggerDLQ`,
       retentionPeriod: cdk.Duration.days(14),
       encryption: sqs.QueueEncryption.SQS_MANAGED,
     });
 
     // Alarm when failed claims land in the DLQ — ensures ops visibility
     new cloudwatch.Alarm(this, 'TriggerDLQAlarm', {
-      alarmName: 'ClaimsAgent-FailedClaims',
+      alarmName: `${resourcePrefix}-FailedClaims`,
       alarmDescription: 'Claims trigger DLQ has messages — failed claim processing needs attention',
       metric: triggerDlq.metricApproximateNumberOfMessagesVisible({
         period: cdk.Duration.minutes(1),
@@ -223,13 +168,17 @@ export class InfraConstruct extends Construct {
     // ─── Trigger Lambda (EventBridge → Runtime) ───────────────────
 
     this.triggerFn = new lambda_.Function(this, 'TriggerFn', {
-      functionName: 'ClaimsAgent-Trigger',
+      functionName: `${resourcePrefix}-Trigger`,
       runtime: lambda_.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
       code: lambda_.Code.fromAsset(path.join(lambdasPath, 'trigger')),
       environment: {
         // AGENTCORE_RUNTIME_ARN injected by parent stack after Runtime is created
         AGENTCORE_RUNTIME_ARN: 'PENDING',
+        // TODO 2: bounded attachment parsing — fail closed (skipped_reason) rather than
+        // silently drop or truncate an oversized/excess attachment.
+        MAX_ATTACHMENT_BYTES: '262144',
+        MAX_ATTACHMENTS: '5',
       },
       timeout: cdk.Duration.seconds(90),
       deadLetterQueue: triggerDlq,
@@ -240,7 +189,7 @@ export class InfraConstruct extends Construct {
     // ─── EventBridge Rule: S3 PutObject → Trigger Lambda ──────────
 
     new events.Rule(this, 'ClaimInboxRule', {
-      ruleName: 'ClaimsAgent-InboxTrigger',
+      ruleName: `${resourcePrefix}-InboxTrigger`,
       eventPattern: {
         source: ['aws.s3'],
         detailType: ['Object Created'],
@@ -252,10 +201,61 @@ export class InfraConstruct extends Construct {
       targets: [new eventsTargets.LambdaFunction(this.triggerFn)],
     });
 
+    // ─── Bedrock Guardrail: deny personal financial advice + sensitive account disclosure ────────
+    // Platform control (showcase): a denied-topic guardrail attached to the Writer model
+    // so the agent cannot generate personal financial/product advice, or state sensitive
+    // account-specific details. This is the model-level BACKSTOP only — the authorization
+    // decision itself is application logic (MemberProfile.disclosure_state in main.py), and
+    // the deterministic pattern scan (agents/disclosure_check.py) is the application-layer
+    // check. Works together with the app-layer detection (AI-001) + routing + Reviewer checks.
+    this.adviceGuardrail = new bedrock.CfnGuardrail(this, 'AdviceGuardrail', {
+      name: `${resourcePrefix}-NoPersonalAdvice`,
+      description:
+        'Denies personal financial/investment/product advice and sensitive account-detail disclosure; '
+        + 'HESTA staff handle advice enquiries and verified account actions.',
+      blockedInputMessaging: 'This enquiry needs a HESTA team member — we can’t provide personal financial advice.',
+      blockedOutputsMessaging: '[GUARDRAIL_BLOCKED_ADVICE]',
+      topicPolicyConfig: {
+        topicsConfig: [
+          {
+            name: 'PersonalFinancialAdvice',
+            type: 'DENY',
+            definition:
+              'Personal financial or investment advice, or product/option recommendations, tailored to an '
+              + "individual member's own circumstances (what they personally should do with their super).",
+            // Bedrock allows at most 5 examples per topic.
+            examples: [
+              'Which super option is best for me?',
+              'Should I switch to the high growth option?',
+              'What should I invest my super in?',
+              'Is it a good idea for me to roll over my other fund for my situation?',
+              'Can you recommend the best investment choice for me?',
+            ],
+          },
+          {
+            name: 'SensitiveAccountDisclosure',
+            type: 'DENY',
+            // Bedrock caps topic definitions at 200 chars (this is 188) — keep it terse.
+            definition:
+              'Stating a member\'s specific account details in a reply: balances, transaction or '
+              + 'contribution history, payment amounts, tax file numbers, bank/BSB details, or internal '
+              + 'account identifiers.',
+            examples: [
+              'Your current balance is $48,213.55.',
+              'We can confirm your BSB is 063-000 and account number 12345678.',
+              'Your TFN on file is 123 456 789.',
+              'Your last contribution of $2,500 was received on 3 March.',
+              'Your bank details for the refund are BSB 063-000, account 87654321.',
+            ],
+          },
+        ],
+      },
+    });
+
     // ─── Outputs ──────────────────────────────────────────────────
 
     new cdk.CfnOutput(this, 'InboxBucketName', { value: inboxBucket.bucketName });
-    new cdk.CfnOutput(this, 'ReviewTopicArn', { value: reviewTopic.topicArn });
     new cdk.CfnOutput(this, 'TriggerDLQUrl', { value: triggerDlq.queueUrl });
+    new cdk.CfnOutput(this, 'AdviceGuardrailId', { value: this.adviceGuardrail.attrGuardrailId });
   }
 }

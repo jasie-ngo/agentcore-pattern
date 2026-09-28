@@ -23,9 +23,9 @@ export interface AgentCoreStackProps extends StackProps {
  * CDK Stack: Event-Driven Claims Agent
  *
  * Integrates:
- * 1. InfraConstruct — DynamoDB, S3, Lambda tools, SNS, EventBridge, Cognito
+ * 1. InfraConstruct — DynamoDB, S3, Lambda tools, EventBridge, and Bedrock guardrail
  * 2. AgentCoreApplication — Runtime, Memory, PolicyEngine, OnlineEval (from agentcore.json)
- * 3. AgentCoreMcp — Gateway + 6 Lambda targets with real ARNs from step 1
+ * 3. AgentCoreMcp — Gateway + three Lambda targets with real ARNs from step 1
  *
  * Deployment: `agentcore deploy --target dev`
  */
@@ -39,7 +39,7 @@ export class AgentCoreStack extends Stack {
     const { spec, mcpSpec, credentials } = props;
 
     // ─── Step 1: Supplementary infrastructure ──────────────────────
-    // Creates DynamoDB tables, Lambda tool functions, S3, EventBridge, SNS, Cognito.
+    // Creates DynamoDB tables, Lambda tool functions, S3, EventBridge, and guardrail.
     // Exposes lambdaArnMap for patching gateway targets.
     this.infra = new InfraConstruct(this, 'Infra', {
       destroyOnDelete: true,
@@ -109,9 +109,15 @@ export class AgentCoreStack extends Stack {
 
     // ─── Steps 5+6: Configure the Runtime (env vars + permissions) ──
     // Use the typed AgentEnvironment API instead of walking the construct tree.
-    const agentEnv = this.application.environments.get('claimsagent');
+    // Prefer the historical name for backward-compat, but fall back to the sole
+    // environment so a runtime rename in agentcore.json (e.g. "hestaclaimsagent")
+    // doesn't break synth. This project defines exactly one runtime.
+    const environments = this.application.environments;
+    const agentEnv = environments.get('claimsagent') ?? Array.from(environments.values())[0];
     if (!agentEnv) {
-      throw new Error('Agent environment "claimsagent" not found in application.environments');
+      throw new Error(
+        `No agent environment found in application.environments (keys: ${Array.from(environments.keys()).join(', ') || 'none'})`
+      );
     }
     const runtime = agentEnv.runtime;
 
@@ -156,6 +162,19 @@ export class AgentCoreStack extends Stack {
           'arn:aws:bedrock:*::foundation-model/anthropic.claude-sonnet-4-6',
           'arn:aws:bedrock:*:*:inference-profile/*',
         ],
+      })
+    );
+
+    // ─── Bedrock Guardrail (no-personal-advice) → Writer model ─────
+    // Inject the guardrail id/version so the agent attaches it to the Writer model, and
+    // grant the Runtime permission to apply it.
+    runtime.addEnvironmentVariable('GUARDRAIL_ID', this.infra.adviceGuardrail.attrGuardrailId);
+    runtime.addEnvironmentVariable('GUARDRAIL_VERSION', 'DRAFT');
+    runtime.addToPolicy(
+      new iam.PolicyStatement({
+        sid: 'BedrockApplyGuardrail',
+        actions: ['bedrock:ApplyGuardrail'],
+        resources: [this.infra.adviceGuardrail.attrGuardrailArn],
       })
     );
 

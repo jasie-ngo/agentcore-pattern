@@ -21,7 +21,7 @@ from botocore.session import Session as BotocoreSession
 def get_runtime_arn(region: str) -> str:
     """Get the Runtime ARN from CloudFormation outputs."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgentV2-dev")["Stacks"][0]["Outputs"]
     output_map = {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
     for key, val in output_map.items():
@@ -100,7 +100,7 @@ def main():
     parser.add_argument("--region", default="us-west-2")
     parser.add_argument(
         "--prompt",
-        default="I need to file a claim. My policy is POL-12345. Fender bender yesterday, $2000 damage.",
+        default="Please confirm receipt of my Binding Death Nomination form. Member number 60010001.",
     )
     args = parser.parse_args()
 
