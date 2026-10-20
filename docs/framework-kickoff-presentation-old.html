@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>From Sample to Framework — Event-Driven Agent Template</title>
+<style>
+  :root{
+    --bg:#0b1020; --bg2:#0f1729; --panel:rgba(255,255,255,.045);
+    --panel-brd:rgba(255,255,255,.09); --ink:#e8edf7; --muted:#93a1bd;
+    --primary:#7c8cff; --primary2:#5b6cff; --cyan:#3fd6e0; --amber:#f5b13d;
+    --green:#4ade80; --red:#fb7185; --violet:#b18cff;
+    --radius:16px; --maxw:1120px;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    background:radial-gradient(1200px 700px at 78% -10%,rgba(124,140,255,.18),transparent 60%),
+               radial-gradient(900px 600px at 8% 110%,rgba(63,214,224,.12),transparent 55%),
+               linear-gradient(160deg,var(--bg),var(--bg2));
+    color:var(--ink);overflow:hidden;
+  }
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:64px min(9vw,120px);opacity:0;transition:opacity .35s ease;
+  }
+  .slide.active{display:flex;opacity:1}
+  .inner{width:100%;max-width:var(--maxw);margin:0 auto}
+  .kicker{
+    display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:600;
+    letter-spacing:.14em;text-transform:uppercase;color:var(--cyan);margin-bottom:18px;
+  }
+  .kicker::before{content:"";width:26px;height:2px;background:var(--cyan);border-radius:2px}
+  h1{font-size:clamp(34px,5vw,62px);line-height:1.04;letter-spacing:-.02em;font-weight:800}
+  h2{font-size:clamp(26px,3.4vw,42px);line-height:1.08;letter-spacing:-.015em;font-weight:750;margin-bottom:8px}
+  .sub{color:var(--muted);font-size:clamp(15px,1.5vw,20px);line-height:1.5;margin-top:16px;max-width:820px}
+  .lead{font-size:clamp(16px,1.6vw,21px);color:#c7d2e8;line-height:1.55;max-width:860px;margin-top:6px}
+  .grid{display:grid;gap:16px;margin-top:28px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)}
+  .g4{grid-template-columns:repeat(4,1fr)}
+  .card{
+    background:var(--panel);border:1px solid var(--panel-brd);border-radius:var(--radius);
+    padding:20px 20px;backdrop-filter:blur(6px);
+  }
+  .card h3{font-size:17px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:9px}
+  .card p{color:var(--muted);font-size:14.5px;line-height:1.5}
+  .dot{width:9px;height:9px;border-radius:50%;flex:none}
+  ul.clean{list-style:none;margin-top:22px;display:flex;flex-direction:column;gap:14px}
+  ul.clean li{display:flex;gap:14px;align-items:flex-start;font-size:clamp(16px,1.5vw,19px);line-height:1.45}
+  ul.clean li .b{color:var(--primary);font-weight:800;flex:none;margin-top:2px}
+  .muted{color:var(--muted)}
+  .tag{display:inline-block;font-size:12px;font-weight:700;padding:3px 10px;border-radius:999px;
+       background:rgba(124,140,255,.16);color:#c3ccff;border:1px solid rgba(124,140,255,.28)}
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;margin-top:26px;flex-wrap:wrap}
+  .lane{flex:1;min-width:230px;background:var(--panel);border:1px solid var(--panel-brd);
+        border-radius:var(--radius);padding:18px;position:relative}
+  .lane + .lane{margin-left:34px}
+  .lane::after{content:"→";position:absolute;right:-28px;top:50%;transform:translateY(-50%);
+        font-size:26px;color:var(--primary);font-weight:700}
+  .lane:last-child::after{display:none}
+  .lane .lh{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--cyan);font-weight:700;margin-bottom:12px}
+  .node{background:rgba(255,255,255,.05);border:1px solid var(--panel-brd);border-radius:10px;
+        padding:9px 12px;font-size:13.5px;margin-bottom:9px;line-height:1.35}
+  .node b{font-weight:700}
+  .node small{color:var(--muted);display:block;font-size:11.5px;margin-top:2px}
+  /* phases */
+  .phase{background:var(--panel);border:1px solid var(--panel-brd);border-radius:14px;padding:16px 16px;position:relative;overflow:hidden}
+  .phase::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent,var(--primary))}
+  .phase .pn{font-size:12px;font-weight:800;letter-spacing:.1em;color:var(--accent,var(--primary));text-transform:uppercase}
+  .phase h3{font-size:16px;font-weight:750;margin:5px 0 8px}
+  .phase p{font-size:13px;color:var(--muted);line-height:1.45}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .chip{font-size:11px;padding:3px 8px;border-radius:7px;background:rgba(255,255,255,.06);
+        border:1px solid var(--panel-brd);color:#cdd7ec}
+  /* two column challenge */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:26px}
+  .colbox{border-radius:var(--radius);padding:22px;border:1px solid var(--panel-brd)}
+  .colbox.core{background:linear-gradient(180deg,rgba(63,214,224,.10),rgba(63,214,224,.02))}
+  .colbox.dom{background:linear-gradient(180deg,rgba(245,177,61,.10),rgba(245,177,61,.02))}
+  .colbox h3{font-size:19px;margin-bottom:4px}
+  .colbox .cd{font-size:13px;color:var(--muted);margin-bottom:14px}
+  .colbox li{list-style:none;font-size:14.5px;padding:6px 0;border-bottom:1px dashed rgba(255,255,255,.07);line-height:1.35}
+  .colbox li:last-child{border-bottom:none}
+  /* roles */
+  .role{display:flex;gap:12px;align-items:flex-start}
+  .role .rc{font-weight:800;font-size:13px;color:#0b1020;background:var(--primary);border-radius:7px;
+        padding:4px 8px;flex:none;min-width:52px;text-align:center}
+  .role .rt{font-size:14px}.role .rt b{display:block;font-size:14.5px;margin-bottom:1px}
+  .role .rt span{color:var(--muted);font-size:12.5px}
+  /* footer / nav */
+  .foot{position:fixed;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:space-between;
+        padding:14px min(9vw,120px);z-index:20;pointer-events:none}
+  .progress{position:fixed;left:0;top:0;height:3px;background:linear-gradient(90deg,var(--primary),var(--cyan));z-index:30;transition:width .35s ease}
+  .brand{font-size:12.5px;color:var(--muted);letter-spacing:.04em}
+  .brand b{color:var(--ink)}
+  .nav{display:flex;gap:10px;align-items:center;pointer-events:auto}
+  .nav button{background:var(--panel);border:1px solid var(--panel-brd);color:var(--ink);
+        width:40px;height:40px;border-radius:11px;font-size:17px;cursor:pointer;transition:.15s}
+  .nav button:hover{background:rgba(124,140,255,.2);border-color:var(--primary)}
+  .counter{font-size:13px;color:var(--muted);min-width:52px;text-align:center;font-variant-numeric:tabular-nums}
+  .hint{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);font-size:11.5px;color:#5c6a86;z-index:19}
+  .title-meta{display:flex;gap:26px;flex-wrap:wrap;margin-top:34px;color:var(--muted);font-size:14px}
+  .title-meta div b{color:var(--ink);display:block;font-size:13px;margin-bottom:2px}
+  .big-num{font-size:clamp(40px,6vw,72px);font-weight:800;line-height:1;background:linear-gradient(120deg,var(--primary),var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .diagram-slide{padding:40px min(5vw,60px)}
+  .diagram-wrap{margin-top:14px;border:1px solid var(--panel-brd);border-radius:16px;overflow:hidden;background:#0f1729;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+  .diagram-wrap img{width:100%;height:auto;max-height:74vh;display:block}
+  @media (max-width:820px){.g3,.g4,.cols{grid-template-columns:1fr 1fr}.lane+.lane{margin-left:0;margin-top:34px}.lane::after{right:50%;top:auto;bottom:-30px;transform:translateX(50%) rotate(90deg)}}
+</style>
+</head>
+<body>
+<div class="progress" id="bar"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 TITLE -->
+  <section class="slide active">
+    <div class="inner">
+      <div class="kicker">Team Kickoff</div>
+      <h1>From Sample to Framework</h1>
+      <p class="lead" style="margin-top:22px">Turning the Event-Driven Claims Agent into a reusable, multi-client
+      template on <b>Amazon Bedrock AgentCore</b>.</p>
+      <div class="title-meta">
+        <div><b>Baseline</b>event-driven-claims-agent</div>
+        <div><b>Target</b>Config-driven agent template</div>
+        <div><b>Model</b>Internal delivery · isolated per client</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 OPPORTUNITY -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">The Opportunity</div>
+      <h2>We have a working agent. Let's make it a product pattern.</h2>
+      <ul class="clean">
+        <li><span class="b">1.</span><div>A production-realistic <b>event-driven claims agent</b> already runs end-to-end on AgentCore.</div></li>
+        <li><span class="b">2.</span><div>Every new client today would mean rebuilding it by hand — slow, inconsistent, hard to support.</div></li>
+        <li><span class="b">3.</span><div><b>The goal:</b> a config-driven engine our team <b>clones, configures, and deploys per client</b> — minimal code changes, repeatable delivery.</div></li>
+      </ul>
+      <p class="sub">The challenge for the team: separate the <b>reusable engine</b> from the <b>domain-specific</b> parts, and make the domain a declarative configuration.</p>
+    </div>
+  </section>
+
+  <!-- 3 WHAT IT DOES TODAY -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">The Baseline · What It Does Today</div>
+      <h2>An autonomous, event-driven claims pipeline</h2>
+      <div class="grid g3">
+        <div class="card"><h3><span class="dot" style="background:var(--cyan)"></span>Event-driven intake</h3><p>A claim arrives by email → S3 → EventBridge → Lambda → AgentCore Runtime. No human trigger.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--primary)"></span>Dual-agent decision</h3><p>A Processor makes an ACCEPT/REJECT decision; an independent Validator reviews it and scores confidence.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--amber)"></span>Confidence routing</h3><p>Auto-approve, escalate to human review, or reject — enforced by a Cedar policy engine.</p></div>
+      </div>
+      <p class="sub">One-command deploy provisions ~76 AWS resources and uses <b>7 AgentCore services</b>. That breadth is exactly what makes it a strong framework seed.</p>
+    </div>
+  </section>
+
+  <!-- 4 ARCHITECTURE -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Current Architecture</div>
+      <h2>Three layers, cleanly separated</h2>
+      <div class="flow">
+        <div class="lane">
+          <div class="lh">1 · Ingress</div>
+          <div class="node"><b>Email → Amazon SES</b><small>inbound claim</small></div>
+          <div class="node"><b>S3 bucket</b><small>claims-inbox/</small></div>
+          <div class="node"><b>EventBridge rule</b><small>on object created</small></div>
+          <div class="node"><b>Trigger Lambda</b><small>SigV4 → Runtime</small></div>
+        </div>
+        <div class="lane">
+          <div class="lh">2 · Processing (Runtime)</div>
+          <div class="node"><b>Phase 1 · Claims Processor</b><small>evaluate + decide</small></div>
+          <div class="node"><b>Phase 2 · Validation Agent</b><small>review + confidence</small></div>
+          <div class="node"><b>Phase 3 · Execution</b><small>route by confidence</small></div>
+        </div>
+        <div class="lane">
+          <div class="lh">3 · Tools</div>
+          <div class="node"><b>MCP Gateway</b><small>Cognito JWT auth</small></div>
+          <div class="node"><b>6 Lambda tools</b><small>policy, claim, review, notify…</small></div>
+          <div class="node"><b>DynamoDB · SNS · SES</b><small>state + notifications</small></div>
+          <div class="node"><b>Cedar Policy Engine</b><small>blocks tool calls</small></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 4b AWS ARCHITECTURE DIAGRAM -->
+  <section class="slide diagram-slide">
+    <div class="inner" style="max-width:1240px">
+      <div class="kicker">Current Architecture · AWS Components &amp; Data Flow</div>
+      <div class="diagram-wrap">
+        <img src="architecture-diagram.svg" alt="AWS architecture diagram of the event-driven claims agent: ingress (SES, S3, EventBridge, Lambda), processing (Bedrock AgentCore runtime, memory, identity, policy engine), and tools (Gateway, Cognito, Lambda tools, DynamoDB, SNS, SES)." />
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 DUAL AGENT -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Processing · The Dual-Agent Pipeline</div>
+      <h2>Decide → independently validate → execute</h2>
+      <div class="grid g3">
+        <div class="card"><h3><span class="tag">Phase 1</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Claims Processor</b><br>Extracts details, looks up the policy via a Gateway tool, and makes an <b>ACCEPT / REJECT</b> decision as structured output.</p></div>
+        <div class="card"><h3><span class="tag">Phase 2</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Validation Agent</b><br>Independently reviews the decision (reduces single-model bias) and assigns a <b>confidence score</b> + routing.</p></div>
+        <div class="card"><h3><span class="tag">Phase 3</span></h3><p style="margin-top:8px"><b style="color:var(--ink)">Execution</b><br>Deterministic: <b>auto-approve</b>, <b>escalate to human</b>, or <b>reject</b> — then create the claim & notify via tools.</p></div>
+      </div>
+      <p class="sub">This "propose then check" shape is a <b>reusable orchestration pattern</b>, not something specific to claims.</p>
+    </div>
+  </section>
+
+  <!-- 6 AGENTCORE SERVICES -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Platform · AgentCore Services In Use</div>
+      <h2>Seven capabilities the framework inherits</h2>
+      <div class="grid g4">
+        <div class="card"><h3>Runtime</h3><p>Hosts the dual-agent container; SigV4 inbound auth; streaming.</p></div>
+        <div class="card"><h3>Gateway</h3><p>MCP tool discovery + invocation over Lambda targets.</p></div>
+        <div class="card"><h3>Identity</h3><p>Manages Runtime → Gateway OAuth tokens; no secrets in env.</p></div>
+        <div class="card"><h3>Memory</h3><p>Semantic + summarization recall across sessions.</p></div>
+        <div class="card"><h3>Policy Engine</h3><p>Cedar policies enforced before every tool call.</p></div>
+        <div class="card"><h3>Evaluation</h3><p>Built-in quality metrics on each invocation.</p></div>
+        <div class="card"><h3>Observability</h3><p>Traces + logs + transaction search.</p></div>
+        <div class="card" style="background:linear-gradient(180deg,rgba(124,140,255,.14),rgba(124,140,255,.03))"><h3>+ CDK deploy</h3><p>One-command infra: 76 resources, repeatable.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 THE CHALLENGE -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">The Core Challenge</div>
+      <h2>The engine is reusable. The domain is not — yet.</h2>
+      <div class="cols">
+        <div class="colbox core">
+          <h3>♻️ Framework core <span class="muted" style="font-size:13px">(keep &amp; generalize)</span></h3>
+          <div class="cd">Same for every client</div>
+          <li>Dual/multi-agent orchestration pattern</li>
+          <li>Event-driven pipeline (ingress → runtime → tools)</li>
+          <li>MCP Gateway + Lambda-tools mechanism</li>
+          <li>Cedar policy engine + Identity + Memory</li>
+          <li>Evaluation, observability, deploy tooling</li>
+        </div>
+        <div class="colbox dom">
+          <h3>🎯 Domain-specific <span class="muted" style="font-size:13px">(make configurable)</span></h3>
+          <div class="cd">Changes per client</div>
+          <li>Agent prompts &amp; structured decision schema</li>
+          <li>The 6 tools + schemas &amp; data model (DynamoDB)</li>
+          <li>Routing rules &amp; Cedar thresholds</li>
+          <li>Trigger type (email today) &amp; notifications</li>
+          <li>Naming / branding throughout</li>
+        </div>
+      </div>
+      <p class="sub">Our job: push everything on the right into a <b>declarative client config</b> behind stable extension points.</p>
+    </div>
+  </section>
+
+  <!-- 8 APPROACH -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Our Approach · Decisions Made</div>
+      <h2>A config-driven engine, deployed per client</h2>
+      <div class="grid g3">
+        <div class="card"><h3><span class="dot" style="background:var(--violet)"></span>Flexible architecture</h3><p>Support variable agent counts, multiple trigger types (API, schedule, queue), and optional features — not just the email/dual-agent shape.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--cyan)"></span>Internal delivery team</h3><p>Engineers clone the template, fill a <b>client-config</b>, and deploy per engagement. Optimize for repeatability.</p></div>
+        <div class="card"><h3><span class="dot" style="background:var(--green)"></span>Isolated per client</h3><p>One deployment (account/stack) per client — clean data isolation, security, and cost attribution.</p></div>
+      </div>
+      <p class="sub"><b>Principle:</b> code becomes the engine; a single declarative <b>client configuration spec</b> becomes the client.</p>
+    </div>
+  </section>
+
+  <!-- 9 ROADMAP -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">The Plan · Roadmap</div>
+      <h2>Six phases from hardening to a proven second domain</h2>
+      <div class="grid g3">
+        <div class="phase" style="--accent:var(--red)"><div class="pn">Phase 0</div><h3>Harden the baseline</h3><p>Fix the known bugs; lock them with tests.</p><div class="chips"><span class="chip">.dockerignore</span><span class="chip">model IDs</span><span class="chip">tool names</span><span class="chip">forced decision</span></div></div>
+        <div class="phase" style="--accent:var(--primary)"><div class="pn">Phase 1</div><h3>Architecture &amp; config spec</h3><p>Boundaries, the client-config spec, extension interfaces, validator.</p><div class="chips"><span class="chip">config spec</span><span class="chip">ADRs</span><span class="chip">interfaces</span></div></div>
+        <div class="phase" style="--accent:var(--cyan)"><div class="pn">Phase 2</div><h3>Config-driven domain</h3><p>Externalize prompts, schemas, routing, data model, policies, branding.</p><div class="chips"><span class="chip">domain-swap</span><span class="chip">data model</span><span class="chip">policies</span></div></div>
+        <div class="phase" style="--accent:var(--violet)"><div class="pn">Phase 3</div><h3>Flexible architecture</h3><p>Variable agents, pluggable trigger adapters &amp; tool registry.</p><div class="chips"><span class="chip">orchestration</span><span class="chip">triggers</span><span class="chip">tool registry</span></div></div>
+        <div class="phase" style="--accent:var(--amber)"><div class="pn">Phase 4</div><h3>Provisioning &amp; CI/CD</h3><p>Scaffolding CLI, config→infra generator, deploy pipeline, eval gates.</p><div class="chips"><span class="chip">create-client</span><span class="chip">CI/CD</span><span class="chip">eval gates</span></div></div>
+        <div class="phase" style="--accent:var(--green)"><div class="pn">Phase 5</div><h3>Security, ops &amp; enablement</h3><p>Isolation, secrets, docs, onboarding — and a 2nd-domain build.</p><div class="chips"><span class="chip">isolation</span><span class="chip">runbooks</span><span class="chip">2nd domain</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 FLAGSHIP -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Flagship Workstreams</div>
+      <h2>The four that define success</h2>
+      <div class="grid g2">
+        <div class="card"><h3><span class="tag">E1.2</span> The client-config spec</h3><p>One declarative source of truth — identity, agents, tools, triggers, data, policies, models. Everything else keys off this.</p></div>
+        <div class="card"><h3><span class="tag">E3.x</span> Flexible orchestration + triggers</h3><p>Single/dual/multi-agent pipelines and trigger adapters (API, schedule, queue) selected by config.</p></div>
+        <div class="card"><h3><span class="tag">E4.1</span> <code>create-client</code> scaffolding</h3><p>Generate a new, deployable client project from the template + a config file — no manual placeholder edits.</p></div>
+        <div class="card"><h3><span class="tag">E5.7</span> Second-domain validation</h3><p>Build a different domain (e.g. IT-incident or HR) end-to-end. <b>This is our Definition of Done.</b></p></div>
+      </div>
+      <p class="sub muted">Full task breakdown (~40 tasks with roles, effort &amp; dependencies) lives in the framework plan.</p>
+    </div>
+  </section>
+
+  <!-- 11 TEAM -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">The Team · Roles</div>
+      <h2>A lean, cross-functional squad</h2>
+      <div class="grid g3">
+        <div class="card role"><div class="rc">SA</div><div class="rt"><b>Solutions / AI Architect</b><span>Boundaries, config spec, ADRs</span></div></div>
+        <div class="card role"><div class="rc">BE</div><div class="rt"><b>Backend / Agent Eng ×2</b><span>Runtime, orchestration, tools</span></div></div>
+        <div class="card role"><div class="rc">AIE</div><div class="rt"><b>AI / Prompt Engineer</b><span>Prompts, structured output, evals</span></div></div>
+        <div class="card role"><div class="rc">DevOps</div><div class="rt"><b>Infra / DevOps</b><span>CDK, scaffolding, CI/CD</span></div></div>
+        <div class="card role"><div class="rc">SEC</div><div class="rt"><b>Security Engineer</b><span>IAM, Cedar, identity, isolation</span></div></div>
+        <div class="card role"><div class="rc">DE</div><div class="rt"><b>Data Engineer</b><span>Data model, memory namespaces</span></div></div>
+        <div class="card role"><div class="rc">QA</div><div class="rt"><b>QA Engineer</b><span>Test harness, eval gates</span></div></div>
+        <div class="card role"><div class="rc">TW</div><div class="rt"><b>Technical Writer</b><span>Docs, runbooks, onboarding</span></div></div>
+        <div class="card role"><div class="rc">DL</div><div class="rt"><b>Delivery Lead / PO</b><span>Intake → config, backlog</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 HOW WE WORK -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">How We'll Work</div>
+      <h2>Definition of Done &amp; ways of working</h2>
+      <div class="grid g2">
+        <div class="card"><h3>🏁 Definition of Done</h3><p>We stand up a <b>completely different domain</b> from the framework — new prompts, tools, data, trigger — with <b>only config changes and zero core edits</b>, deployed as an isolated stack.</p></div>
+        <div class="card"><h3>⚙️ Config over code</h3><p>Domain lives in a declarative client-config; the engine stays untouched between clients.</p></div>
+        <div class="card"><h3>✅ Quality gates</h3><p>CI + automated AgentCore <b>eval gates</b> block regressions; the Phase-0 tests protect the baseline.</p></div>
+        <div class="card"><h3>🧭 Decisions in the open</h3><p>ADRs for architecture choices; the config spec is the team's shared contract.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 NEXT STEPS -->
+  <section class="slide">
+    <div class="inner">
+      <div class="kicker">Next Steps</div>
+      <h2>Where we start on Monday</h2>
+      <ul class="clean">
+        <li><span class="b">→</span><div><b>Land Phase 0</b> — merge the baseline hardening fixes + regression tests (safe foundation).</div></li>
+        <li><span class="b">→</span><div><b>Draft the client-config spec (E1.2)</b> — the architect + leads; this unblocks everything else.</div></li>
+        <li><span class="b">→</span><div><b>Pick the validation domain (E5.7)</b> now, so we build toward a concrete target.</div></li>
+        <li><span class="b">→</span><div><b>Import the ~40 tasks</b> into the tracker and assign owners by role.</div></li>
+      </ul>
+      <p class="sub">Open questions to close: config format (YAML/JSON), multi-agent = sequential vs graph, and any compliance verticals (HIPAA/PCI/GDPR).</p>
+    </div>
+  </section>
+
+</div>
+
+<div class="foot">
+  <div class="brand"><b>Event-Driven Agent Template</b> · Amazon Bedrock AgentCore</div>
+  <div class="nav">
+    <button id="prev" aria-label="Previous">‹</button>
+    <span class="counter" id="counter">1 / 13</span>
+    <button id="next" aria-label="Next">›</button>
+  </div>
+</div>
+<div class="hint">← → or Space to navigate · F for full screen</div>
+
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  const bar=document.getElementById('bar'), counter=document.getElementById('counter');
+  let i=0;
+  function show(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,x)=>s.classList.toggle('active',x===i));
+    bar.style.width=((i+1)/slides.length*100)+'%';
+    counter.textContent=(i+1)+' / '+slides.length;
+  }
+  document.getElementById('next').onclick=()=>show(i+1);
+  document.getElementById('prev').onclick=()=>show(i-1);
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){e.preventDefault();show(i+1);}
+    else if(e.key==='ArrowLeft'||e.key==='PageUp'){e.preventDefault();show(i-1);}
+    else if(e.key==='Home'){show(0);} else if(e.key==='End'){show(slides.length-1);}
+    else if(e.key.toLowerCase()==='f'){if(!document.fullscreenElement)document.documentElement.requestFullscreen();else document.exitFullscreen();}
+  });
+  show(0);
+</script>
+</body>
+</html>

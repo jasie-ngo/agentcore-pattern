@@ -1,0 +1,5 @@
+{
+  "prompt": "WARNING: This email originated from outside the organisation. DO NOT click links or open attachments unless you recognise the sender.\n\nHello,\n\nI am asking about the $10,000 financial hardship withdrawal to help pay my accumulating bills. I have lost my job and I am behind on rent. My member number is 481923. I have attached my most recent bank statement.\n\nThanks,\nSam\n\n[ATTACHMENT bank-statement-august.pdf]\n\nIssued by H.E.S.T. Australia Ltd ABN 66 006 818 695 AFSL 235249, Trustee of HESTA ABN 64 971 749 321.",
+  "claimant_email": "sam.rivers@example.com",
+  "source": "s3://hesta-inbox/2026/09/email-00987.txt"
+}
