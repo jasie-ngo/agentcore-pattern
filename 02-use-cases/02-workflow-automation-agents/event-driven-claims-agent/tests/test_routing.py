@@ -1,4 +1,4 @@
-"""Workflow tests for the dual-agent routing matrix in app/claimsagent/routing.py.
+"""Workflow tests for the dual-agent routing matrix in app/claims_agent/routing.py.
 
 These exercise the confidence-based routing decisions that determine a claim's
 fate after the Processor and Validator agents run — the core business logic of
@@ -12,9 +12,9 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app", "claimsagent"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
-from routing import (  # noqa: E402
+from claims_agent.routing import (  # noqa: E402
     AUTO_APPROVE,
     HUMAN_REVIEW,
     REJECT,
@@ -36,7 +36,7 @@ class ResolveDecisionTests(unittest.TestCase):
         self.assertEqual(resolve_decision({"decision": "Accept"}, ""), "ACCEPT")
 
     def test_no_structured_output_defaults_to_reject(self):
-        # If the agent fails to call submit_decision, safe default is REJECT.
+        # If no structured decision is returned, safe default is REJECT.
         self.assertEqual(resolve_decision(None, "some response text"), "REJECT")
 
     def test_empty_dict_defaults_to_reject(self):
@@ -67,7 +67,7 @@ class ResolveRoutingTests(unittest.TestCase):
         self.assertEqual(routing, AUTO_APPROVE)
 
     def test_no_structured_output_defaults_to_human_review(self):
-        # If the agent fails to call submit_validation, safe default is HUMAN_REVIEW.
+        # If no structured validation is returned, safe default is HUMAN_REVIEW.
         confidence, routing = resolve_routing(None, "some response text")
         self.assertEqual(confidence, 0)
         self.assertEqual(routing, HUMAN_REVIEW)

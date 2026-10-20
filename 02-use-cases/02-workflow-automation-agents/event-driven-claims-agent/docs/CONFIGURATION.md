@@ -314,7 +314,7 @@ The following OTEL variables are **auto-configured** by the Runtime when `instru
 
 ## Bedrock Model Access
 
-The Runtime needs access to the Bedrock model specified in `app/claimsagent/model/load.py`.
+The Runtime needs access to the Bedrock models set by `AGENT_MODEL_ID` and `FAST_MODEL_ID` (read in each use case's `app/<use_case>/config.yaml`).
 
 ### Default Model
 
@@ -354,7 +354,7 @@ Preferred: set the `AGENT_MODEL_ID` environment variable on the Runtime (in `age
 agentcore deploy --target dev --yes
 ```
 
-`app/claimsagent/main.py` reads `AGENT_MODEL_ID` (via `config.py`), so no code change is needed.
+`app/<use_case>/config.yaml` reads `AGENT_MODEL_ID` / `FAST_MODEL_ID` via `${VAR:-default}` interpolation, so no code change is needed.
 
 ---
 
@@ -383,7 +383,7 @@ Memory is declared in `agentcore/agentcore.json` under `memories`:
 
 ### Disabling Memory
 
-Remove the `memories` entry (or unset `MEMORY_ID`). The Runtime degrades gracefully — `app/claimsagent/memory/session.py` returns `None` when `MEMORY_ID` is unset, and `main.py` wraps the session manager in try/except.
+Remove the `memories` entry (or unset `MEMORY_CLAIMSAGENTMEMORY_ID`). The Runtime degrades gracefully — `app/_shared/memory.py` falls back to a local file session manager when no memory id is set.
 
 ---
 
@@ -394,7 +394,7 @@ Configured in `agentcore/agentcore.json` under `onlineEvalConfigs`:
 ```json
 {
   "name": "ClaimsEvaluation",
-  "agent": "claimsagent",
+  "agent": "multiusecaseagent",
   "evaluators": ["Builtin.Helpfulness", "Builtin.Correctness", "Builtin.ToolSelectionAccuracy"],
   "samplingRate": 100,
   "description": "Online evaluation for claims agent (3 built-in metrics)"

@@ -5,6 +5,8 @@
 
 An event-driven insurance claims processing system built on **Amazon Bedrock AgentCore**. Claims arrive via email, are processed by a dual-agent architecture (Claims Processor + Validation Agent), and are automatically routed based on confidence scoring — all deployed with a single command.
 
+The agents are defined in YAML with [strands-compose](https://pypi.org/project/strands-compose/). One Runtime serves one use case at a time — `claims_agent` (this pipeline) or `hesta_agent` (HESTA member-email) — selected by `USE_CASE` in `app/main.py`. See [SWITCHING_USE_CASES.md](./SWITCHING_USE_CASES.md).
+
 | | |
 |---|---|
 | ⏱️ **Time to deploy** | ~20-30 minutes (first time, with prerequisites met) |
@@ -75,7 +77,7 @@ Expected output:
 
 ```
 🔑 Authenticating...
-✅ Connected to claimsagent
+✅ Connected to ClaimsAgent_multiusecaseagent-...
 📝 I need to file a claim. My policy is POL-12345. Fender bender yesterday, $2000 damage.
 
 ━━━ Agent Response ━━━
@@ -139,7 +141,7 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 | [Architecture](./docs/ARCHITECTURE.md) | System components, data flows, dual-agent pipeline, Mermaid diagrams |
 | [Deployment Guide](./docs/deployment.md) | Prerequisites, step-by-step deploy, verify, local dev, troubleshooting, teardown |
 | [Configuration Reference](./docs/CONFIGURATION.md) | All env vars, Cedar policies, Cognito, SES, model, memory settings |
-| [Tutorial: Make It Your Own](./docs/tutorial.md) | Guided walkthrough to modify the sample for your own use case |
+| [Switching Use Cases](./SWITCHING_USE_CASES.md) | Switch the deployed use case, or add a new one |
 
 ## AgentCore Services Demonstrated
 
@@ -157,12 +159,13 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 
 ```
 event-driven-claims-agent/
-├── app/claimsagent/           # Agent runtime (Strands SDK, dual-agent logic)
-│   ├── main.py                # Entrypoint: prompts, agents, routing, Identity-managed Gateway OAuth
-│   ├── config.py              # Centralized env var reads
+├── app/                       # Agent runtime (container = whole folder)
+│   ├── main.py                # Entrypoint: USE_CASE selects which config.yaml is served
 │   ├── Dockerfile             # Container image (Python 3.12, multi-stage)
-│   ├── memory/session.py      # AgentCore Memory (graceful degradation)
-│   └── tools/                 # Co-located tools (structured output)
+│   ├── pyproject.toml         # Dependencies (uv.lock pinned)
+│   ├── _shared/               # Agent factory, Gateway client (Identity OAuth), Memory, settings
+│   ├── claims_agent/          # config.yaml (agents + prompts), schemas, routing, Phase 3 tool
+│   └── hesta_agent/           # HESTA member-email use case
 ├── agentcore/
 │   ├── agentcore.json         # AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, Eval)
 │   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge — NO Cognito)
@@ -207,15 +210,19 @@ The $100k blocking threshold is in `agentcore/agentcore.json` → `policyEngines
 
 ### Adjust the auto-approve confidence threshold
 
-In `app/claimsagent/main.py`, search for `confidence >= 80`. Change `80` to your desired threshold.
+Set `AUTO_APPROVE_THRESHOLD` in `agentcore/agentcore.json` → `runtimes[0].envVars` (default `80`), then redeploy. Both the validator prompt (`app/claims_agent/config.yaml`) and the deterministic routing (`app/claims_agent/routing.py`) read it.
+
+### Change prompts or agents
+
+Edit `app/claims_agent/config.yaml` (prompts, models, orchestration), then redeploy. Try it locally first with `sca dev --config app/claims_agent/config.yaml`.
 
 ### Add a new tool
 
-See the step-by-step guide in [docs/tutorial.md](./docs/tutorial.md#experiment-5-add-a-new-tool).
+Add a Lambda in `lambdas/<tool>/`, its schema in `lambdas/schemas/`, a Gateway target (with a `PLACEHOLDER_*` ARN) in `agentcore/agentcore.json`, and the Lambda + ARN patching in `agentcore/cdk/lib/`. See [ADR-0001](./docs/decisions/0001-agentcore-cli-plus-cdk.md).
 
 ### Adapt to a different domain
 
-See the domain adaptation walkthrough in [docs/tutorial.md](./docs/tutorial.md#adapt-to-a-different-domain).
+Add a new use case folder under `app/` — see [SWITCHING_USE_CASES.md](./SWITCHING_USE_CASES.md#adding-a-use-case).
 
 ## 🤝 Contributing
 

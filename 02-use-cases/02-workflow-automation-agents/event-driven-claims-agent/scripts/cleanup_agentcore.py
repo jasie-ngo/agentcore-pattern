@@ -46,7 +46,7 @@ def agentcore_client(region: str):
 def matches_project(name: str) -> bool:
     """Check if a resource name belongs to this project."""
     lower = name.lower()
-    return "claimsagent" in lower or "claims" in lower
+    return "claimsagent" in lower or "claims" in lower or "multiusecaseagent" in lower
 
 
 # ─── Step 1: CloudFormation Stack ─────────────────────────────────────────────

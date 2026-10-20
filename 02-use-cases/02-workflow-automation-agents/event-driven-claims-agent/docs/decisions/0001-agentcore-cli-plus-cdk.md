@@ -39,4 +39,4 @@ Two configuration surfaces must stay in sync:
 1. `agentcore.json` — AgentCore resource declarations (including PLACEHOLDER ARNs for Lambda targets)
 2. `agentcore/cdk/lib/cdk-stack.ts` — patches real Lambda ARNs over the placeholders at synth time, and injects Cognito credentials + Gateway URL into the Runtime environment
 
-If you add a new Lambda tool, you update both: add the target in `agentcore.json` (with a PLACEHOLDER) and add the ARN patching in `cdk-stack.ts`. See [docs/tutorial.md](../docs/tutorial.md#experiment-4-add-a-new-tool) for the step-by-step process.
+If you add a new Lambda tool, you update both: add the target in `agentcore.json` (with a PLACEHOLDER) and add the ARN patching in `cdk-stack.ts`.

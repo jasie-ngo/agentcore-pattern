@@ -144,12 +144,12 @@ echo ""
 
 # ─── Step 4: Install agent Python dependencies ────────────────────────────
 echo "🐍 Step 4: Installing agent dependencies..."
-cd app/claimsagent
+cd app
 if [ ! -d ".venv" ]; then
   uv venv
 fi
-uv sync --quiet 2>/dev/null || uv pip install -r requirements.txt --quiet
-cd ../..
+uv sync --quiet
+cd ..
 echo ""
 
 # ─── Step 5: Validate agentcore.json ──────────────────────────────────────

@@ -1,53 +1,83 @@
-# Switching between HESTA and Claims (one runtime, manual swap)
+# Switching use cases
 
-This project deploys **one** AgentCore Runtime — `multiusecaseagent` — that can
-run either use case. Only one is live at a time. `agentcore.json` is never
-touched to switch; only `app/main.py` changes.
-
-## Step 1 — edit `app/main.py`
+One AgentCore Runtime (`multiusecaseagent`) serves one use case at a time. Which
+one is decided by a single line in [`app/main.py`](app/main.py):
 
 ```python
-from pathlib import Path
-from strands_compose_agentcore import create_app
-
-app = create_app(Path(__file__).parent / "hesta_agent" / "config.yaml")
+USE_CASE = "hesta_agent"  # change to "claims_agent" to switch use case
 ```
 
-To switch to claims, change the one folder name:
+`agentcore/agentcore.json` is **not** edited to switch. It points the runtime at
+the whole `app/` folder (`codeLocation: "app"`, `entrypoint: "main.py"`), so every
+use case and `app/_shared/` are always in the container.
 
-```python
-app = create_app(Path(__file__).parent / "claims_agent" / "config.yaml")
+## Layout
+
+```
+app/
+├── main.py           # entrypoint — the USE_CASE line is the only switch
+├── Dockerfile        # one image for every use case
+├── pyproject.toml    # one dependency set (uv.lock pinned)
+├── _shared/          # generic plumbing, no domain logic — change once, affects all
+│   ├── factory.py      agent builder: structured output + Gateway attachment
+│   ├── gateway.py      MCP Gateway client (Cognito M2M via AgentCore Identity)
+│   ├── memory.py       AgentCore Memory session manager + local fallback
+│   └── settings.py     generic env vars (region, Gateway)
+├── hesta_agent/      # HESTA member-email: config.yaml + its own Python
+└── claims_agent/     # insurance claims:   config.yaml + its own Python
 ```
 
-That's the entire change. `agentcore.json`'s `codeLocation` (`"app"`) and
-`entrypoint` (`"main.py"`) stay fixed — they already cover both use cases,
-since `app/` contains `_shared/`, `hesta_agent/`, and `claims_agent/` together.
+| Change | Where |
+|---|---|
+| Prompt, model, agent, orchestration for one use case | `app/<use_case>/config.yaml` |
+| Domain logic / deterministic tools for one use case | `app/<use_case>/*.py` |
+| Gateway auth, Memory, agent factory (all use cases) | `app/_shared/*.py` |
+| Which use case is deployed | `app/main.py` → `USE_CASE` |
+| New Lambda tool, Gateway target, Memory strategy | `agentcore/agentcore.json` (infrastructure, not a switch) |
 
-## Step 2 — redeploy
+A use case's `config.yaml` references the shared code by relative path, e.g.
+`type: ../_shared/factory.py:agent` and
+`session_manager.type: ../_shared/memory.py:session_manager`.
 
-```bash
-agentcore deploy --target dev --yes
-```
+## Switch procedure
 
-This fully replaces whatever was running before. That's expected — it's a
-switch, not an addition.
+1. **Run locally first (optional).** Both configs run locally without touching
+   `app/main.py` at all — use this to verify a change before the edit + redeploy:
+   ```bash
+   sca dev --config app/hesta_agent/config.yaml
+   sca dev --config app/claims_agent/config.yaml
+   ```
+2. Edit `app/main.py`: set `USE_CASE = "claims_agent"` (or `"hesta_agent"`).
+3. Redeploy. This fully replaces whatever was running before — it's a switch,
+   not an addition:
+   ```bash
+   agentcore deploy --target dev --yes
+   ```
+4. Verify with the matching payload, not the other use case's
+   (`agentcore dev --runtime multiusecaseagent` for a local runtime check):
+   - **HESTA:** invoke with a `prompt` from `app/hesta_agent/sample_emails/*.json`.
+   - **Claims:** `python3 scripts/test_invoke.py --region <region> --prompt 'File a claim for POL-12345. $5000 storm damage. Claimant email: john@example.com'`
 
-## Step 3 — verify
+Both use cases share the same Gateway tools, DynamoDB tables and AgentCore Memory
+resource; they differ only in their `config.yaml` (Memory actor ids differ, so
+their recalled history does not mix).
 
-```bash
-agentcore dev --runtime multiusecaseagent
-```
+## Adding a use case
 
-Test with the matching sample payload (`app/hesta_agent/sample_emails/*.json`
-or a sample claim), not the other use case's.
+1. Create `app/<name>/` with `__init__.py`, `config.yaml`, and any `schemas.py` /
+   `tools.py` it needs. Use `type: ../_shared/factory.py:agent` for agents and
+   `structured_output: <name>.schemas:<Class>` for structured output.
+2. Python files in the use case that import siblings put `app/` on `sys.path`
+   first (see the top of `claims_agent/tools.py`) and import as
+   `from <name>.<module> import ...`.
+3. Add any new dependency to `app/pyproject.toml` and run `uv lock` in `app/`.
+4. Point `USE_CASE` at it.
 
-## Before switching, run locally first
+## Known limitation: payload fields other than `prompt`
 
-Both configs can be run locally without touching `app/main.py` at all:
-
-```bash
-sca dev --config app/hesta_agent/config.yaml
-sca dev --config app/claims_agent/config.yaml
-```
-
-Use this to verify a change before committing to the `main.py` edit + redeploy.
+`strands-compose-agentcore` passes only the payload's `prompt` to the entry
+agent. The Trigger Lambda's top-level `claimant_email` and `source` keys are
+dropped, so the claims pipeline only sees a claimant email that appears inside
+the prompt text (true for JSON claim files, whose content is embedded in the
+prompt; not for `.eml` claims, whose `From:` header is sent separately). Folding
+those fields into `prompt` in `lambdas/trigger/handler.py` closes the gap.

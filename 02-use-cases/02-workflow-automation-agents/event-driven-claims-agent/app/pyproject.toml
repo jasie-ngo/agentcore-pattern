@@ -1,0 +1,15 @@
+[project]
+name = "multiusecaseagent"
+version = "0.1.0"
+description = "One AgentCore Runtime serving YAML-defined use cases (HESTA member-email, insurance claims)"
+requires-python = ">=3.11"
+dependencies = [
+    "strands-compose-agentcore>=0.10.0,<1.0.0",
+    # AgentCore Memory session manager (_shared/memory.py) and the Identity M2M
+    # token for the Gateway (_shared/gateway.py).
+    "bedrock-agentcore>=1.15.0,<2.0",
+    # MCP streamable-HTTP transport used to reach the AgentCore Gateway.
+    "mcp>=1.28.0,<2.0",
+    # `opentelemetry-instrument` in the Dockerfile CMD.
+    "aws-opentelemetry-distro>=0.18.0,<1.0",
+]

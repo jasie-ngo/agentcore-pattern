@@ -1,8 +1,8 @@
 # Event-Driven Claims Agent — AI Coding Assistant Context
 
-> **For humans:** This file provides context for AI coding assistants (Kiro, Cursor, Claude Code, GitHub Copilot). For the human-readable documentation, see [docs/](./docs/README.md), [README.md](./README.md), or [docs/tutorial.md](./docs/tutorial.md).
+> **For humans:** This file provides context for AI coding assistants (Kiro, Cursor, Claude Code, GitHub Copilot). For the human-readable documentation, see [docs/](./docs/README.md), [README.md](./README.md), or [SWITCHING_USE_CASES.md](./SWITCHING_USE_CASES.md).
 
-This project is an **event-driven insurance claims processor** built on Amazon Bedrock AgentCore. It uses a dual-agent architecture (Claims Processor + Validation Agent) with cost-based model routing (Sonnet for reasoning, Haiku for validation) and a deterministic execution phase. Deploys as a single CloudFormation stack (`AgentCore-ClaimsAgent-dev`) via the AgentCore CLI.
+This project is an **event-driven agent platform** built on Amazon Bedrock AgentCore. One Runtime (`multiusecaseagent`) serves one of several YAML-defined use cases (strands-compose), selected by `USE_CASE` in `app/main.py`: `claims_agent` (insurance claims — dual-agent Claims Processor + Validation Agent, Sonnet/Haiku cost routing, deterministic execution) or `hesta_agent` (HESTA member-email pipeline). Deploys as a single CloudFormation stack (`AgentCore-ClaimsAgent-dev`) via the AgentCore CLI. See [SWITCHING_USE_CASES.md](./SWITCHING_USE_CASES.md).
 
 > **Important:** AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, OnlineEval) are declared in `agentcore/agentcore.json` and managed by the AgentCore CLI. Supplementary infrastructure (DynamoDB, Lambda tools, SNS, S3, EventBridge) is defined in the TypeScript CDK app at `agentcore/cdk/lib/infra-construct.ts`. The Cognito User Pool (Gateway M2M auth) is managed by `scripts/setup_cognito.sh` (AWS CLI, not CDK). Use `agentcore validate` and `agentcore dev` while iterating; run `agentcore deploy --target dev` to deploy everything together.
 
@@ -15,10 +15,11 @@ S3 upload (claims-inbox/)
   → EventBridge rule
     → Trigger Lambda (lambdas/trigger/handler.py)
         reads S3 object, invokes Runtime via SigV4-signed HTTPS (fire-and-forget)
-      → AgentCore Runtime (Container: app/claimsagent/)
-          Phase 1: Claims Processor (Sonnet) → lookup_policy → ACCEPT/REJECT decision
-          Phase 2: Validation Agent (Haiku) → reviews decision → CONFIDENCE + ROUTING
-          Phase 3: Deterministic Execution (no LLM) → create_claim / human_review / send_notification
+      → AgentCore Runtime (Container: app/, use case = app/main.py USE_CASE)
+          claims_agent (delegate orchestration, coordinator on Haiku):
+            Phase 1: claims_processor (Sonnet) → lookup_policy → ClaimDecision
+            Phase 2: claims_validator (Haiku) → ClaimValidation (CONFIDENCE + ROUTING)
+            Phase 3: execute_claim_decision tool (no LLM) → create_claim / human_review / send_notification
         → AgentCore Gateway (MCP, Cognito CUSTOM_JWT auth, Cedar policy enforcement)
             → 6 Lambda tool functions (lambdas/<tool>/handler.py)
 ```
@@ -37,14 +38,23 @@ event-driven-claims-agent/
 ├── CLAUDE.md                          # Claude Code guidance
 ├── README.md                          # Full project documentation
 ├── deploy.sh                          # One-command deploy (runs CDK)
-├── app/claimsagent/
+├── SWITCHING_USE_CASES.md             # How to switch / add use cases
+├── app/                               # Runtime codeLocation (whole folder is the container)
 │   ├── Dockerfile                     # Multi-stage, Python 3.12, ARM64
-│   ├── main.py                        # All agent logic: prompts, agents, Identity-managed Gateway OAuth
-│   ├── config.py                      # Centralized env var reads (Gateway, Memory, Model)
-│   ├── routing.py                     # Phase-3 routing: decide_action, resolve_decision/routing
-│   ├── memory/session.py             # AgentCoreMemorySessionManager (graceful degradation)
-│   ├── tools/structured_output.py     # @tool decorators: submit_decision, submit_validation
-│   └── pyproject.toml                 # Dependencies (uv-managed)
+│   ├── main.py                        # create_app(<USE_CASE>/config.yaml) — the one-line switch
+│   ├── pyproject.toml, uv.lock        # Dependencies for every use case (uv-managed)
+│   ├── _shared/                       # Generic plumbing, no domain logic
+│   │   ├── factory.py                 # Agent factory: structured output + Gateway attachment
+│   │   ├── gateway.py                 # Identity-managed Gateway MCP client, GATEWAY_TOOL_NAMES
+│   │   ├── memory.py                  # AgentCore Memory session manager (local fallback)
+│   │   └── settings.py                # Generic env vars (region, Gateway)
+│   ├── claims_agent/
+│   │   ├── config.yaml                # Agents, prompts, models, orchestration
+│   │   ├── schemas.py                 # ClaimDecision, ClaimValidation (structured output)
+│   │   ├── routing.py                 # Phase-3 routing: decide_action, resolve_decision/routing
+│   │   ├── tools.py                   # execute_claim_decision (deterministic Phase 3)
+│   │   └── settings.py                # AUTO_APPROVE_THRESHOLD
+│   └── hesta_agent/                   # HESTA member-email use case (config.yaml + domain modules)
 ├── lambdas/                           # One directory per Gateway tool
 │   ├── schemas/                       # MCP tool schemas (JSON) — matched by CDK
 │   ├── trigger/handler.py             # EventBridge → Runtime invocation (SigV4 auth)
@@ -77,7 +87,7 @@ event-driven-claims-agent/
 │   └── lint.sh                       # py_compile + ruff checks
 ├── tests/                             # Offline unit tests (pytest)
 │   ├── test_routing.py                # Phase-3 routing logic
-│   ├── test_structured_output.py      # submit_decision / submit_validation tools
+│   ├── test_claims_tools.py           # execute_claim_decision against a fake Gateway
 │   ├── test_lambda_handlers.py        # Lambda tool handlers
 │   ├── test_trigger.py                # Trigger Lambda
 │   └── sample-claim-email.txt        # Email for E2E test 5 (uses POL-67890)
@@ -150,11 +160,12 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 1. **Lambda handlers return `json.dumps({...})` directly** — no `{statusCode, body}` envelope. The Gateway strips the HTTP wrapper.
 2. **Agent routing controls claim status** — the `create_claim` Lambda accepts `status` and `decision` as optional parameters from the agent. Do not add routing logic to the Lambda itself.
 3. **Tool schemas live in `lambdas/schemas/`** — each file maps to a Gateway target in the CDK stack via the `toolSchemaFile` field in `agentcore.json`. Keep schemas in sync with Lambda parameters.
-4. **Container build, not CodeZip** — runtime deps go in `app/claimsagent/pyproject.toml` (managed by `uv`). The Dockerfile runs `uv sync --frozen`.
+4. **Container build, not CodeZip** — runtime deps go in `app/pyproject.toml` (managed by `uv`; run `uv lock` in `app/` after changing them). The Dockerfile runs `uv sync --frozen`. `codeLocation` is the whole `app/` folder; switching use case is `USE_CASE` in `app/main.py`, never an `agentcore.json` edit.
 5. **`agentcore/agentcore.json` is the source of truth for AgentCore resources** (Runtime, Gateway, Memory, PolicyEngine, OnlineEval). Supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`; `cdk-stack.ts` wires the two together (patches Lambda ARNs + the Gateway CUSTOM_JWT authorizer discovery URL, injects runtime env vars). Don't hand-edit generated CDK output.
 6. **Two auth paths:** Inbound to Runtime uses AWS_IAM (SigV4) — CDK grants `runtime.grantInvoke()` to the Trigger Lambda. Outbound from Runtime to Gateway uses Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` — secrets live in AgentCore Identity vault, not env vars.
-7. **Structured output tools** (`tools/structured_output.py`) — the agent calls `submit_decision` and `submit_validation` to produce machine-parseable results. When agents fail to call these tools, routing defaults to safe fallbacks (REJECT for missing decision, HUMAN_REVIEW for missing validation).
-8. **Phase 3 is deterministic (no LLM call)** — once routing is resolved, tool calls are made directly via `MCPClient.call_tool_async()` using structured data from Phase 1/2. This saves one Sonnet invocation per request. All Phase 3 actions are non-fatal (log + continue on failure).
+7. **Structured output** (`claims_agent/schemas.py`) — the processor and validator return `ClaimDecision` / `ClaimValidation` via `agent_kwargs.structured_output`. When a result is missing, routing defaults to safe fallbacks (REJECT for missing decision, HUMAN_REVIEW for missing validation), and AUTO_APPROVE below `AUTO_APPROVE_THRESHOLD` is overridden to HUMAN_REVIEW.
+8. **Phase 3 is deterministic (no LLM picks tools)** — `claims_agent/tools.py:execute_claim_decision` resolves routing and calls Gateway tools directly via `MCPClient.call_tool_async()` using structured data from Phase 1/2. All Phase 3 actions are non-fatal (log + continue on failure).
+9. **`_shared/` stays use-case-neutral** — no domain names, prompts or thresholds there; those live in the use case folder.
 
 ---
 

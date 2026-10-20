@@ -32,13 +32,14 @@ This document explains:
 ### AgentCore Runtime
 
 - **Build type:** Container (ARM64/Graviton, Python 3.12)
-- **Framework:** Strands Agents SDK
+- **Framework:** Strands Agents SDK, composed from YAML with strands-compose (`strands-compose-agentcore`)
 - **Auth (inbound):** AWS_IAM (SigV4) — callers sign requests with AWS credentials (Lambda execution role or IAM user)
 - **Auth (outbound to Gateway):** Cognito M2M JWT via `@requires_access_token` decorator — secrets managed by AgentCore Identity vault (no env vars)
-- **Entrypoint:** `app/claimsagent/main.py`
-- **Agents:** Two `Agent` instances (Claims Processor, Validation Agent), lazily initialized as module-level singletons
-- **Model (cost routing):** Claims Processor and Executor use `global.anthropic.claude-sonnet-4-6` (complex reasoning + tool use); Validation Agent uses `FAST_MODEL_ID` (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) — classification task with no external tools, ~5x cheaper and 3–8s faster
-- **Co-located tools:** `submit_decision`, `submit_validation` (Strands `@tool` decorators for structured output)
+- **Entrypoint:** `app/main.py` — `create_app(app/<USE_CASE>/config.yaml)`; this document describes `USE_CASE = "claims_agent"` (see [SWITCHING_USE_CASES.md](../SWITCHING_USE_CASES.md))
+- **Agents:** defined in `app/claims_agent/config.yaml` — `claims_processor`, `claims_validator`, and a `coordinator` that drives them through a delegate orchestration; built per session by `app/_shared/factory.py`
+- **Model (cost routing):** Claims Processor uses `AGENT_MODEL_ID` (`global.anthropic.claude-sonnet-4-6`, complex reasoning + tool use); Validation Agent and coordinator use `FAST_MODEL_ID` (Haiku) — classification / sequencing, ~5x cheaper and faster
+- **Structured output:** `ClaimDecision` / `ClaimValidation` Pydantic contracts (`app/claims_agent/schemas.py`)
+- **Co-located tool:** `execute_claim_decision` (`app/claims_agent/tools.py`) — deterministic Phase 3
 
 ### AgentCore Gateway
 
@@ -168,15 +169,15 @@ flowchart TB
 
 ### Routing Logic
 
-The routing logic lives in `app/claimsagent/routing.py` (extracted from `main.py` for testability). The confidence threshold is configurable via the `AUTO_APPROVE_THRESHOLD` environment variable (default: 80).
+The routing logic lives in `app/claims_agent/routing.py` (pure Python, unit-tested in `tests/test_routing.py`). The confidence threshold is configurable via the `AUTO_APPROVE_THRESHOLD` environment variable (default: 80); an AUTO_APPROVE below it is overridden to HUMAN_REVIEW.
 
-Both agents MUST call their respective structured-output tools (`submit_decision`, `submit_validation`). If they fail to do so, routing defaults to safe outcomes:
-- Missing `submit_decision` → defaults to REJECT (no unintended approvals)
-- Missing `submit_validation` → defaults to HUMAN_REVIEW (ensures human oversight)
+If a structured result is missing, routing defaults to safe outcomes:
+- Missing decision → defaults to REJECT (no unintended approvals)
+- Missing validation → defaults to HUMAN_REVIEW (ensures human oversight)
 
 ### Phase 3: Deterministic Execution
 
-Phase 3 does **not** use an LLM call. Once routing is resolved (REJECT / AUTO_APPROVE / HUMAN_REVIEW), the execution is deterministic — we have all required data from the structured output tools and call Gateway tools directly via `MCPClient.call_tool_async()`. This eliminates one Sonnet invocation (~6–16s and ~$0.01 per request).
+No LLM picks the Phase 3 tools. The coordinator calls `execute_claim_decision` once with the structured Phase 1/2 results; the tool resolves routing (REJECT / AUTO_APPROVE / HUMAN_REVIEW) and calls Gateway tools directly via `MCPClient.call_tool_async()`.
 
 All Phase 3 tool calls are non-fatal: if any fails, the agent logs a warning and continues. The primary response stream is never interrupted by secondary action failures.
 

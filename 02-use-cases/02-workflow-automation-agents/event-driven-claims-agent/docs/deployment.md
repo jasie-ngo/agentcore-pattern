@@ -78,20 +78,13 @@ cd ../..
 ### 4. Install Agent Dependencies
 
 ```bash
-cd app/claimsagent
+cd app
 uv venv
 uv sync
-cd ../..
+cd ..
 ```
 
-If `uv` is not available:
-```bash
-cd app/claimsagent
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cd ../..
-```
+`app/` holds every use case; `USE_CASE` in `app/main.py` picks the one that is deployed (see [SWITCHING_USE_CASES.md](../SWITCHING_USE_CASES.md)).
 
 ### 5. Validate Configuration
 
@@ -154,7 +147,7 @@ Expected output (abbreviated):
 
 ```
 🔑 Authenticating...
-✅ Connected to claimsagent
+✅ Connected to ClaimsAgent_multiusecaseagent-...
 📝 I need to file a claim. My policy is POL-12345. Fender bender yesterday, $2000 damage.
 
 ━━━ Agent Response ━━━
@@ -270,7 +263,7 @@ Run the agent locally while tools, auth, and data stay in the cloud.
 
 | Component | Local | Cloud |
 |-----------|-------|-------|
-| Agent logic (main.py) | ✅ Local process on :8080 | — |
+| Agent logic (app/) | ✅ Local process on :8080 | — |
 | MCP Gateway + Cedar | — | ✅ Deployed stack |
 | Lambda tools | — | ✅ Deployed stack |
 | DynamoDB tables | — | ✅ Deployed stack |
@@ -323,9 +316,9 @@ Run the agent locally while tools, auth, and data stay in the cloud.
    ```bash
    agentcore dev --logs
    ```
-   Or run the agent directly:
+   Or run one use case's config directly:
    ```bash
-   cd app/claimsagent && source .venv/bin/activate && python main.py
+   sca dev --config app/claims_agent/config.yaml
    ```
    The agent serves on `http://localhost:8080`.
 
@@ -344,8 +337,8 @@ Run the agent locally while tools, auth, and data stay in the cloud.
 
 The fastest way to tune agent behavior without redeploying:
 
-1. Edit `PROCESSOR_PROMPT` or `VALIDATOR_PROMPT` in `app/claimsagent/main.py`
-2. The dev server detects the change and reloads automatically
+1. Edit the `system_prompt` of `claims_processor` or `claims_validator` in `app/claims_agent/config.yaml`
+2. Restart the dev server
 3. Re-run your test command
 4. Observe the behavior change in the response
 5. Repeat until satisfied
@@ -358,7 +351,7 @@ No container rebuild needed during local dev — only when deploying to the clou
 | Change | Local iteration | Requires redeploy |
 |--------|----------------|-------------------|
 | Agent prompts | ✅ | — |
-| Routing logic (main.py) | ✅ | — |
+| Routing logic (app/claims_agent/routing.py) | ✅ | — |
 | New Python dependency | — | ✅ (Dockerfile rebuild) |
 | New Lambda tool | — | ✅ (CDK creates Lambda) |
 | Cedar policy change | — | ✅ (agentcore.json) |
@@ -449,7 +442,7 @@ Failed to fetch discovery document from:
 https://cognito-idp.<region>.amazonaws.com/<pool-id>/.well-known/openid-configuration
 ```
 
-**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but `agentcore add credential` is **idempotent** — since the provider already exists, the `add` is a no-op and the stale discovery URL is never updated. The Runtime can't fetch a Gateway token, so `get_mcp_client()` returns `None` and no Gateway tools load (the co-located `submit_decision` tool still works, so the agent runs but can't verify policies).
+**Cause:** The `cognito-gateway-m2m` credential provider in AgentCore Identity has a discovery URL pointing at a Cognito pool that no longer exists or is in a different region than the deployment. This commonly happens after redeploying to a **new region**: `setup_cognito.sh` creates a fresh pool and updates `.env`, but `agentcore add credential` is **idempotent** — since the provider already exists, the `add` is a no-op and the stale discovery URL is never updated. The Runtime can't fetch a Gateway token, so `build_gateway_client()` returns `None` and no Gateway tools load (the agents still run but can't verify policies, so the processor rejects unverifiable claims).
 
 **Diagnose:**
 ```bash

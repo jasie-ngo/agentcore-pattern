@@ -110,7 +110,7 @@ export class AgentCoreStack extends Stack {
     // ─── Steps 5+6: Configure the Runtime (env vars + permissions) ──
     // Use the typed AgentEnvironment API instead of walking the construct tree.
     // Prefer the historical name for backward-compat, but fall back to the sole
-    // environment so a runtime rename in agentcore.json (e.g. "hestaclaimsagent")
+    // environment so a runtime rename in agentcore.json (e.g. "multiusecaseagent")
     // doesn't break synth. This project defines exactly one runtime.
     const environments = this.application.environments;
     const agentEnv = environments.get('claimsagent') ?? Array.from(environments.values())[0];

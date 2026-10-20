@@ -5,7 +5,7 @@ Requires a running AgentCore dev server OR environment variables from .env.
 
 Usage:
     # Start dev server first (separate terminal):
-    #   cd app/claimsagent && agentcore dev --no-browser
+    #   cd app && agentcore dev --no-browser
     #
     # Then invoke:
     python3 scripts/test_local.py
@@ -67,7 +67,7 @@ def invoke_local(port: int, prompt: str) -> str:
     except urllib.error.URLError as e:
         print(f"\nError: Could not connect to dev server on port {port}.")
         print("Make sure the dev server is running:")
-        print("  cd app/claimsagent && agentcore dev --no-browser")
+        print("  cd app && agentcore dev --no-browser")
         raise SystemExit(1) from e
 
     print()

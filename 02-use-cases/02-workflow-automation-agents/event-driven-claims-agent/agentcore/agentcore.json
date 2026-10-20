@@ -4,11 +4,11 @@
   "managedBy": "CDK",
   "runtimes": [
     {
-      "name": "hestaclaimsagent",
-      "description": "Event-driven dual-agent claims processor with confidence-based routing",
+      "name": "multiusecaseagent",
+      "description": "Multi-use-case agent (HESTA member-email or insurance claims) — use case selected in app/main.py",
       "build": "Container",
       "entrypoint": "main.py",
-      "codeLocation": "app/hesta-claimsagent",
+      "codeLocation": "app",
       "envVars": [
         {
           "name": "AGENT_OBSERVABILITY_ENABLED",
@@ -124,7 +124,7 @@
   "onlineEvalConfigs": [
     {
       "name": "ClaimsEvaluation",
-      "agent": "hestaclaimsagent",
+      "agent": "multiusecaseagent",
       "evaluators": [
         "Builtin.Helpfulness",
         "Builtin.Correctness",
