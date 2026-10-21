@@ -12,6 +12,51 @@ An event-driven insurance claims processing system built on **Amazon Bedrock Age
 | 🏗️ **Resources created** | ~76 (via single CloudFormation stack) |
 | 🧹 **Teardown** | `./scripts/destroy.sh us-west-2` removes everything (stack + Cognito + state) |
 
+## Three agent apps, and the rule-pack layer
+
+`app/` holds three folders that are easy to confuse. Only one is deployed.
+
+| Folder | What it is | Deployed? | How it is built |
+|---|---|---|---|
+| `app/claimsagent/` | The generic insurance claims demo this README describes: Claims Processor plus Validation Agent, confidence-based routing | No. A reference scaffold | Hand-written Python (`main.py`, about 540 lines) |
+| `app/hesta-claimsagent/` | The pilot for an Australian super fund's member-email operations: a pipeline of specialist agents, a deterministic routing gate, nothing auto-sent | **Yes.** `agentcore/agentcore.json` points its runtime here | Hand-written Python (`main.py` about 390 lines, plus `agents/`) |
+| `app/04_hesta_member_email/` | The same pilot rebuilt YAML-first on `strands-compose`: agents, prompts, models and delegation live in `config.yaml` | No. It has no Dockerfile and is not what `agentcore.json` deploys | `config.yaml` plus a small `hesta/` package of tools and the agent factory |
+
+The two pilot apps are meant to behave the same. They are kept apart on purpose, and the conformance runner below
+checks them against one feature file (it found a real disagreement between them).
+
+### Rule packs: the plug-and-play layer
+
+Business rules are not hard-coded in the apps. A **rule pack** is a folder: one plain-language `.feature` file, a
+`vocabulary.yaml` that says what every word means, and two generated files (`manifest.json`, `compiled/policy.cedar`).
+A deterministic compiler, with no LLM in it, turns the feature file and vocabulary into a Cedar policy. A fail-closed
+loader then refuses any pack whose hashes, approval record or effective dates do not check out. The handler is built
+from the verified policy text and attached to an agent as a Strands intervention.
+
+| Path | What it is |
+|---|---|
+| `rules/` | The **core**, with no client's words in the compiler or loader: `cedar_pack.py` (compile, load, checks) and `run_feature.py` (the conformance runner) |
+| `rules/packs/` | Two packs built before `clients/` existed: the super-fund tool boundary, and an **illustrative** health-insurer one that we wrote ourselves (not any insurer's rules) |
+| `clients/` | One folder per client for their documents (`sources/`, gitignored) and their `pack/`. Copy `clients/_template/`. See `clients/README.md` |
+| `demo/` | An offline, narrated demo ("same core, different rules") with a run sheet, presenter notes and a transcript |
+
+Packs are **not packaged with the app by design**: each client plugs in its own. The agent finds one through the
+`CEDAR_PACK_DIR` setting, which is empty (off) by default.
+
+```bash
+python3 rules/cedar_pack.py compile clients/<name>/pack   # build manifest + Cedar policy
+python3 rules/cedar_pack.py check   clients/<name>/pack   # tamper, approval and date checks
+python3 rules/run_feature.py rules/hesta_routing_gate.feature   # run a feature file against the routing code
+bash demo/setup.sh && demo/.venv/bin/python demo/run_demo.py     # the demo (needs uv; see demo/RUN-SHEET.md)
+```
+
+**Status: draft.** Be clear about what this is not yet:
+- No pack is approved, and approvals are unsigned JSON, so they can be forged.
+- The Cedar handler is wired into `app/04_hesta_member_email/` only. The **deployed** app, `app/hesta-claimsagent/`, does not use it.
+- Nothing yet delivers a pack to a running container. The loader code (`rules/cedar_pack.py`) is also not packaged.
+- One agent can carry a pack, because it denies every tool it does not name. Memory identity is unresolved, and effective dates are checked against today, not the case date.
+- The Gateway's own Cedar policies (below) still apply. The pack check is an additional, earlier layer, not a replacement.
+
 ## What You'll Learn
 
 This sample teaches you how to build a production-realistic agent system on AgentCore. By the time you've deployed and explored it, you'll understand:
@@ -140,6 +185,8 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 | [Deployment Guide](./docs/deployment.md) | Prerequisites, step-by-step deploy, verify, local dev, troubleshooting, teardown |
 | [Configuration Reference](./docs/CONFIGURATION.md) | All env vars, Cedar policies, Cognito, SES, model, memory settings |
 | [Tutorial: Make It Your Own](./docs/tutorial.md) | Guided walkthrough to modify the sample for your own use case |
+| [Clients](./clients/README.md) | How to start a client: where their documents and rule pack go |
+| [Demo run sheet](./demo/RUN-SHEET.md) | What the demo shows, what is real and what is mocked, and what is not done |
 
 ## AgentCore Services Demonstrated
 
@@ -157,12 +204,15 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 
 ```
 event-driven-claims-agent/
-├── app/claimsagent/           # Agent runtime (Strands SDK, dual-agent logic)
-│   ├── main.py                # Entrypoint: prompts, agents, routing, Identity-managed Gateway OAuth
-│   ├── config.py              # Centralized env var reads
-│   ├── Dockerfile             # Container image (Python 3.12, multi-stage)
-│   ├── memory/session.py      # AgentCore Memory (graceful degradation)
-│   └── tools/                 # Co-located tools (structured output)
+├── app/
+│   ├── hesta-claimsagent/     # The pilot that agentcore.json deploys today (hand-written Python)
+│   ├── 04_hesta_member_email/ # The pilot rebuilt YAML-first (strands-compose). Not deployed
+│   └── claimsagent/           # Generic insurance demo this README describes. Reference, not deployed
+│       ├── main.py            # Entrypoint: prompts, agents, routing, Identity-managed Gateway OAuth
+│       ├── config.py          # Centralized env var reads
+│       ├── Dockerfile         # Container image (Python 3.12, multi-stage)
+│       ├── memory/session.py  # AgentCore Memory (graceful degradation)
+│       └── tools/             # Co-located tools (structured output)
 ├── agentcore/
 │   ├── agentcore.json         # AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, Eval)
 │   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge — NO Cognito)
@@ -186,6 +236,10 @@ event-driven-claims-agent/
 │   ├── test_cedar.py          # Cedar policy enforcement tests
 │   ├── test_e2e.py            # 5-scenario E2E test suite
 │   └── seed_dynamodb.py       # Populate test policies
+├── rules/                     # Rule-pack core: compiler, loader, conformance runner, packs
+├── clients/                   # One folder per client: sources/ and pack/ (copy _template/)
+├── demo/                      # Offline narrated demo, run sheet, presenter notes
+├── tests/                     # Offline unit tests
 ├── docs/                      # Full documentation set
 ├── deploy.sh                  # One-command deploy (interactive Cognito setup)
 └── README.md                  # This file
