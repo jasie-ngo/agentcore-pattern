@@ -1,0 +1,4 @@
+# A client's source documents are theirs, and often confidential. Their contents stay out of git by default.
+# Everything else (the pack, the notes, the placeholders) is tracked.
+/*/sources/*
+!/*/sources/.gitkeep

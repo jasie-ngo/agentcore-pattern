@@ -1,0 +1,20 @@
+{
+  "pack_id": "health-insurer-illustrative",
+  "version": "0.1.0",
+  "jurisdiction": "AU",
+  "effective_from": null,
+  "effective_to": null,
+  "source": {
+    "file": "health_insurer_tool_boundary.feature",
+    "sha256": "379a14c8c3bac153cb723360b47ce5977befc7b4d3dec7096320e85f6d2e403d"
+  },
+  "vocabulary": {
+    "file": "vocabulary.yaml",
+    "sha256": "299ec76d6654bb5ae7e154f16d168dd4460c17618d4321adfbc81328585dec06"
+  },
+  "compiled": {
+    "file": "compiled/policy.cedar",
+    "sha256": "f99cf9a32b52d5097c4e0b0717ca5487c7792d51b23998a952ae94c4faa1df45"
+  },
+  "approvals": []
+}

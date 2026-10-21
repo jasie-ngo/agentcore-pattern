@@ -1,0 +1,109 @@
+Same core, different rules: a rule-pack framework for regulated agents (offline demo)
+
+== 1. The refusal ==
+   [REAL: the checks and the refusals.  MOCKED: the approval record (a labelled test fixture: no real approver, not signed)]
+  > A rule pack that nobody approved, or that someone edited afterwards, does not load.
+    the pack as it stands, never approved   : REFUSED. no approval record for this version of the feature file and vocabulary
+    the same pack with a (test) approval    : LOADED
+    one line added: 'permit everything'     : REFUSED. the compiled policy does not match the hash in the manifest
+
+== 2. The finding ==
+   [REAL: the runner executes the feature file against the actual code of both implementations]
+  > An anonymised super-fund client had the same routing decision implemented twice. One feature file, run against both.
+    Feature : fund_a_routing_gate.feature  sha256:b0c625eec2a9  (50 scenarios after expanding outlines)
+    Status  : DRAFT 0.1 — generated from code, NOT yet approved
+    Adapter : legacy    app/fund-a-claimsagent/routing.py  decide()  (threshold 70)
+    Adapter : yaml_port app/04_fund_a_member_email/fund_a/tools.py  route_decision(), classify_verification()  (threshold 70)
+    
+    legacy     PASS 34  FAIL 0  DRIFT 0  NA 7  SKIP 9  ERROR 0
+    yaml_port  PASS 40  FAIL 0  DRIFT 1  NA 0  SKIP 9  ERROR 0
+      DRIFT fund_a_routing_gate.feature:226  Expected document not detected
+            line 231: And the reasons include "missing expected attachment (bank statement / evidence of hardship)"
+               no reason contains 'missing expected attachment (bank statement / evidence of hardship)'; reasons were ['regulated intent (Financial Hardship)']  [yaml_port has no input for attachment status, so this fact never reaches it]
+    
+    Implementations disagree on:
+      fund_a_routing_gate.feature:226  Expected document not detected
+            legacy=PASS  yaml_port=DRIFT
+    
+  > Two implementations of one rule disagree. The feature file found it; nobody had written the rule down in one place.
+
+== 3. The pack ==
+   [REAL: compile, Cedar evaluation, the Strands agent loop.  MOCKED: the model (scripted, no LLM), the tools (stand-ins) and the approval record (a labelled test fixture: no real approver, not signed)]
+  > Plain-language rules, plus a vocabulary that says what the words mean.
+    Given the tool "send_notification" is never permitted
+    Given the tool "lookup_policy" is permitted
+    Given the tool "create_claim" is permitted only when status is "pending_review" and decision is "escalated"
+  > A deterministic compiler (no LLM) turns them into Cedar.
+    forbid (principal, action == Action::"notification___send_notification", resource);
+    permit (principal, action == Action::"policy-lookup___lookup_policy", resource);
+    permit (principal, action == Action::"list-pending-claims___list_pending_claims", resource);
+    permit (principal, action == Action::"human-review___request_human_review", resource);
+    permit (principal, action == Action::"create-claim___create_claim", resource)
+    when { context.input has status && context.input.status == "pending_review" && context.input has decision && context.input.decision == "escalated" };
+  > Now an agent tries three calls. The model's choices are scripted; the policy check is the real one.
+    call  create_claim(status="pending_review", decision="escalated")
+          -> ALLOWED: the tool ran
+    call  create_claim(status="approved", decision="approved")
+          -> BLOCKED: the tool never ran
+             the model was told: DENIED: Access denied by Cedar policy
+    call  send_notification(to="member@example.com")
+          -> BLOCKED: the tool never ran
+             the model was told: DENIED: Access denied by Cedar policy: policy0
+
+== 4. The swap: health insurer (illustrative) ==
+   [REAL: the same compiler, loader and handler.  ILLUSTRATIVE: these rules were written by us, not by an insurer.  MOCKED: the model, the tools and the approval record (a labelled test fixture: no real approver, not signed)]
+  > A different domain. Same core. We add a vocabulary and a feature file, and nothing else.
+    new files:
+      rules/packs/health-insurer-illustrative/compiled/policy.cedar
+      rules/packs/health-insurer-illustrative/health_insurer_tool_boundary.feature
+      rules/packs/health-insurer-illustrative/manifest.json
+      rules/packs/health-insurer-illustrative/vocabulary.yaml
+    Given the tool "get_member_cover" is permitted
+    And the tool "check_waiting_period" is permitted
+    Given the tool "escalate_to_fund_doctor" is permitted
+    Given the tool "approve_claim" is never permitted
+    And the tool "deny_claim" is never permitted
+    Given the tool "add_case_note" is permitted only when visibility is "internal"
+    permit (principal, action == Action::"cover-service___get_member_cover", resource);
+    permit (principal, action == Action::"cover-service___check_waiting_period", resource);
+    permit (principal, action == Action::"clinical-review___escalate_to_fund_doctor", resource);
+    forbid (principal, action == Action::"claims-adjudication___approve_claim", resource);
+    forbid (principal, action == Action::"claims-adjudication___deny_claim", resource);
+    permit (principal, action == Action::"case-notes___add_case_note", resource)
+    when { context.input has visibility && context.input.visibility == "internal" };
+    call  check_waiting_period(member_id="M-1", treatment_type="hospital")
+          -> ALLOWED: the tool ran
+    call  escalate_to_fund_doctor(member_id="M-1", question="Is this condition pre-existing?")
+          -> ALLOWED: the tool ran
+    call  approve_claim(claim_id="C-1")
+          -> BLOCKED: the tool never ran
+             the model was told: DENIED: Access denied by Cedar policy: policy3
+    call  add_case_note(member_id="M-1", visibility="member")
+          -> BLOCKED: the tool never ran
+             the model was told: DENIED: Access denied by Cedar policy
+    the same tamper and approval checks on the new pack: 19 passed, 0 failed
+    core files (content fingerprint, sha256 prefix, before -> after loading the new pack):
+      rules/cedar_pack.py  056d2d45010c -> 056d2d45010c  unchanged
+      rules/run_feature.py  38268c00f4dd -> 38268c00f4dd  unchanged
+    git status for the new pack (new files only):
+      ?? rules/packs/health-insurer-illustrative/compiled/policy.cedar
+      ?? rules/packs/health-insurer-illustrative/health_insurer_tool_boundary.feature
+      ?? rules/packs/health-insurer-illustrative/manifest.json
+      ?? rules/packs/health-insurer-illustrative/vocabulary.yaml
+
+== 5. Not done yet ==
+   [SLIDE: stated plainly]
+    - Approvals are not signed. Today an approval is a JSON record anyone could forge.
+    - The rules directory is not packaged with the app container.
+    - Only one agent can carry the tool policy: it denies every tool it does not name.
+    - The member memory identity is unresolved. Effective dates are checked against today, not the case date.
+    - The routing-gate vocabulary is still specific to the first client. Only the tool boundary is extracted.
+    - The framework leans on an alpha, single-maintainer composition library, unpinned in the repo.
+    - No real second client. The health-insurer rules are illustrative, and no health-data threat model exists.
+    - No measured delivery saving. We have no baseline, so we claim none.
+
+== 6. The ask ==
+   [SLIDE]
+  > A time-boxed experiment: [weeks: set before presenting] weeks, [hours: set before presenting] hours, with two real health-insurance reviewers.
+    Pass: no core edit forced by the second domain. Fail: any forced core edit, or effort above the hand-build estimate.
+    What we are not asking for: a claim that this makes delivery faster. The experiment measures that.

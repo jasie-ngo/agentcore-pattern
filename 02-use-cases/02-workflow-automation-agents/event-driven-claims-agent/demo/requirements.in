@@ -1,0 +1,5 @@
+# The demo's two direct dependencies, pinned exactly. `requirements.lock` is generated from this file; do not edit it.
+#   uv pip compile demo/requirements.in --python-version 3.14 --generate-hashes -o demo/requirements.lock
+# Tested on Python 3.14 only.
+strands-agents[cedar]==1.61.1
+PyYAML==6.0.3

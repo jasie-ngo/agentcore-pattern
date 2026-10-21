@@ -1,0 +1,20 @@
+{
+  "pack_id": "hesta-tool-boundary",
+  "version": "0.1.0",
+  "jurisdiction": "AU",
+  "effective_from": null,
+  "effective_to": null,
+  "source": {
+    "file": "hesta_tool_boundary.feature",
+    "sha256": "f4bf373070944603a7ad3d231049e5917aeeb007aa7e188f38d49590ef71faf4"
+  },
+  "vocabulary": {
+    "file": "vocabulary.yaml",
+    "sha256": "b55f69224ddd97a7a50a156e7a5aaae5887645d37205adaff67ab6b526356760"
+  },
+  "compiled": {
+    "file": "compiled/policy.cedar",
+    "sha256": "045b012b03ba9107e70b29941e95deb274ef3a8557144634a578da0d1984e75f"
+  },
+  "approvals": []
+}

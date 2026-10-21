@@ -1,0 +1,64 @@
+# Health insurer (illustrative) tool-boundary vocabulary: the words the feature file in this folder may use.
+#
+# STATUS:      ILLUSTRATIVE — written by the practice for the demo. NOT any real insurer's rules, NOT approved.
+# APPROVED BY: (none: this pack exists to show that the core runs a different domain with no code change)
+# WHY THIS FILE EXISTS
+#   Same job as in every pack: it is the dictionary. Which tools exist, what they do, and which arguments a rule may
+#   mention. A rule that names a tool or argument not listed here is refused when the pack is built.
+# SOURCES
+#   Invented tool names for a member-enquiry agent. The tools are placeholders: nothing here is connected to a system.
+#   The domain shape (cover, waiting periods, pre-existing conditions decided by a fund doctor) follows public
+#   private-health-insurance rules, and is a plausible shape only.
+
+pack_id: health-insurer-illustrative
+jurisdiction: AU
+
+tools:
+  get_member_cover:
+    action: cover-service___get_member_cover
+    description: Reads which cover a member holds. Read only.
+    args:
+      member_id: { description: The member to look up }
+
+  check_waiting_period:
+    action: cover-service___check_waiting_period
+    description: Reads whether a member has served the waiting period for a kind of treatment. Read only.
+    args:
+      member_id: { description: The member to check }
+      treatment_type:
+        description: The kind of treatment asked about.
+        values: [hospital, extras, ambulance]
+
+  escalate_to_fund_doctor:
+    action: clinical-review___escalate_to_fund_doctor
+    description: Sends a pre-existing-condition question to the fund's doctor, who alone decides it.
+    args:
+      member_id: { description: The member the question is about }
+      question: { description: "The question for the doctor, in plain words" }
+
+  add_case_note:
+    action: case-notes___add_case_note
+    description: Adds a note to the member's case.
+    args:
+      member_id: { description: The member the note is about }
+      visibility:
+        description: Who can read the note.
+        values: [internal, member]
+
+  refund_premium:
+    action: billing___refund_premium
+    description: Refunds a premium. Listed so the pack can show it is denied because no rule mentions it.
+    args:
+      member_id: { description: The member to refund }
+
+  approve_claim:
+    action: claims-adjudication___approve_claim
+    description: Approves a claim. Adjudication belongs to the claims system and its staff.
+    args:
+      claim_id: { description: The claim to approve }
+
+  deny_claim:
+    action: claims-adjudication___deny_claim
+    description: Denies a claim. Adjudication belongs to the claims system and its staff.
+    args:
+      claim_id: { description: The claim to deny }

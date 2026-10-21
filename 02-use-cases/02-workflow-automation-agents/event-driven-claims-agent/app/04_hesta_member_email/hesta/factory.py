@@ -1,7 +1,7 @@
 """Agent factory referenced from ``config.yaml`` via ``agents.<name>.type``.
 
 ``strands-compose`` builds a plain ``strands.Agent`` from each ``agents:`` block.
-This factory is a thin shim over that default, and it exists for exactly two
+This factory is a thin shim over that default, and it exists for exactly three
 things YAML cannot express on its own:
 
 1. **Structured output contracts.**  ``Agent(structured_output_model=...)`` needs
@@ -17,6 +17,12 @@ things YAML cannot express on its own:
    — see the long note in ``hesta/gateway.py``.  ``agent_kwargs.gateway: true``
    attaches a freshly built client as a tool provider, so the agent sees the live
    Gateway tool list.
+
+3. **A verified Cedar rule pack.**  ``agent_kwargs.cedar_pack`` names a rule pack
+   directory.  The factory verifies it (hashes, approval record, effective dates)
+   and attaches an in-process ``CedarAuthorization`` handler that checks every
+   tool call, with the agent's own name as the principal.  A pack that cannot be
+   verified raises, so the session does not start.  Off unless the value is set.
 
 Everything else — models, prompts, descriptions, tools, session managers,
 orchestration — stays in ``config.yaml``.  This file adds no behaviour of its own.
@@ -58,10 +64,40 @@ def _resolve_structured_output(name: str) -> type:
     return model
 
 
+# event-driven-claims-agent/rules: the rule pack tooling lives beside the apps, not inside this one.  A container
+# that ships only this app directory has no such folder, and then asking for a pack fails loudly, by design.
+RULES_DIR = Path(__file__).resolve().parents[3] / "rules"
+
+
+def _cedar_interventions(pack_dir: str, agent_name: str | None) -> list:
+    """Verify the rule pack and return a one-handler list, or raise.
+
+    There is deliberately no fallback: if the pack is missing, unapproved, outside its effective dates or has been
+    altered, the agent is not built and the session does not start.
+    """
+    if not agent_name:
+        raise ValueError("agent_kwargs.cedar_pack needs the agent's name to use as the Cedar principal")
+    if not (RULES_DIR / "cedar_pack.py").is_file():
+        raise RuntimeError(
+            f"agent '{agent_name}' asks for a Cedar rule pack, but the loader is not at {RULES_DIR}. "
+            "Ship the rules/ folder with the app, or unset cedar_pack."
+        )
+    if str(RULES_DIR) not in sys.path:
+        sys.path.insert(0, str(RULES_DIR))
+    import cedar_pack  # noqa: PLC0415 - found through RULES_DIR above
+
+    handler = cedar_pack.load_cedar_authorization(
+        Path(pack_dir), principal={"type": "Agent", "id": agent_name}
+    )
+    log.info("agent=<%s>, pack=<%s> | Cedar rule pack verified, handler attached", agent_name, pack_dir)
+    return [handler]
+
+
 def hesta_agent(
     *,
     structured_output: str | None = None,
     gateway: bool = False,
+    cedar_pack: str | None = None,
     tools: list | None = None,
     **kwargs,
 ) -> Agent:
@@ -74,6 +110,12 @@ def hesta_agent(
             When the Gateway is not configured or the M2M token exchange fails,
             the agent is built without it (the prompts tell the agent to report
             that the lookup was unavailable rather than invent a result).
+        cedar_pack: Directory of a verified rule pack.  When set, an in-process
+            ``CedarAuthorization`` handler checks every tool call this agent makes,
+            default deny, with the agent's name as the principal.  Empty or ``None``
+            leaves the agent as it was.  An unverifiable pack raises.  Note the pack's
+            policy denies any tool it does not name, so attach it only to an agent
+            whose every tool the pack covers.
         tools: Tools resolved by strands-compose from the agent's ``tools:`` list.
         **kwargs: Everything strands-compose passes through from the YAML —
             ``name``, ``agent_id``, ``model``, ``system_prompt``, ``description``,
@@ -95,6 +137,13 @@ def hesta_agent(
                 "agent=<%s> | Gateway MCP client unavailable, continuing without it",
                 kwargs.get("name"),
             )
+
+    if cedar_pack:
+        # Keep any interventions the YAML already passes; the Cedar handler is added to them.
+        kwargs["interventions"] = [
+            *(kwargs.get("interventions") or []),
+            *_cedar_interventions(cedar_pack, kwargs.get("name")),
+        ]
 
     return Agent(
         tools=agent_tools,

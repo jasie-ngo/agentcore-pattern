@@ -77,11 +77,13 @@ session_manager:
     namespace_prefix: claims
 
 # ─── Agents ───────────────────────────────────────────────────────────────────
-# Every agent uses the hesta_agent factory, which adds exactly two things YAML
+# Every agent uses the hesta_agent factory, which adds exactly three things YAML
 # cannot express by itself (see hesta/factory.py):
 #   agent_kwargs.structured_output  -> Agent(structured_output_model=<class>)
 #   agent_kwargs.gateway: true      -> the Identity-managed Gateway MCP client
 #                                      attached as a live tool provider
+#   agent_kwargs.cedar_pack: <dir>  -> an in-process Cedar handler built from a
+#                                      verified rule pack (off when empty)
 #
 # `session_manager: ~` opts an agent out of the global AgentCore Memory session
 # above. Only context_manager keeps it: a delegate connection with
@@ -382,6 +384,11 @@ agents:
     session_manager: ~
     agent_kwargs:
       gateway: true
+      # In-process Cedar authorisation from a verified rule pack (rules/cedar_pack.py). OFF unless CEDAR_PACK_DIR
+      # is set. When set, the pack must verify (hashes, approval, effective dates) or this agent is not built and
+      # the session does not start. Only this agent has it: the pack names create_claim and request_human_review,
+      # and it denies every tool it does not name, so it would block the other agents' local tools.
+      cedar_pack: ${CEDAR_PACK_DIR:-}
     system_prompt: |
       You record an escalated HESTA case for a human to pick up, using the AgentCore Gateway tools.
       You never email anyone and you never draft member-facing text.

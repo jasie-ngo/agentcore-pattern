@@ -11,3 +11,7 @@ dependencies = [
     # MCP streamable-HTTP transport used to reach the AgentCore Gateway.
     "mcp",
 ]
+
+[project.optional-dependencies]
+# In-process Cedar authorisation (agents.<name>.agent_kwargs.cedar_pack). Install it wherever CEDAR_PACK_DIR is set.
+cedar = ["strands-agents[cedar]"]
