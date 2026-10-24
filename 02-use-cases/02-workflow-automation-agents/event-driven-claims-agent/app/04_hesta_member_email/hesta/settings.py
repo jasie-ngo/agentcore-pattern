@@ -1,4 +1,6 @@
-"""Centralized configuration — ALL env var reads live here.
+"""HESTA's own settings: the values that belong to this client, not to the core.
+
+The core's generic settings (region, Gateway connection) are in ``core/settings.py``.
 
 Port of ``app/hesta-claimsagent/config.py``.  The same environment variables are
 read, with the same names and defaults, so a deployment configured for the
@@ -18,28 +20,6 @@ thresholds used by the deterministic tools.
 from __future__ import annotations
 
 import os
-
-# ─── AWS Region ─────────────────────────────────────────────────────────────
-REGION = os.getenv("AWS_REGION", "us-west-2")
-
-# ─── Gateway ────────────────────────────────────────────────────────────────
-# The L3 construct sets AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL automatically.
-# The explicit name passed by infra-construct is read too, for backward compat.
-GATEWAY_URL = os.getenv(
-    "AGENTCORE_GATEWAY_URL",
-    os.getenv("AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL", ""),
-)
-GATEWAY_OAUTH_SCOPES = os.getenv("AGENTCORE_GATEWAY_OAUTH_SCOPES", "agentcore/invoke")
-
-# Identity credential provider — registered via `agentcore add credential`
-# during deploy.  The @requires_access_token decorator uses this name to fetch
-# tokens from the AgentCore Identity token vault (Secrets Manager-backed).
-GATEWAY_CREDENTIAL_PROVIDER = os.getenv(
-    "AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER", "cognito-gateway-m2m"
-)
-
-# Seconds to wait for the Gateway MCP handshake before giving up.
-GATEWAY_STARTUP_TIMEOUT = int(os.getenv("AGENTCORE_GATEWAY_STARTUP_TIMEOUT", "60"))
 
 # ─── Routing ────────────────────────────────────────────────────────────────
 # Minimum confidence (0-100) for a primary intent to be treated as confident.

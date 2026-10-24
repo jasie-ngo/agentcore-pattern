@@ -16,15 +16,15 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-for _path in (ROOT / "rules", ROOT / "app" / "04_hesta_member_email"):  # the app dir ends up first
+for _path in (ROOT / "app" / "04_hesta_member_email",):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
 SKIP_REASON = ""
 try:
     import cedarpy  # noqa: F401, E402
+    from core import cedar_pack, factory as core_factory  # noqa: E402
     from hesta import factory  # noqa: E402
-    import cedar_pack  # noqa: E402
     from strands import tool  # noqa: E402
     from strands.interventions.actions import Deny, Proceed  # noqa: E402
     from strands.models import Model  # noqa: E402
@@ -49,7 +49,7 @@ class CedarWiringTests(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        patcher = mock.patch.object(factory, "Agent")
+        patcher = mock.patch.object(core_factory, "Agent")
         self.Agent = patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -117,9 +117,10 @@ class CedarWiringTests(unittest.TestCase):
             factory.hesta_agent(cedar_pack=str(self._pack()))
         self.Agent.assert_not_called()
 
-    def test_a_missing_loader_fails_loudly(self):
-        with mock.patch.object(factory, "RULES_DIR", Path(self._tmp.name) / "no-such-rules"):
-            with self.assertRaises(RuntimeError):
+    def test_missing_cedar_dependencies_fail_loudly(self):
+        # The loader ships with the app now, so the thing that can be absent is the optional cedar extra.
+        with mock.patch.object(cedar_pack, "load_cedar_authorization", side_effect=ImportError("no cedar")):
+            with self.assertRaisesRegex(RuntimeError, "cedar.*extra"):
                 factory.hesta_agent(name="human_handoff", cedar_pack=str(self._pack()))
         self.Agent.assert_not_called()
 

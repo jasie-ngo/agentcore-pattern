@@ -1,6 +1,6 @@
 # clients/: one folder per client, kept apart from the core
 
-The core (`rules/cedar_pack.py`, `rules/run_feature.py`, the app) knows nothing about any client. Everything a client
+The core (`app/04_hesta_member_email/core/`) knows nothing about any client. Everything a client
 brings lives in its own folder here, and the core finds it only through a setting (`CEDAR_PACK_DIR` points at a `pack/`).
 This is deliberate: rules and compliance content are not packaged with the app. Each client plugs in its own.
 
@@ -17,7 +17,8 @@ clients/
 1. Copy `_template/` to `clients/<client-name>/`.
 2. Put the client's documents in `sources/`. Their contents are ignored by git (see `.gitignore`): they belong to the
    client and are often confidential. Record which document each rule came from in the feature file's `SOURCES:` header.
-3. Write `pack/vocabulary.yaml` and the feature file. The worked example is
+3. Write `pack/vocabulary.yaml` (tools, their arguments and allowed values, and optionally the `agents:` a rule may be
+   scoped to) and the feature file. A statement can say `for the agent "X"`; see `SME-START-HERE.md`. The worked example is
    `rules/packs/health-insurer-illustrative/` (its comments explain every field).
 4. Compile and check, from the project root:
    `python3 rules/cedar_pack.py compile clients/<client-name>/pack` then `check`.

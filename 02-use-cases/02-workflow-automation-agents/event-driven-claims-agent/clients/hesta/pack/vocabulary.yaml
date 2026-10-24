@@ -1,0 +1,71 @@
+# HESTA tool-boundary vocabulary (deck-derived draft; copied from rules/packs/hesta-tool-boundary): the words the feature file in this folder is allowed to use.
+#
+# STATUS:      DRAFT 0.1 — NOT yet approved
+# APPROVED BY: (pending: compliance / operations SME and an engineer)
+# WHY THIS FILE EXISTS
+#   A feature file means what its words mean. This file is the dictionary: which tools exist, what they do, and
+#   which arguments a rule may mention. The compiler and the test runner both read it, so a rule that names a tool
+#   or argument that is not listed here is refused when the pack is built, not silently ignored.
+#   It is approved together with the feature file: changing either one voids the approval.
+# SOURCES
+#   Tool names and arguments: event-driven-claims-agent/lambdas/schemas/*.json (the Gateway tool schemas)
+#   Gateway tool names as the agents see them: app/04_hesta_member_email/hesta/gateway.py (GATEWAY_TOOL_NAMES)
+#
+# HOW TO EXTEND IT
+#   A new tool needs `action` (its name at the Gateway) and `args` (the arguments a rule may mention).
+#   An argument may list `values`: the only values a rule may compare it to. The values listed here are the ones
+#   this pack uses; add more when a rule needs them, and have it approved.
+
+pack_id: hesta-deck-tool-boundary
+jurisdiction: AU
+
+tools:
+  lookup_policy:
+    action: policy-lookup___lookup_policy
+    description: Looks up a member's record by member number. (The table is still called Policies, from the original insurance demo.)
+    args:
+      policy_number: { description: The member number to look up }
+
+  list_pending_claims:
+    action: list-pending-claims___list_pending_claims
+    description: Lists every case currently waiting for a person to review it. Takes no arguments.
+    args: {}
+
+  request_human_review:
+    action: human-review___request_human_review
+    description: Puts a case in the human review queue and notifies the reviewers.
+    args:
+      claim_id: { description: The case to send for review }
+      reason: { description: Why a person needs to look at it }
+      estimated_amount: { description: "A dollar amount, 0 when none applies" }
+
+  create_claim:
+    action: create-claim___create_claim
+    description: Writes a case record. In this pilot the agent only records cases that wait for a person.
+    args:
+      policy_number: { description: The member number the case belongs to }
+      description: { description: "The member's message, trimmed" }
+      estimated_amount: { description: "A dollar amount, 0 when none applies" }
+      category: { description: "The intent id, for example financial_hardship" }
+      status:
+        description: Where the case is in its life.
+        values: [pending_review, approved]
+      decision:
+        description: What was decided about the case.
+        values: [escalated, approved]
+
+  send_notification:
+    action: notification___send_notification
+    description: Sends an email to the member. The pilot never uses it; nothing is sent automatically.
+    args:
+      recipient_email: { description: Who the email goes to }
+      subject: { description: The subject line }
+      body: { description: The email text }
+
+  resolve_claim:
+    action: resolve-claim___resolve_claim
+    description: Approves or denies a waiting case. This is a reviewer's action, not the agent's.
+    args:
+      claim_id: { description: The case to resolve }
+      action: { description: Approve or deny }
+      reviewer_notes: { description: The reviewer's notes }

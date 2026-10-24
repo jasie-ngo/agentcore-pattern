@@ -10,13 +10,13 @@ Same core, different rules: a rule-pack framework for regulated agents (offline 
 == 2. The finding ==
    [REAL: the runner executes the feature file against the actual code of both implementations]
   > An anonymised super-fund client had the same routing decision implemented twice. One feature file, run against both.
-    Feature : fund_a_routing_gate.feature  sha256:b0c625eec2a9  (50 scenarios after expanding outlines)
+    Feature : fund_a_routing_gate.feature  sha256:3944aa61328a  (57 scenarios after expanding outlines)
     Status  : DRAFT 0.1 — generated from code, NOT yet approved
     Adapter : legacy    app/fund-a-claimsagent/routing.py  decide()  (threshold 70)
     Adapter : yaml_port app/04_fund_a_member_email/fund_a/tools.py  route_decision(), classify_verification()  (threshold 70)
     
-    legacy     PASS 34  FAIL 0  DRIFT 0  NA 7  SKIP 9  ERROR 0
-    yaml_port  PASS 40  FAIL 0  DRIFT 1  NA 0  SKIP 9  ERROR 0
+    legacy     PASS 36  FAIL 0  DRIFT 0  NA 12  SKIP 9  ERROR 0
+    yaml_port  PASS 47  FAIL 0  DRIFT 1  NA 0  SKIP 9  ERROR 0
       DRIFT fund_a_routing_gate.feature:226  Expected document not detected
             line 231: And the reasons include "missing expected attachment (bank statement / evidence of hardship)"
                no reason contains 'missing expected attachment (bank statement / evidence of hardship)'; reasons were ['regulated intent (Financial Hardship)']  [yaml_port has no input for attachment status, so this fact never reaches it]
@@ -83,20 +83,17 @@ Same core, different rules: a rule-pack framework for regulated agents (offline 
              the model was told: DENIED: Access denied by Cedar policy
     the same tamper and approval checks on the new pack: 19 passed, 0 failed
     core files (content fingerprint, sha256 prefix, before -> after loading the new pack):
-      rules/cedar_pack.py  056d2d45010c -> 056d2d45010c  unchanged
-      rules/run_feature.py  38268c00f4dd -> 38268c00f4dd  unchanged
+      app/04_fund_a_member_email/core/cedar_pack.py  1b6ec77611f2 -> 1b6ec77611f2  unchanged
+      app/04_fund_a_member_email/core/gherkin.py  5ef1d21c3215 -> 5ef1d21c3215  unchanged
     git status for the new pack (new files only):
-      ?? rules/packs/health-insurer-illustrative/compiled/policy.cedar
-      ?? rules/packs/health-insurer-illustrative/health_insurer_tool_boundary.feature
-      ?? rules/packs/health-insurer-illustrative/manifest.json
-      ?? rules/packs/health-insurer-illustrative/vocabulary.yaml
+      (not a git checkout)
 
 == 5. Not done yet ==
    [SLIDE: stated plainly]
     - Approvals are not signed. Today an approval is a JSON record anyone could forge.
-    - The rules directory is not packaged with the app container.
-    - Only one agent can carry the tool policy: it denies every tool it does not name.
-    - The member memory identity is unresolved. Effective dates are checked against today, not the case date.
+    - Nothing delivers a client's pack to a running container. The loader itself now ships in the app's core package.
+    - Rules can be scoped per agent, but only one agent is wired to a pack: an agent with a pack is refused every tool its vocabulary does not list.
+    - Memory is safe only in the YAML port (verified members only); the deployed app still opens it before checking identity. Dates are checked against today, not the case date.
     - The routing-gate vocabulary is still specific to the first client. Only the tool boundary is extracted.
     - The framework leans on an alpha, single-maintainer composition library, unpinned in the repo.
     - No real second client. The health-insurer rules are illustrative, and no health-data threat model exists.

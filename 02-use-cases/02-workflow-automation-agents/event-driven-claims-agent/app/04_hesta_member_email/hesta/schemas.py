@@ -53,6 +53,21 @@ class IntentResult(BaseModel):
             "roll over?', 'what should I invest in?'). HESTA must not provide personal advice."
         ),
     )
+    email_change_or_login_restore: bool = Field(
+        default=False,
+        description=(
+            "True if the sender asks to CHANGE the email address on their record, or to restore or reset their "
+            "login or Member Online access (e.g. 'can't log in', 'reset my password'). Always goes to a person."
+        ),
+    )
+    instructs_money_movement: bool = Field(
+        default=False,
+        description=(
+            "True if the sender INSTRUCTS or AUTHORISES a rollover, transfer or combine of their money (e.g. 'please "
+            "roll over my Rest super'). False for a question about how it works or a status enquiry about funds "
+            "already sent."
+        ),
+    )
 
 
 # ─── AI-002 Conversation Context Manager ─────────────────────────────────────

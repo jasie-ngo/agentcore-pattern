@@ -246,6 +246,57 @@ Feature: HESTA routing gate
       And there are exactly 3 reasons
 
   # ---------------------------------------------------------------------------
+  # Agreed 2026-10-23 (ADR-0015 Q4) for the two non-regulated intents. HESTA compliance has yet to confirm them.
+  Rule: A request to change the email on record, or to restore login access, goes to a human
+
+    @must @confirm
+    Scenario: Changing the email on record is not a light request
+      Given the request changes the email on record or restores login access
+      When the case is routed
+      Then a human must review
+      And the reasons include "email on record or restore login access"
+
+    @must @confirm
+    Scenario: A change of mobile or address, with no email or login element, takes the quick check
+      Given the primary intent is "change_of_details"
+      When the case is routed
+      Then no human review is required
+
+  # ---------------------------------------------------------------------------
+  Rule: A message that instructs or authorises a rollover or transfer goes to a human
+
+    @must @confirm
+    Scenario: An instruction moves money
+      Given the primary intent is "rollover_transfer_combine"
+      And the message instructs or authorises a rollover or transfer
+      When the case is routed
+      Then a human must review
+      And the reasons include "instructs or authorises a rollover or transfer"
+
+    @must @confirm
+    Scenario: A question or status enquiry about a rollover takes the quick check
+      Given the primary intent is "rollover_transfer_combine"
+      When the case is routed
+      Then no human review is required
+
+  # ---------------------------------------------------------------------------
+  Rule: A sender who is not authenticated is never fully verified (strict profile)
+
+    @must @confirm
+    Scenario Outline: Verification when the sender has not passed DMARC
+      Given the sender is not authenticated
+      And the member record is "<record>"
+      When identity is assessed
+      Then the verification level is "<level>"
+      And human verification required is "<required>"
+
+      Examples:
+        | record                       | level      | required |
+        | found, active, email matches | partial    | yes      |
+        | found, active, email differs | partial    | yes      |
+        | found, closed, email matches | unverified | yes      |
+
+  # ---------------------------------------------------------------------------
   # Not part of the gate. Included because it sits beside it in the pipeline.
   Rule: A status enquiry gets a real case lookup
 

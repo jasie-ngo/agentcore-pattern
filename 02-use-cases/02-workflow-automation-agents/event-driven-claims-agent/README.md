@@ -35,13 +35,15 @@ from the verified policy text and attached to an agent as a Strands intervention
 
 | Path | What it is |
 |---|---|
-| `rules/` | The **core**, with no client's words in the compiler or loader: `cedar_pack.py` (compile, load, checks) and `run_feature.py` (the conformance runner) |
+| `app/04_hesta_member_email/core/` | The **core**: client-neutral code that ships in every client's container. The rule-pack compiler and loader (`cedar_pack.py`), the Gherkin parser, the agent factory, the Gateway client, memory and generic settings. A test checks it names no client and works with only the app folder present |
+| `app/04_hesta_member_email/hesta/` | The **client package**: HESTA's schemas, taxonomy, knowledge, ingestion, tools and thresholds, bound to the core through a thin factory |
+| `rules/` | The command-line launcher for the compiler (`cedar_pack.py`), the conformance runner (`run_feature.py`, which still holds the first client's routing steps) and the feature files |
 | `rules/packs/` | Two packs built before `clients/` existed: the super-fund tool boundary, and an **illustrative** health-insurer one that we wrote ourselves (not any insurer's rules) |
 | `clients/` | One folder per client for their documents (`sources/`, gitignored) and their `pack/`. Copy `clients/_template/`. See `clients/README.md` |
 | `demo/` | An offline, narrated demo ("same core, different rules") with a run sheet, presenter notes and a transcript |
 
-Packs are **not packaged with the app by design**: each client plugs in its own. The agent finds one through the
-`CEDAR_PACK_DIR` setting, which is empty (off) by default.
+A client's pack is **not part of the framework by design**: each client plugs in its own. The loader that checks a pack does
+ship with the app, in `core/`. The agent finds a pack through the `CEDAR_PACK_DIR` setting, which is empty (off) by default.
 
 ```bash
 python3 rules/cedar_pack.py compile clients/<name>/pack   # build manifest + Cedar policy
@@ -53,8 +55,8 @@ bash demo/setup.sh && demo/.venv/bin/python demo/run_demo.py     # the demo (nee
 **Status: draft.** Be clear about what this is not yet:
 - No pack is approved, and approvals are unsigned JSON, so they can be forged.
 - The Cedar handler is wired into `app/04_hesta_member_email/` only. The **deployed** app, `app/hesta-claimsagent/`, does not use it.
-- Nothing yet delivers a pack to a running container. The loader code (`rules/cedar_pack.py`) is also not packaged.
-- One agent can carry a pack, because it denies every tool it does not name. Memory identity is unresolved, and effective dates are checked against today, not the case date.
+- Nothing yet delivers a client's pack to a running container. The loader itself now ships inside the app, in `core/`.
+- A rule can be scoped to one agent (`for the agent "X"`), so several agents can share a pack and each is judged as itself. Only `human_handoff` is wired to a pack today, and an agent that carries one is refused every tool its vocabulary does not list, local tools included. Memory is opened only for a verified member in the YAML port, but the deployed app still keys it on the email text before checking identity. Effective dates are checked against today, not the case date.
 - The Gateway's own Cedar policies (below) still apply. The pack check is an additional, earlier layer, not a replacement.
 
 ## What You'll Learn

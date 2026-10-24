@@ -65,6 +65,7 @@ class InboundEmail:
     form_reason: str | None = None  # contact-form hint only
     latest_message: str = ""
     attachment_count: int = 0
+    sender_authenticated: bool = False  # a DMARC pass reported by the mail path; False unless told
     raw: str = ""
 
 
@@ -170,12 +171,13 @@ def normalize_email(
     sender_email: str | None = None,
     source: str | None = None,
     subject: str | None = None,
+    sender_authenticated: bool = False,
 ) -> InboundEmail:
     """Turn raw email text (as forwarded by the Trigger Lambda) into an InboundEmail."""
     raw = raw or ""
     text = _TRIGGER_PREFIX_RE.sub("", raw, count=1)
 
-    inbound = InboundEmail(raw=raw, subject=subject or "")
+    inbound = InboundEmail(raw=raw, subject=subject or "", sender_authenticated=bool(sender_authenticated))
     inbound.attachment_count = len(_ATTACHMENT_MARKER.findall(text))
 
     is_form = "form based mail" in text.lower() or "Values:" in text

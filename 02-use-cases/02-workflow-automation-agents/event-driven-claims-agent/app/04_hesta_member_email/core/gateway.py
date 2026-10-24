@@ -1,6 +1,6 @@
 """MCP Gateway access — Identity-managed Cognito M2M OAuth.
 
-Port of ``app/hesta-claimsagent/tools/gateway.py``, with one change: instead of
+Ported from the original hand-written pilot, with one change: instead of
 calling Gateway tools imperatively from an orchestrator, the started ``MCPClient``
 is handed to the agent as a **tool provider**.  The agents therefore see the real
 Gateway tool list and call it themselves; strands owns the session lifecycle
@@ -47,7 +47,7 @@ from strands.tools.mcp import MCPClient
 # `mcp_clients:` block would, and it tracks the mcp SDK's renames for us.
 from strands_compose.mcp.transports import streamable_http_transport
 
-from hesta.settings import (
+from core.settings import (
     GATEWAY_CREDENTIAL_PROVIDER,
     GATEWAY_OAUTH_SCOPES,
     GATEWAY_STARTUP_TIMEOUT,
@@ -56,17 +56,8 @@ from hesta.settings import (
 
 log = logging.getLogger(__name__)
 
-# AgentCore Gateway namespaces every tool as "<target>___<tool>", so the agents
-# see e.g. "policy-lookup___lookup_policy".  Their prompts name the bare tool and
-# tell them to match on the suffix — no static map to keep in sync.
-GATEWAY_TOOL_NAMES = {
-    "lookup_policy": "policy-lookup___lookup_policy",
-    "create_claim": "create-claim___create_claim",
-    "request_human_review": "human-review___request_human_review",
-    "send_notification": "notification___send_notification",
-    "list_pending_claims": "list-pending-claims___list_pending_claims",
-    "resolve_claim": "resolve-claim___resolve_claim",
-}
+# AgentCore Gateway namespaces every tool as "<target>___<tool>".  A client's prompts name the bare tool and tell the agent
+# to match on the suffix, so the core keeps no map of tool names: they belong to the client (and to its rule pack's vocabulary).
 
 # Why the last build attempt failed — surfaced in logs and, for the agents, as an
 # absent tool list (they are prompted to say so rather than invent a result).
@@ -110,7 +101,7 @@ def build_gateway_client() -> MCPClient | None:
 
     NOT cached: each session gets a clean client so a ``start()``/``stop()`` from
     a previous session cannot collide ("the client session is currently running").
-    Called from ``hesta_agent()`` during per-session agent construction, which
+    Called from the agent factory during per-session agent construction, which
     runs on the request/event-loop thread so the Cognito M2M token fetch has the
     workload-identity context.
 

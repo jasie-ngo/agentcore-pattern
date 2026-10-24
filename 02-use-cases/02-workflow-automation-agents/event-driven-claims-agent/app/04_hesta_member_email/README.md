@@ -20,8 +20,8 @@ main.py            390 lines    →     main.py              3 lines
 agents/*.py  (9)   ~700 lines   →     config.yaml (declarative)
 routing.py, ingestion/,               hesta/tools.py  (same logic,
 knowledge/, intents/            →     exposed as @tool functions)
-tools/gateway.py                →     hesta/gateway.py (unchanged mechanism)
-memory/session.py               →     hesta/memory.py  (unchanged mechanism)
+tools/gateway.py                →     core/gateway.py (unchanged mechanism)
+memory/session.py               →     core/memory.py   (changed: gated on a verified identity, see below)
 ```
 
 ---
@@ -67,14 +67,18 @@ existing Gateway tools — no new AWS resources.
 | `.env.local.example` | Every environment variable, with the same names and defaults as `hesta-claimsagent/config.py` |
 | `sample_emails/*.json` | Three payloads to try: contact form, hardship with attachment, personal-advice request |
 | `hesta/tools.py` | The deterministic steps, as `@tool` functions |
-| `hesta/gateway.py` | The Gateway MCP client (Cognito M2M via AgentCore Identity) |
-| `hesta/memory.py` | The AgentCore Memory session manager, with local fallback |
-| `hesta/factory.py` | Agent factory — structured-output contracts + Gateway attachment |
+| `core/` | **The client-neutral core, shipped in every container.** It names no client; a test enforces that |
+| `core/gateway.py` | The Gateway MCP client (Cognito M2M via AgentCore Identity) |
+| `core/memory.py` | AgentCore Memory recall and write, opened only for a verified member |
+| `core/factory.py` | Generic agent factory — structured-output contracts, Gateway attachment, Cedar rule pack |
+| `core/cedar_pack.py`, `core/gherkin.py` | The rule-pack compiler and fail-closed loader, and the Gherkin parser they share |
+| `core/settings.py` | Generic env vars: region and the Gateway connection |
+| `hesta/factory.py` | HESTA's binding of the core factory to `hesta/schemas.py` |
 | `hesta/schemas.py` | Pydantic structured-output contracts (verbatim port of `models.py`) |
 | `hesta/taxonomy.py` | The 8 HESTA intents (verbatim port) |
 | `hesta/knowledge.py` | HESTA house style + per-intent snippets (verbatim port) |
 | `hesta/ingestion.py` | Email normaliser (verbatim port) |
-| `hesta/settings.py` | The env vars Python still needs at runtime |
+| `hesta/settings.py` | HESTA's own thresholds and the guardrail sentinel |
 
 ---
 
@@ -85,8 +89,8 @@ sca dev --config examples/04_hesta_member_email/config.yaml
 ```
 
 With no AWS resources configured it still runs end to end: the Gateway agents
-report that the lookup was unavailable, AgentCore Memory falls back to local file
-sessions, and the Writer runs without the guardrail. Unverified cases escalate to
+report that the lookup was unavailable, the memory tools recall and record nothing,
+and the Writer runs without the guardrail. Unverified cases escalate to
 a human, which is the correct behaviour.
 
 To feed it a sample email, paste the `prompt` value from one of the
@@ -173,7 +177,7 @@ pilot degrades to app-layer controls exactly as `_build_model(guarded=...)` did.
 `main.py`'s phase sequence becomes a `delegate` orchestration plus the
 coordinator's prompt. `preserve_context: false` on the stateless specialists
 matches `structured_output_async`, which worked from a temporary message list.
-`context_manager` uses `true` because it carries a session manager.
+`context_manager` is stateless too: it carries no session manager, and the coordinator passes it any recalled history.
 
 The coordinator's prompt also carries the exact markdown report structure that
 `main.py`'s `_fmt_*` helpers produced, so the output looks the same.
@@ -201,7 +205,7 @@ unchanged.
 
 Every specialist keeps its Pydantic contract from `models.py`. `Agent` needs a
 class and YAML can only carry a name, so the config names one from
-`hesta/schemas.py` and `hesta/factory.py` resolves it:
+`hesta/schemas.py` and `core/factory.py` (bound to HESTA's schemas by `hesta/factory.py`) resolves it:
 
 ```yaml
 intent_identifier:
@@ -213,14 +217,23 @@ strands returns structured output through `Agent.as_tool()` as a `json` content
 block, so the coordinator receives validated objects rather than prose — the same
 contract the Python orchestrator had.
 
-### AgentCore Memory → `session_manager:`
+### AgentCore Memory → two gated tools, not a session manager
 
-Declared at the root and opted out of with `session_manager: ~` by every agent
-except `context_manager`, mirroring the hand-written agent where only AI-002 got
-a session manager. `hesta/memory.py` keeps the graceful degradation: with a
-`memory_id` it binds the same `claims/{actorId}/facts` (SEMANTIC) and
-`claims/{actorId}/{sessionId}` (SUMMARIZATION) namespaces; without one it returns
-a local `FileSessionManager`.
+There is no `session_manager:` anywhere in the config. A session manager fixes its
+actor when it is built, and a YAML-declared one is built once per session, so the
+actor could only be a constant: every member's contacts were pooled under it and
+recalled for everyone.
+
+Memory is `recall_member_memory` and `remember_member_contact` (`hesta/tools.py`,
+logic in `core/memory.py`), called by the coordinator after identity is checked. Each
+does nothing unless `classify_verification` has **verified that member number for that
+sender address**, so a different sender quoting a member's number can neither read nor
+write that member's memory. The actor is the member number, and the namespaces are the
+same as before: `claims/{actorId}/facts` and `claims/{actorId}/{sessionId}`. With no
+`memory_id` the tools recall and record nothing.
+
+What it does not fix: "verified" is only as strong as the sender-address match, which can
+be spoofed, and the lookup fields reach `classify_verification` through the identity agent.
 
 ---
 
@@ -239,7 +252,7 @@ YAML, and the reason is a lifecycle one:
   `strands-compose-agentcore` calls from the `/invocations` entrypoint — the
   request thread, with the workload identity populated.
 
-So `agent_kwargs.gateway: true` asks `hesta/factory.py` to build the client then,
+So `agent_kwargs.gateway: true` asks the factory to build the client then,
 and hands it to the agent as a tool provider. This is the same mechanism
 `hesta-claimsagent` used, and the same reason it built the client inside its async
 entrypoint.
@@ -264,20 +277,27 @@ block commented out at the bottom.
 
 ---
 
+## Deployment profile
+
+`DEPLOYMENT_PROFILE` is `strict` unless it is exactly `presale` (a typo means strict). **Strict** is for any real member data: a
+sender who has not passed DMARC is capped at `partial`, so nothing proceeds and memory stays closed. **Presale** is an explicit
+switch for demos with synthetic data only: the sender-address match counts as verified, and the report is stamped. Today nothing
+supplies the authentication signal (the Trigger Lambda forwards only the body and the `From:` line), so strict cases are all
+capped. See `docs/decisions/0015-spin-up-and-runtime-open-questions.md`.
+
 ## Known differences from `hesta-claimsagent`
 
 Three, all called out here rather than papered over:
 
-1. **Memory actor is static.** The Python agent keyed the AgentCore Memory actor
-   per invocation on the member/policy number. A YAML-declared session manager is
-   resolved once per session, so `actor_id` is the agent name. Session-scoped
-   recall is unchanged; cross-email recall is scoped to the agent rather than to
-   the individual member.
+1. **Memory is opened only for a verified member (deliberately stricter).** The Python
+   agent keys memory on the number found in the email text and opens it before identity is
+   checked, so a sender quoting someone else's number can recall, and write into, that
+   member's memory. Here identity runs first and memory follows only a verified match.
+   The Python agent still has the weakness; this port does not.
 
-2. **No explicit `create_event` write.** `memory/session.py` called
-   `MemoryClient.create_event` by hand because `structured_output_async` never
-   fired the session manager's write hooks. Here the session manager is attached
-   normally and strands drives it.
+2. **Explicit memory calls.** The Python agent wrote with `MemoryClient.create_event` by hand.
+   Here both directions are explicit tools, because a session manager cannot take a
+   per-request actor.
 
 3. **`account_type` on a malformed record.** When a DynamoDB record has an empty
    `policy_type`, the Python version returned `""` and this one returns `null`.

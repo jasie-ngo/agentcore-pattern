@@ -30,7 +30,7 @@ Not shown. The model is scripted. The check sits in the tool-call path, so a mod
 Then the system enforces a wrong rule, faithfully, and with evidence of who approved it. We promise evidence, not compliance. The conformance runner helps by showing what the code actually does against what was approved, which is how the drift in beat 2 was found.
 
 **8. "The drift is one finding. Is that it?"**
-On one client: 41 executable scenarios against the YAML port, one disagreement, plus 9 skipped and 7 not applicable to the older code. Do not extrapolate it. It is a missing input in the ported code, not a severity rating. The point is that the rule had been written down in two places and nobody had checked them against each other.
+On one client: 48 executable scenarios against the YAML port, one disagreement, plus 9 skipped and 12 not applicable to the older code (the newer rules don't exist there). Do not extrapolate it. It is a missing input in the ported code, not a severity rating. The point is that the rule had been written down in two places and nobody had checked them against each other.
 
 **9. "Who would approve rules at a real client?"**
 Unknown. It is the main thing the two real reviewers would tell us, which is why they are the ask. The brief's premortem ranks this first: the cost per approved rule against the value of what it unlocks.

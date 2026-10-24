@@ -1,4 +1,6 @@
-# A client's source documents are theirs, and often confidential. Their contents stay out of git by default.
-# Everything else (the pack, the notes, the placeholders) is tracked.
-/*/sources/*
-!/*/sources/.gitkeep
+# Whatever a client hands over is theirs, and often confidential, however they lay it out (a sources/ folder, a
+# copied-in directory, spreadsheets, decks). Only a client's pack/ is tracked; everything else in a client folder stays
+# local. The template keeps its placeholders.
+/*/*
+!/*/pack/
+!/_template/*

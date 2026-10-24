@@ -1,0 +1,20 @@
+{
+  "pack_id": "hesta-deck-tool-boundary",
+  "version": "0.1.0",
+  "jurisdiction": "AU",
+  "effective_from": null,
+  "effective_to": null,
+  "source": {
+    "file": "hesta_deck_tool_boundary.feature",
+    "sha256": "e105d62565d26a07e326f8ed0771512a30351839f14c2f98d1c9515bb4aaa12b"
+  },
+  "vocabulary": {
+    "file": "vocabulary.yaml",
+    "sha256": "c53c12cc747013960dc588faf78b1e4249bbdbeebed6d30b2b29e961a9080664"
+  },
+  "compiled": {
+    "file": "compiled/policy.cedar",
+    "sha256": "1191d424f26f3e4cfd566484da028afcb456fe1acafdc2b3e882b20e028b4768"
+  },
+  "approvals": []
+}

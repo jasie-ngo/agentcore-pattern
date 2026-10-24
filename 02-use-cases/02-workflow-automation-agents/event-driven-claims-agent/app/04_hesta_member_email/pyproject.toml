@@ -14,4 +14,4 @@ dependencies = [
 
 [project.optional-dependencies]
 # In-process Cedar authorisation (agents.<name>.agent_kwargs.cedar_pack). Install it wherever CEDAR_PACK_DIR is set.
-cedar = ["strands-agents[cedar]"]
+cedar = ["strands-agents[cedar]", "pyyaml"]

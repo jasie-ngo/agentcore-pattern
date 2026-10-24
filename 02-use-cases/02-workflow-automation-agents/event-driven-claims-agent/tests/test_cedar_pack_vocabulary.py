@@ -1,4 +1,4 @@
-"""Tests for the vocabulary-driven compiler in rules/cedar_pack.py.
+"""Tests for the vocabulary-driven compiler in core/cedar_pack.py.
 
 The compiler holds none of a client's words: every tool name, argument and allowed value comes from the pack's own
 vocabulary.yaml.  These tests show the vocabulary is enforced when a pack is built, and that a second, unrelated
@@ -20,10 +20,11 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT / "rules") not in sys.path:
-    sys.path.insert(0, str(ROOT / "rules"))
+APP = ROOT / "app" / "04_hesta_member_email"
+if str(APP) not in sys.path:
+    sys.path.insert(0, str(APP))
 
-import cedar_pack  # noqa: E402
+from core import cedar_pack  # noqa: E402
 
 HANDLER_SKIP = ""
 try:

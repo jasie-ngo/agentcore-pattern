@@ -27,6 +27,7 @@ attached to the relevant agents as a live MCP tool provider (``hesta/gateway.py`
 
 from __future__ import annotations
 
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -37,6 +38,7 @@ if _ROOT not in sys.path:
 
 from strands import tool
 
+from core import memory, profile
 from hesta import knowledge, taxonomy
 from hesta.ingestion import normalize_email as _normalize_email
 from hesta.settings import INTENT_CONFIDENCE_THRESHOLD
@@ -45,7 +47,7 @@ from hesta.settings import INTENT_CONFIDENCE_THRESHOLD
 
 
 @tool
-def normalize_email(raw: str, sender_email: str = "", source: str = "") -> dict:
+def normalize_email(raw: str, sender_email: str = "", source: str = "", sender_authenticated: bool = False) -> dict:
     """Normalise a raw inbound email into the canonical envelope for the pipeline.
 
     Strips the security banner, the HESTA legal footer and quoted thread history
@@ -60,15 +62,17 @@ def normalize_email(raw: str, sender_email: str = "", source: str = "") -> dict:
         raw: The raw email text exactly as received.
         sender_email: Envelope sender address, if the caller knows it. Optional.
         source: Where the email came from (e.g. the S3 object key). Optional.
+        sender_authenticated: True only if the mail path reported a DMARC pass for the sender. Default false.
 
     Returns:
         channel, sender_type, from_email, subject, member_number,
-        member_number_for_lookup, form_reason, latest_message, attachment_count.
+        member_number_for_lookup, form_reason, latest_message, attachment_count, sender_authenticated.
     """
     inbound = _normalize_email(
         raw,
         sender_email=sender_email or None,
         source=source or None,
+        sender_authenticated=sender_authenticated,
     )
     fields = asdict(inbound)
     fields.pop("raw", None)  # keep the tool result small; the agent already has it
@@ -139,6 +143,7 @@ def classify_verification(
     record_policy_type: str = "",
     lookup_error: str = "",
     gateway_unavailable: bool = False,
+    sender_authenticated: bool = False,
 ) -> dict:
     """Apply HESTA's identity-verification policy to a policy-lookup result.
 
@@ -146,7 +151,10 @@ def classify_verification(
     the fields that came back. The pilot policy:
 
     * member number resolves a record AND the sender email matches AND the
-      account is active  → **verified** (no human verification needed)
+      account is active AND the sender is authenticated (a DMARC pass)
+      → **verified** (no human verification needed). Under the pre-sale
+      deployment profile only, the address match alone is accepted.
+    * the same, but the sender is not authenticated (strict profile) → **partial**
     * record found and active but the sender email does not match → **partial**
     * anything else (no number, no record, non-active status, lookup failed)
       → **unverified**
@@ -161,6 +169,7 @@ def classify_verification(
         lookup_error: The error text if the lookup failed or found nothing.
         gateway_unavailable: True when the Gateway itself could not be reached or
             authenticated (as opposed to the lookup running and finding no record).
+        sender_authenticated: The ``sender_authenticated`` value from ``normalize_email``. Default false.
 
     Returns:
         A MemberProfile: member_number, matched, match_key, factors_matched,
@@ -210,8 +219,18 @@ def classify_verification(
         factors.append("status_active")
 
     if email_match and record_status == "active":
-        level, required = "verified", False
-        notes = "Member number resolved and sender email matches an active record."
+        if sender_authenticated or profile.is_presale():
+            level, required = "verified", False
+            notes = "Member number resolved and sender email matches an active record."
+            if not sender_authenticated:
+                notes += " Pre-sale profile: the address match is accepted without sender authentication."
+            memory.register_verified(number, sender_email)  # the only way memory is ever opened for this member
+        else:
+            level, required = "partial", True
+            notes = (
+                "Sender email matches an active record, but the sender is not authenticated (no DMARC pass), so "
+                "verification is capped at partial under the strict profile — request identity verification."
+            )
     elif record_status == "active":
         level, required = "partial", True
         notes = (
@@ -233,6 +252,47 @@ def classify_verification(
         "verification_required": required,
         "notes": notes,
     }
+
+
+# ─── Memory — only for a verified member ──────────────────────────────────────
+
+
+@tool
+def recall_member_memory(member_number: str, sender_email: str, latest_message: str) -> dict:
+    """Recall this member's earlier contacts from AgentCore Memory.
+
+    Call this ONLY after ``identity_profiler`` returned verification_level "verified". The tool
+    enforces that itself: unless ``classify_verification`` verified THIS member number for THIS
+    sender address, nothing is recalled and ``allowed`` is false. Do not use memory in that case.
+
+    Args:
+        member_number: The member/policy number from ``normalize_email``.
+        sender_email: The sender's address from ``normalize_email``.
+        latest_message: The member's latest message, used to find relevant earlier contacts.
+
+    Returns:
+        allowed (bool), memories (list of earlier contacts, oldest facts first), reason.
+    """
+    return memory.recall(member_number, sender_email, latest_message)
+
+
+@tool
+def remember_member_contact(member_number: str, sender_email: str, latest_message: str, summary: str) -> dict:
+    """Record this contact in AgentCore Memory for the verified member.
+
+    Call this ONCE, at the end, and ONLY for a verified member. Like ``recall_member_memory`` it
+    refuses anything else, so an unverified sender can never write into a member's memory.
+
+    Args:
+        member_number: The member/policy number from ``normalize_email``.
+        sender_email: The sender's address from ``normalize_email``.
+        latest_message: The member's latest message.
+        summary: The context manager's summary of this contact.
+
+    Returns:
+        recorded (bool), reason.
+    """
+    return memory.remember(member_number, sender_email, latest_message, summary)
 
 
 # ─── Case status — filter the member's own pending cases ──────────────────────
@@ -281,6 +341,34 @@ def filter_member_cases(claims: list, member_number: str = "") -> dict:
 # ─── Routing gate — human in the loop ─────────────────────────────────────────
 
 
+# ─── Deterministic backstops for the two requests that must never take the light path ────────────────────────────────
+# ADR-0015 Q4. The intent identifier sets two flags; these patterns catch the plain cases when it misses them. They
+# ESCALATE on a hit and are deliberately broad: a false hit sends a case to a person, a miss is what the flags are for.
+# Known limit: a bare imperative with no marker ("Transfer my super") is not caught here and relies on the flag.
+_APOS = "['\u2019]"
+_EMAIL_OR_LOGIN = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"\b(?:change|update|replace|amend)\b[^.\n?]{0,40}\be-?mail\b",
+        r"\bnew\s+e-?mail\b",
+        r"\b(?:reset|restore|recover|regain|unlock)\b[^.\n?]{0,40}\b(?:password|log\s?in|login|member\s+online|access)\b",
+        rf"\b(?:can{_APOS}?t|cannot|unable\s+to)\s+(?:log\s?in|login|access)\b",
+        r"\bforgot(?:ten)?\b[^.\n?]{0,20}\b(?:password|login|log\s?in|username)\b",
+        r"\blocked\s+out\b",
+    )
+]
+_MOVE = r"(?:roll\s?over|rollover|transfer|move|combine|consolidate)"
+_MONEY_MOVEMENT = [
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        rf"\bplease\s+{_MOVE}\b",
+        rf"\b(?:i|we)\s+(?:authori[sz]e|consent\s+to|instruct|request)\b[^.\n?]{{0,60}}\b{_MOVE}\b",
+        rf"\b(?:i|we)(?:{_APOS}d|\s+would)?\s+(?:want|need|like)\s+you\s+to\b[^.\n?]{{0,40}}\b{_MOVE}\b",
+        rf"\bgo\s+ahead\b[^.\n?]{{0,40}}\b{_MOVE}\b",
+    )
+]
+
+
 @tool
 def route_decision(
     primary_intent_id: str,
@@ -292,6 +380,9 @@ def route_decision(
     verification_level: str = "unverified",
     vulnerability_flags: list | None = None,
     priority: str = "normal",
+    email_change_or_login_restore: bool = False,
+    instructs_money_movement: bool = False,
+    latest_message: str = "",
 ) -> dict:
     """Decide whether a human must review this case before anything is sent.
 
@@ -303,7 +394,11 @@ def route_decision(
     * identity is not verified,
     * the intent is unclear / flagged for triage / below the confidence threshold,
     * more than one confident intent was detected,
-    * the empathy assessment flags vulnerability or high/urgent priority.
+    * the empathy assessment flags vulnerability or high/urgent priority,
+    * the request is to change the email on record or restore login access (the
+      account-takeover route), or the message instructs or authorises a rollover
+      or transfer (it moves money). The intent identifier sets those two flags; a
+      pattern check on ``latest_message`` backs them up. ADR-0015 Q4.
 
     Args:
         primary_intent_id: Primary intent id from the intent identifier.
@@ -315,6 +410,9 @@ def route_decision(
         verification_level: verified | partial | unverified.
         vulnerability_flags: From the empathy assessment.
         priority: low | normal | high | urgent, from the empathy assessment.
+        email_change_or_login_restore: From the intent identifier.
+        instructs_money_movement: From the intent identifier.
+        latest_message: The member's latest message, for the backstop pattern check.
 
     Returns:
         A RoutingDecision: escalate_to_human, reasons, regulated.
@@ -346,6 +444,12 @@ def route_decision(
 
     if flags or priority in ("high", "urgent"):
         reasons.append(f"vulnerability/priority ({', '.join(flags) or priority})")
+
+    text = latest_message or ""
+    if email_change_or_login_restore or any(p.search(text) for p in _EMAIL_OR_LOGIN):
+        reasons.append("request to change the email on record or restore login access (account-takeover route)")
+    if instructs_money_movement or any(p.search(text) for p in _MONEY_MOVEMENT):
+        reasons.append("message instructs or authorises a rollover or transfer (moves money)")
 
     return {
         "escalate_to_human": bool(reasons),

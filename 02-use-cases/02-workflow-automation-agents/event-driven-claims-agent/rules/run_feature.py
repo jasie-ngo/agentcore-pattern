@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib
+import os
 import re
 import sys
 from collections import Counter
@@ -62,121 +63,11 @@ class NotSupported(Exception):
     """The implementation under test cannot evaluate this scenario."""
 
 
-# --- Gherkin subset ------------------------------------------------------------------------------
-
-
-@dataclass
-class Step:
-    keyword: str
-    text: str
-    line: int
-
-
-@dataclass
-class Scenario:
-    name: str
-    rule: str
-    tags: set[str]
-    line: int
-    steps: list[Step]
-
-
-_STEP_RE = re.compile(r"^(Given|When|Then|And|But|\*)\s+(.+)$")
-_PLACEHOLDER_RE = re.compile(r"<([^<>]+)>")
-
-
-def _cells(line: str) -> list[str]:
-    return [c.strip() for c in line.strip().strip("|").split("|")]
-
-
-def parse_feature(text: str) -> list[Scenario]:
-    """Parse the Gherkin subset the feature file uses; anything else is an error, not a guess.
-
-    Supported: Feature, Background, Rule, Scenario, Scenario Outline + Examples tables, tags,
-    comments.  Outlines are expanded to one Scenario per Examples row, with the Background
-    steps prepended to every scenario.
-    """
-    background: list[Step] = []
-    scenarios: list[Scenario] = []
-    rule = ""
-    tags: set[str] = set()
-    block: dict | None = None
-
-    def close() -> None:
-        nonlocal block
-        if block is None:
-            return
-        if block["kind"] == "background":
-            background[:] = block["steps"]
-        elif block["kind"] == "scenario":
-            scenarios.append(
-                Scenario(block["name"], block["rule"], block["tags"], block["line"], background + block["steps"])
-            )
-        else:  # outline
-            if not block["header"]:
-                raise ValueError(f"line {block['line']}: Scenario Outline '{block['name']}' has no Examples")
-            for row in block["rows"]:
-                example = dict(zip(block["header"], row))
-
-                def fill(m: re.Match[str]) -> str:
-                    try:
-                        return example[m.group(1)]
-                    except KeyError:
-                        raise ValueError(
-                            f"line {block['line']}: <{m.group(1)}> is not a column of '{block['name']}'"
-                        ) from None
-
-                steps = [Step(s.keyword, _PLACEHOLDER_RE.sub(fill, s.text), s.line) for s in block["steps"]]
-                label = " / ".join(c[:30] for c in row[:2])
-                scenarios.append(
-                    Scenario(f"{block['name']} [{label}]", block["rule"], block["tags"], block["line"], background + steps)
-                )
-        block = None
-
-    def open_block(kind: str, name: str, line_no: int) -> None:
-        nonlocal block, tags
-        close()
-        block = {
-            "kind": kind, "name": name, "rule": rule, "tags": tags, "line": line_no,
-            "steps": [], "header": None, "rows": [], "in_examples": False,
-        }
-        tags = set()
-
-    for line_no, raw in enumerate(text.splitlines(), start=1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("@"):
-            tags |= set(re.findall(r"@(\w+)", line))
-        elif line.startswith("Feature:"):
-            close()
-        elif line.startswith("Rule:"):
-            close()
-            rule = line.split(":", 1)[1].strip()
-            tags = set()
-        elif line.startswith("Background:"):
-            open_block("background", "Background", line_no)
-        elif line.startswith(("Scenario Outline:", "Scenario Template:")):
-            open_block("outline", line.split(":", 1)[1].strip(), line_no)
-        elif line.startswith(("Scenario:", "Example:")):
-            open_block("scenario", line.split(":", 1)[1].strip(), line_no)
-        elif line.startswith("Examples:"):
-            if block is None or block["kind"] != "outline":
-                raise ValueError(f"line {line_no}: Examples outside a Scenario Outline")
-            block["in_examples"] = True
-        elif line.startswith("|"):
-            if block is None or not block["in_examples"]:
-                raise ValueError(f"line {line_no}: data tables are only supported under Examples")
-            if block["header"] is None:
-                block["header"] = _cells(line)
-            else:
-                block["rows"].append(_cells(line))
-        elif (m := _STEP_RE.match(line)) and block is not None:
-            block["steps"].append(Step(m.group(1), m.group(2), line_no))
-        else:
-            raise ValueError(f"line {line_no}: cannot parse {line!r}")
-    close()
-    return scenarios
+# --- Gherkin subset: the parser lives in the core, shared with the rule-pack compiler ------------------------
+_APP = ROOT / "app" / "04_hesta_member_email"
+if str(_APP) not in sys.path:
+    sys.path.insert(0, str(_APP))
+from core.gherkin import Scenario, Step, parse_feature  # noqa: E402,F401  (re-exported for the step code below)
 
 
 # --- Facts, outcomes and the implementations under test ------------------------------------------
@@ -198,6 +89,9 @@ class Facts:
     advice: bool = False
     missing_doc: str | None = None
     record: str | None = None
+    email_change: bool = False
+    money_movement: bool = False
+    authenticated: bool = True
 
 
 @dataclass
@@ -228,6 +122,8 @@ class LegacyAdapter:
         self.threshold = config.INTENT_CONFIDENCE_THRESHOLD
 
     def route(self, f: Facts) -> Outcome:
+        if f.email_change or f.money_movement:
+            raise NotSupported("the original app's gate has no input for the email-change or money-movement rules")
         m = self._models
         # decide() counts confident intents from the list itself, so build a list that yields
         # the count the scenario states: the primary plus enough extras at the threshold.
@@ -257,7 +153,7 @@ class LegacyAdapter:
         )
         return Outcome(decision.escalate_to_human, list(decision.reasons))
 
-    def verify(self, record: str) -> tuple[str, str]:
+    def verify(self, record: str, authenticated: bool = True) -> tuple[str, str]:
         raise NotSupported(
             "the verification policy is embedded in the async profile() and needs a live MCP gateway; "
             "it is not callable on its own"
@@ -298,6 +194,8 @@ class YamlPortAdapter:
     ignores: frozenset[str] = frozenset({"missing_attachment"})
 
     def __init__(self) -> None:
+        # The feature file specifies the STRICT profile, whatever the environment says.
+        os.environ["DEPLOYMENT_PROFILE"] = "strict"
         (self._tools,) = _import_from(YAML_PORT_APP, "hesta.tools")
         self.threshold = self._tools.INTENT_CONFIDENCE_THRESHOLD
 
@@ -312,13 +210,15 @@ class YamlPortAdapter:
             verification_level=f.id_level,
             vulnerability_flags=list(f.flags),
             priority=f.priority,
+            email_change_or_login_restore=f.email_change,
+            instructs_money_movement=f.money_movement,
         )
         return Outcome(result["escalate_to_human"], list(result["reasons"]))
 
-    def verify(self, record: str) -> tuple[str, str]:
+    def verify(self, record: str, authenticated: bool = True) -> tuple[str, str]:
         if record not in _RECORDS:
             raise StepError(f"unknown member record phrase {record!r}; known: {sorted(_RECORDS)}")
-        profile = self._tools.classify_verification(**{**_BASE_RECORD, **_RECORDS[record]})
+        profile = self._tools.classify_verification(**{**_BASE_RECORD, **_RECORDS[record]}, sender_authenticated=authenticated)
         return profile["verification_level"], "yes" if profile["verification_required"] else "no"
 
 
@@ -436,6 +336,21 @@ def _record(w: World, record: str) -> None:
     w.facts.record = record
 
 
+@step(r'the request changes the email on record or restores login access')
+def _email_change(w: World) -> None:
+    w.facts.email_change = True
+
+
+@step(r'the message instructs or authorises a rollover or transfer')
+def _money_movement(w: World) -> None:
+    w.facts.money_movement = True
+
+
+@step(r'the sender is not authenticated')
+def _unauthenticated(w: World) -> None:
+    w.facts.authenticated = False
+
+
 # When
 
 
@@ -448,7 +363,7 @@ def _route(w: World) -> None:
 def _assess(w: World) -> None:
     if w.facts.record is None:
         raise StepError("'identity is assessed' needs a 'the member record is ...' step first")
-    w.verification = w.adapter.verify(w.facts.record)
+    w.verification = w.adapter.verify(w.facts.record, w.facts.authenticated)
 
 
 # Then

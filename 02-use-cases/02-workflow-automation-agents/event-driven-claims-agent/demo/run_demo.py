@@ -23,17 +23,18 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
-for _path in (ROOT / "rules", HERE):
+for _path in (ROOT / "app" / "04_hesta_member_email", HERE):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
 import anonymise  # noqa: E402
-import cedar_pack  # noqa: E402
+from core import cedar_pack  # noqa: E402
 
 PACKS = ROOT / "rules" / "packs"
 SUPER_FUND = PACKS / "hesta-tool-boundary"  # shown on screen as fund-a-tool-boundary
 INSURER = PACKS / "health-insurer-illustrative"
-CORE_FILES = (ROOT / "rules" / "cedar_pack.py", ROOT / "rules" / "run_feature.py")
+CORE_FILES = (ROOT / "app" / "04_hesta_member_email" / "core" / "cedar_pack.py",
+              ROOT / "app" / "04_hesta_member_email" / "core" / "gherkin.py")
 
 APPROVAL = "the approval record (a labelled test fixture: no real approver, not signed)"
 
@@ -267,9 +268,9 @@ def beat_not_done(s: Screen) -> None:
     s.beat(5, "Not done yet", "SLIDE: stated plainly")
     for item in (
         "Approvals are not signed. Today an approval is a JSON record anyone could forge.",
-        "The rules directory is not packaged with the app container.",
-        "Only one agent can carry the tool policy: it denies every tool it does not name.",
-        "The member memory identity is unresolved. Effective dates are checked against today, not the case date.",
+        "Nothing delivers a client's pack to a running container. The loader itself now ships in the app's core package.",
+        "Rules can be scoped per agent, but only one agent is wired to a pack: an agent with a pack is refused every tool its vocabulary does not list.",
+        "Memory is safe only in the YAML port (verified members only); the deployed app still opens it before checking identity. Dates are checked against today, not the case date.",
         "The routing-gate vocabulary is still specific to the first client. Only the tool boundary is extracted.",
         "The framework leans on an alpha, single-maintainer composition library, unpinned in the repo.",
         "No real second client. The health-insurer rules are illustrative, and no health-data threat model exists.",
