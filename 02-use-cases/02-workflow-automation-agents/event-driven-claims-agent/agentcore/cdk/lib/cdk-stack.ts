@@ -17,6 +17,10 @@ export interface AgentCoreStackProps extends StackProps {
   mcpSpec?: AgentCoreMcpSpec;
   /** Credential provider ARNs from deployed state, keyed by credential name. */
   credentials?: Record<string, { credentialProviderArn: string; clientSecretArn?: string }>;
+  /** Client slug (ADR-0015 Q7). Unset keeps the original shared names, so existing deployments are unchanged. */
+  client?: string;
+  /** How the client is named in end-user text. */
+  clientDisplayName?: string;
 }
 
 /**
@@ -43,6 +47,8 @@ export class AgentCoreStack extends Stack {
     // Exposes lambdaArnMap for patching gateway targets.
     this.infra = new InfraConstruct(this, 'Infra', {
       destroyOnDelete: true,
+      client: props.client,
+      clientDisplayName: props.clientDisplayName,
     });
 
     // ─── Step 2: Patch mcpSpec with real Lambda ARNs + JWT authorizer ──
@@ -130,10 +136,21 @@ export class AgentCoreStack extends Stack {
       runtime.addEnvironmentVariable('AGENTCORE_GATEWAY_URL', gatewayCfn.getAtt('GatewayUrl').toString());
     }
 
+    // Memory id alias. The construct names this variable after the memory (MEMORY_<NAME>_ID), so a client whose memory is
+    // named differently would silently get no memory. The core reads the generic name too, so publish it.
+    const memoryCfn = this.node
+      .findAll()
+      .find(c => (c as cdk.CfnResource).cfnResourceType === 'AWS::BedrockAgentCore::Memory') as cdk.CfnResource | undefined;
+    if (memoryCfn) {
+      runtime.addEnvironmentVariable('AGENTCORE_MEMORY_ID', memoryCfn.getAtt('MemoryId').toString());
+    }
+
     // Identity credential provider name — the Runtime uses @requires_access_token
     // with this provider name to get tokens from the AgentCore Identity vault.
     // No client secrets are injected into the Runtime environment.
-    const credentialProvider = process.env.AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER || 'cognito-gateway-m2m';
+    // The spec names the provider per client (the assembled project renames it), so read it from there; the environment still wins.
+    const credentialProvider =
+      process.env.AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER || spec.credentials?.[0]?.name || 'cognito-gateway-m2m';
     runtime.addEnvironmentVariable('AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER', credentialProvider);
     runtime.addEnvironmentVariable('AGENTCORE_GATEWAY_OAUTH_SCOPES', 'agentcore/invoke');
 

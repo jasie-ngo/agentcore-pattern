@@ -17,11 +17,13 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.session import Session as BotocoreSession
 
+import clientctx
 
-def get_runtime_arn(region: str) -> str:
+
+def get_runtime_arn(region: str, stack_name: str = "AgentCore-ClaimsAgent-dev") -> str:
     """Get the Runtime ARN from CloudFormation outputs."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName=stack_name)["Stacks"][0]["Outputs"]
     output_map = {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
     for key, val in output_map.items():
@@ -102,10 +104,15 @@ def main():
         "--prompt",
         default="I need to file a claim. My policy is POL-12345. Fender bender yesterday, $2000 damage.",
     )
+    clientctx.add_arguments(parser)  # --client: invoke that client's own runtime
     args = parser.parse_args()
+    try:
+        ctx = clientctx.context_from_args(args)
+    except clientctx.CtxError as exc:
+        parser.error(str(exc))
 
     print("\033[90m🔑 Authenticating (SigV4)...\033[0m")
-    runtime_arn = get_runtime_arn(args.region)
+    runtime_arn = get_runtime_arn(args.region, ctx.stack_name)
     print(f"\033[90m✅ Connected to {runtime_arn.split('/')[-1]}\033[0m")
     print(f"\033[90m📝 {args.prompt}\033[0m\n")
 

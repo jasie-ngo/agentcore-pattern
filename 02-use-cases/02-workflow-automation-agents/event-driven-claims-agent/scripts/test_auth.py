@@ -34,6 +34,12 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 from botocore.session import Session as BotocoreSession
 
+import clientctx
+
+# Set from --client in main(); the defaults are the original single-client stack and its loose pool-name match.
+STACK_NAME = "AgentCore-ClaimsAgent-dev"
+CTX = None
+
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -41,7 +47,7 @@ from botocore.session import Session as BotocoreSession
 def get_stack_outputs(region: str) -> dict:
     """Get all CloudFormation outputs as a flat dict."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName=STACK_NAME)["Stacks"][0]["Outputs"]
     return {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
 
@@ -70,11 +76,15 @@ def get_cognito_config(region: str, output_map: dict) -> dict:
     if not user_pool_id:
         pools = cognito.list_user_pools(MaxResults=20)["UserPools"]
         for pool in pools:
-            if "ClaimsAgent" in pool["Name"]:
+            # A client matches its own pool by exact name; the original deployment keeps its loose match.
+            if (CTX is not None and CTX.client and pool["Name"] == CTX.cognito_pool_name) or (
+                (CTX is None or not CTX.client) and "ClaimsAgent" in pool["Name"]
+            ):
                 user_pool_id = pool["Id"]
                 break
         if not user_pool_id:
-            raise RuntimeError("Could not find ClaimsAgent Cognito User Pool")
+            wanted = CTX.cognito_pool_name if CTX is not None and CTX.client else "ClaimsAgent"
+            raise RuntimeError(f"Could not find the {wanted} Cognito User Pool")
 
     if not client_id:
         clients = cognito.list_user_pool_clients(UserPoolId=user_pool_id, MaxResults=10)["UserPoolClients"]
@@ -381,7 +391,14 @@ def main():
     parser = argparse.ArgumentParser(description="Test authentication patterns")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
     parser.add_argument("--test", type=int, default=None, help="Run a single test (1-6)")
+    clientctx.add_arguments(parser)  # --client: test that client's own stack and Cognito pool
     args = parser.parse_args()
+    global STACK_NAME, CTX
+    try:
+        CTX = clientctx.context_from_args(args)
+    except clientctx.CtxError as exc:
+        parser.error(str(exc))
+    STACK_NAME = CTX.stack_name
 
     success = run_tests(args.region, args.test)
     sys.exit(0 if success else 1)

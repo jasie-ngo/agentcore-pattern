@@ -8,9 +8,20 @@ set -euo pipefail
 # Only runs if .cognito-state.json exists (proving this script created them).
 # ============================================================================
 
+# Usage: ./scripts/teardown_cognito.sh [--client <slug>] [--plan]
+# With --client it acts on build/<slug>/.cognito-state.json only, and refuses a state file recorded for a different pool.
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-STATE_FILE="$PROJECT_DIR/.cognito-state.json"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/ctx.sh"
+ctx_parse_args "$@"
+ctx_load
+PROJECT_DIR="$CTX_PROJECT_DIR"
+STATE_FILE="$CTX_COGNITO_STATE"
+if [ "$PLAN" = true ]; then
+  ctx_print_plan "delete the Cognito pool recorded in $STATE_FILE"
+  exit 0
+fi
 
 if [ ! -f "$STATE_FILE" ]; then
   echo "ℹ️  No .cognito-state.json found — Cognito was not created by setup_cognito.sh."
@@ -21,6 +32,13 @@ fi
 REGION=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['region'])")
 USER_POOL_ID=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['user_pool_id'])")
 DOMAIN_PREFIX=$(python3 -c "import json; print(json.load(open('$STATE_FILE'))['domain_prefix'])")
+
+# The state file must be this deployment's own: never delete a pool recorded for a different client.
+RECORDED_POOL_NAME=$(python3 -c "import json; print(json.load(open('$STATE_FILE')).get('user_pool_name',''))")
+if [ -n "$RECORDED_POOL_NAME" ] && [ "$RECORDED_POOL_NAME" != "$CTX_COGNITO_POOL" ]; then
+  echo "ERROR: $STATE_FILE records pool \"$RECORDED_POOL_NAME\" but this deployment's pool is \"$CTX_COGNITO_POOL\". Not deleting." >&2
+  exit 1
+fi
 
 echo "🗑️  Tearing down Cognito resources created by setup_cognito.sh..."
 echo "   Region: $REGION"

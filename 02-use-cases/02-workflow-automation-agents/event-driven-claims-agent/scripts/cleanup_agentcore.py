@@ -9,6 +9,11 @@ Handles the complete teardown lifecycle:
 
 Usage:
     python3 scripts/cleanup_agentcore.py --region us-east-1 --project-dir .
+    python3 scripts/cleanup_agentcore.py --region ap-southeast-2 --client acme [--sweep-orphans]
+
+With no --client the original single-client names are used, exactly as before.  With one, the stack, credential provider and
+Cognito state are that client's own (see scripts/clientctx.py), and the sweep of orphaned AgentCore resources is OFF unless
+--sweep-orphans is given, because the sweep identifies resources by name alone and an account may hold several clients.
 """
 
 import argparse
@@ -22,9 +27,24 @@ import time
 import boto3
 from botocore.exceptions import ClientError
 
+import clientctx
+
+# Set by configure() from the resolved deployment.  The defaults are the original single-client names.
 STACK_NAME = "AgentCore-ClaimsAgent-dev"
 PROJECT_PREFIX = "ClaimsAgent"
 CREDENTIAL_NAME = "cognito-gateway-m2m"
+CTX = None
+SIBLINGS: set = set()
+
+
+def configure(ctx) -> None:
+    """Point the module's names at one deployment."""
+    global STACK_NAME, PROJECT_PREFIX, CREDENTIAL_NAME, CTX, SIBLINGS
+    CTX = ctx
+    STACK_NAME = ctx.stack_name
+    PROJECT_PREFIX = ctx.project
+    CREDENTIAL_NAME = ctx.credential
+    SIBLINGS = clientctx.known_projects()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,9 +64,14 @@ def agentcore_client(region: str):
 
 
 def matches_project(name: str) -> bool:
-    """Check if a resource name belongs to this project."""
-    lower = name.lower()
-    return "claimsagent" in lower or "claims" in lower
+    """Check if a resource name belongs to this deployment.
+
+    The original deployment keeps its loose test; a client is matched as a whole word and never as another client's longer name
+    (clientctx.owns_resource)."""
+    if CTX is None:  # used before configure(): the original behaviour
+        lower = name.lower()
+        return "claimsagent" in lower or "claims" in lower
+    return clientctx.owns_resource(name, CTX, SIBLINGS)
 
 
 # ─── Step 1: CloudFormation Stack ─────────────────────────────────────────────
@@ -285,22 +310,41 @@ def clean_local_state(project_dir: str):
 def main():
     parser = argparse.ArgumentParser(description="Full Claims Agent teardown")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
-    parser.add_argument("--project-dir", default=".", help="Project root directory")
+    clientctx.add_arguments(parser)  # --client, --project-dir (default: the deployment's own project), --target
+    parser.add_argument(
+        "--sweep-orphans",
+        action="store_true",
+        help="also delete leftover AgentCore resources by name (always on without --client; opt-in for a client)",
+    )
     args = parser.parse_args()
 
-    project_dir = os.path.abspath(args.project_dir)
+    try:
+        ctx = clientctx.context_from_args(args)
+    except clientctx.CtxError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    configure(ctx)
+    project_dir = str(ctx.project_dir)
 
     print(f"   Region: {args.region}")
     print(f"   Stack:  {STACK_NAME}")
+    if ctx.client:
+        print(f"   Client: {ctx.client} (project {ctx.project}, directory {project_dir})")
     print("")
 
     # 1. CloudFormation stack
     print("   ── CloudFormation ──")
     delete_stack(args.region)
 
-    # 2. Orphaned AgentCore resources
+    # 2. Orphaned AgentCore resources.  Matching is by name, so a client must ask for it.
     print("\n   ── AgentCore Resources ──")
-    cleanup_agentcore_resources(args.region)
+    if ctx.client and not args.sweep_orphans:
+        print(f"   Skipped: the sweep matches by name. Add --sweep-orphans to delete leftovers named {ctx.project}...")
+        # The credential provider is exact by name, so it is always removed.
+        _delete_safe(agentcore_client(args.region), "delete_oauth2_credential_provider", name=CREDENTIAL_NAME)
+        print(f"   Deleted credential: {CREDENTIAL_NAME}")
+    else:
+        cleanup_agentcore_resources(args.region)
 
     # 3. Cognito
     print("\n   ── Cognito ──")
@@ -311,4 +355,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -14,12 +14,15 @@ so it works even after the CloudFormation stack is deleted.
 
 Usage:
     python3 scripts/disable_observability.py --region us-west-2
+    python3 scripts/disable_observability.py --region ap-southeast-2 --client acme
 """
 
 import argparse
 
 import boto3
 from botocore.exceptions import ClientError
+
+import clientctx
 
 DEFAULT_STACK_NAME = "AgentCore-ClaimsAgent-dev"
 
@@ -30,8 +33,15 @@ _KIND_PREFIXES = ("gateway-", "gateway-identity-", "memory-", "runtime-identity-
 def get_args():
     parser = argparse.ArgumentParser(description="Remove AgentCore observability deliveries")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
-    parser.add_argument("--stack-name", default=DEFAULT_STACK_NAME, help="(unused; kept for symmetry)")
-    return parser.parse_args()
+    parser.add_argument("--stack-name", default=None, help="(unused; kept for symmetry; default: the deployment's own stack)")
+    clientctx.add_arguments(parser)
+    args = parser.parse_args()
+    if args.stack_name is None:
+        try:
+            args.stack_name = clientctx.context_from_args(args).stack_name
+        except clientctx.CtxError as exc:
+            parser.error(str(exc))
+    return args
 
 
 def _is_ours(name: str) -> bool:

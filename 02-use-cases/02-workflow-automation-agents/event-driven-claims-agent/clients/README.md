@@ -23,7 +23,8 @@ clients/
 4. Compile and check, from the project root:
    `python3 rules/cedar_pack.py compile clients/<client-name>/pack` then `check`.
 5. A person with authority approves it. Nothing loads without an approval record (and approvals are not yet signed).
-6. Point the agent at it: `CEDAR_PACK_DIR=clients/<client-name>/pack`.
+6. Build the client's deployable project: `python3 scripts/assemble_client.py <client-name>` (see the main README). The pack goes into the
+   image; add `--enable-pack` to switch it on, which is refused unless it verifies. For a local run, set `CEDAR_PACK_DIR` yourself.
 
 ## Rules for this folder
 

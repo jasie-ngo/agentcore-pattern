@@ -4,11 +4,11 @@
   "managedBy": "CDK",
   "runtimes": [
     {
-      "name": "hestaclaimsagent",
-      "description": "Event-driven dual-agent claims processor with confidence-based routing",
+      "name": "memberemailagent",
+      "description": "Member-email agentic pipeline, composed in YAML on strands-compose",
       "build": "Container",
       "entrypoint": "main.py",
-      "codeLocation": "app/hesta-claimsagent",
+      "codeLocation": "app/04_hesta_member_email",
       "envVars": [
         {
           "name": "AGENT_OBSERVABILITY_ENABLED",
@@ -27,8 +27,8 @@
           "value": "global.anthropic.claude-haiku-4-5-20251001-v1:0"
         },
         {
-          "name": "AUTO_APPROVE_THRESHOLD",
-          "value": "80"
+          "name": "DEPLOYMENT_PROFILE",
+          "value": "strict"
         },
         {
           "name": "AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER",
@@ -124,7 +124,7 @@
   "onlineEvalConfigs": [
     {
       "name": "ClaimsEvaluation",
-      "agent": "hestaclaimsagent",
+      "agent": "memberemailagent",
       "evaluators": [
         "Builtin.Helpfulness",
         "Builtin.Correctness",

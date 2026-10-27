@@ -2,15 +2,21 @@
 """Seed DynamoDB tables with sample data."""
 
 import argparse
+import sys
 
 import boto3
 
+import clientctx
 
-def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffix="Policies"):
+
+def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffix="Policies", ctx=None):
     """Discover the actual DynamoDB table name from the deployed stack.
 
-    Falls back to the hardcoded convention if the stack isn't found.
+    Falls back to the hardcoded convention if the stack isn't found.  For a client the fallback is the client's EXACT table name:
+    the fuzzy scan below would pick up another client's table in a shared account, so it is never used.
     """
+    if ctx is not None:
+        stack_name = ctx.stack_name
     cfn = boto3.client("cloudformation", region_name=region)
     try:
         resp = cfn.list_stack_resources(StackName=stack_name)
@@ -19,6 +25,8 @@ def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffi
                 return r["PhysicalResourceId"]
     except Exception:
         pass
+    if ctx is not None and ctx.client:
+        return ctx.table(logical_suffix)
     # Fallback: try common naming patterns
     dynamodb = boto3.client("dynamodb", region_name=region)
     try:
@@ -31,8 +39,8 @@ def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffi
     return "ClaimsAgent-Policies"
 
 
-def seed_policies(region):
-    table_name = get_table_name(region)
+def seed_policies(region, ctx=None):
+    table_name = get_table_name(region, ctx=ctx)
     print(f"  Table: {table_name}")
     dynamodb = boto3.resource("dynamodb", region_name=region)
     table = dynamodb.Table(table_name)
@@ -87,6 +95,12 @@ def seed_policies(region):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--region", default="us-west-2")
+    clientctx.add_arguments(parser)
     args = parser.parse_args()
+    try:
+        ctx = clientctx.context_from_args(args)
+    except clientctx.CtxError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(2)
     print(f"🌱 Seeding DynamoDB in {args.region}...")
-    seed_policies(args.region)
+    seed_policies(args.region, ctx)

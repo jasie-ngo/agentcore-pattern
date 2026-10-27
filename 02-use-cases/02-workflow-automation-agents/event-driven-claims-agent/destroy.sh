@@ -3,8 +3,11 @@ set -euo pipefail
 
 # ============================================================================
 # Event-Driven Claims Agent — One-Command Teardown
-# Usage: ./destroy.sh [region]
+# Usage: ./destroy.sh [region] [--client <slug>] [--plan]
 # Example: ./destroy.sh us-west-2
+#          ./destroy.sh ap-southeast-2 --client acme --plan   # print the stack it would destroy, touch nothing
+#
+# With --client it destroys that client's stack only (build/<slug>); without, the original single-client stack.
 #
 # Destroys ALL resources created by deploy.sh:
 # - AgentCore Runtime, Gateway, Memory, PolicyEngine, OnlineEval
@@ -14,15 +17,27 @@ set -euo pipefail
 # so all data is permanently deleted. This is NOT reversible.
 # ============================================================================
 
-REGION="${1:-us-west-2}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/scripts/lib/ctx.sh"
+ctx_parse_args "$@"
+REGION="${POSITIONAL[0]:-us-west-2}"
+ctx_load   # refuses a client whose project is missing or belongs to another client
+if [ "$PLAN" = true ]; then
+  ctx_print_plan "destroy stack $CTX_STACK_NAME in $REGION"
+  exit 0
+fi
 export AWS_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 export CDK_DEFAULT_REGION="$REGION"
+if [ -n "$CTX_CLIENT" ]; then export AGENTCORE_CLIENT="$CTX_CLIENT"; fi
 
 # Use Finch or Docker for container builds
 export CDK_DOCKER="${CDK_DOCKER:-docker}"
 
-echo "🗑️  Destroying Claims Agent in $REGION..."
+cd "$CTX_PROJECT_DIR"
+
+echo "🗑️  Destroying Claims Agent in $REGION (stack $CTX_STACK_NAME)..."
 echo ""
 
 # Ensure aws-targets.json exists with correct region
@@ -49,11 +64,11 @@ if [ ! -d "node_modules" ]; then
 fi
 
 # Destroy via CDK
-echo "💥 Destroying stack AgentCore-ClaimsAgent-dev..."
+echo "💥 Destroying stack $CTX_STACK_NAME..."
 cdk destroy --all --force
 cd ../..
 echo ""
 
-echo "✅ Done! All Claims Agent resources destroyed in $REGION."
+echo "✅ Done! All Claims Agent resources destroyed in $REGION (stack $CTX_STACK_NAME)."
 echo ""
-echo "To redeploy: ./deploy.sh $REGION"
+echo "To redeploy: ./deploy.sh $REGION$CTX_CLIENT_FLAG"

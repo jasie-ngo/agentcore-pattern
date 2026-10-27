@@ -19,11 +19,16 @@ import urllib.request
 
 import boto3
 
+import clientctx
+
+# Set from --client in main(); the default is the original single-client stack.
+STACK_NAME = "AgentCore-ClaimsAgent-dev"
+
 
 def get_cognito_token(region: str) -> tuple[str, str]:
     """Get M2M token and runtime ARN from CloudFormation outputs."""
     cf = boto3.client("cloudformation", region_name=region)
-    outputs = cf.describe_stacks(StackName="AgentCore-ClaimsAgent-dev")["Stacks"][0]["Outputs"]
+    outputs = cf.describe_stacks(StackName=STACK_NAME)["Stacks"][0]["Outputs"]
     output_map = {o["OutputKey"]: o["OutputValue"] for o in outputs}
 
     # CDK auto-generates output keys with hash suffixes — find by prefix
@@ -196,7 +201,13 @@ def run_tests(region: str) -> bool:
 def main():
     parser = argparse.ArgumentParser(description="Test Cedar policy enforcement")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
+    clientctx.add_arguments(parser)  # --client: test that client's own stack
     args = parser.parse_args()
+    global STACK_NAME
+    try:
+        STACK_NAME = clientctx.context_from_args(args).stack_name
+    except clientctx.CtxError as exc:
+        parser.error(str(exc))
 
     success = run_tests(args.region)
     sys.exit(0 if success else 1)

@@ -9,10 +9,21 @@
 # AGENTCORE_GATEWAY_CLIENT_SECRET). The secret is never printed.
 set -euo pipefail
 
+# With --client the provider is that client's own (e.g. acme-gateway-m2m) and the Cognito values come from build/<slug>/.env.
+# Usage: ./scripts/fix_credential_region.sh [region] [--client <slug>] [--plan]
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-REGION="${1:-us-east-1}"
-PROVIDER_NAME="${AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER:-cognito-gateway-m2m}"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/ctx.sh"
+ctx_parse_args "$@"
+REGION="${POSITIONAL[0]:-us-east-1}"
+ctx_load
+if [ "$PLAN" = true ]; then
+  ctx_print_plan "update credential provider $CTX_CREDENTIAL in $REGION from $CTX_ENV_FILE"
+  exit 0
+fi
+PROJECT_DIR="$CTX_PROJECT_DIR"
+PROVIDER_NAME="$(ctx_py get credential)" || exit 2
 
 # Load Cognito values written by setup_cognito.sh
 set -a

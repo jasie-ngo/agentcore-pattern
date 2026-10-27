@@ -8,23 +8,34 @@ set -euo pipefail
 # CUSTOM_JWT authorizer. Run this BEFORE deploy.sh if you don't have an
 # existing Cognito pool.
 #
-# Usage: ./scripts/setup_cognito.sh [region]
+# Usage: ./scripts/setup_cognito.sh [region] [--client <slug>] [--plan]
 #
 # Outputs are written to .env (AGENTCORE_GATEWAY_* variables).
 # A state file (.cognito-state.json) tracks what was created for teardown.
+#
+# With --client, the pool, app client and domain are that client's own (named from its project, e.g. Acme-UserPool), and the
+# .env and state file are inside build/<slug>, so two clients never share an identity.  --plan prints the names and stops.
 # ============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-REGION="${1:-${AWS_REGION:-us-west-2}}"
-STATE_FILE="$PROJECT_DIR/.cognito-state.json"
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/ctx.sh"
+ctx_parse_args "$@"
+REGION="${POSITIONAL[0]:-${AWS_REGION:-us-west-2}}"
+ctx_load
+if [ "$PLAN" = true ]; then
+  ctx_print_plan "create Cognito pool $CTX_COGNITO_POOL in $REGION"
+  exit 0
+fi
+PROJECT_DIR="$CTX_PROJECT_DIR"
+STATE_FILE="$CTX_COGNITO_STATE"
 
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --region "$REGION")
-POOL_NAME="ClaimsAgent-UserPool"
-DOMAIN_PREFIX="claims-agent-${ACCOUNT_ID}"
+POOL_NAME="$CTX_COGNITO_POOL"
+DOMAIN_PREFIX="$(ctx_py get domain-prefix --account "$ACCOUNT_ID")"
 RESOURCE_SERVER_ID="agentcore"
 SCOPE_NAME="invoke"
-CLIENT_NAME="ClaimsAgent-M2M"
+CLIENT_NAME="$CTX_COGNITO_APP_CLIENT"
 
 echo "🔐 Setting up Cognito User Pool for Gateway auth..."
 echo "   Region: $REGION"
@@ -116,7 +127,8 @@ EOF
 # Update .env file with Cognito values
 ENV_FILE="$PROJECT_DIR/.env"
 if [ ! -f "$ENV_FILE" ]; then
-  cp "$PROJECT_DIR/.env.example" "$ENV_FILE" 2>/dev/null || touch "$ENV_FILE"
+  # .env.example lives in the repository, not in an assembled client project.
+  cp "$(dirname "$SCRIPT_DIR")/.env.example" "$ENV_FILE" 2>/dev/null || touch "$ENV_FILE"
 fi
 
 # Helper: set or update a key in .env

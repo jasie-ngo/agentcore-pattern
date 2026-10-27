@@ -63,7 +63,8 @@ existing Gateway tools — no new AWS resources.
 |------|---------|
 | `config.yaml` | **The whole system** — models, 9 agents + coordinator, prompts, guardrail, memory, orchestration |
 | `main.py` | `create_app(config.yaml)` — nothing else |
-| `pyproject.toml` | Dependencies for deployment |
+| `pyproject.toml`, `uv.lock` | Dependencies, and the exact versions the container installs |
+| `Dockerfile`, `.dockerignore` | The AgentCore Runtime container (arm64, non-root, `/ping` health check) |
 | `.env.local.example` | Every environment variable, with the same names and defaults as `hesta-claimsagent/config.py` |
 | `sample_emails/*.json` | Three payloads to try: contact form, hardship with attachment, personal-advice request |
 | `hesta/tools.py` | The deterministic steps, as `@tool` functions |
@@ -114,29 +115,20 @@ sca dev --config examples/04_hesta_member_email/config.yaml
 
 ## Deploy it
 
-Same three commands as [example 02](../02_deploy/README.md) — the config is the
-only thing that differs:
+This directory is a container build: it has a `Dockerfile`, a `.dockerignore` and a `uv.lock`, and the base `agentcore/agentcore.json`
+points its runtime here. For a client, do not deploy from the base: assemble a project.
 
 ```bash
-agentcore add agent \
-  --type byo \
-  --name hesta_member_email \
-  --code-location examples/04_hesta_member_email \
-  --entrypoint main.py \
-  --language Python \
-  --framework Strands \
-  --model-provider Bedrock
-agentcore deploy
+python3 scripts/assemble_client.py <client> --display-name "<Name>" --profile presale
+cd build/<client> && cat README-BUILD.md
 ```
 
-The agent needs the same deploy-time wiring as `hesta-claimsagent`:
+The assembled project has its own project, memory and credential names, placeholders for the client's own Cognito identity, the CDK
+app set to the client, and (if the client has a pack) the pack in `client_pack/`, off unless `--enable-pack` is given and the pack
+verifies. The image installs exactly what `uv.lock` says, runs as a non-root user, and answers `GET /ping`.
 
-- a Cognito M2M credential provider named by `AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER`
-  (`agentcore add credential`),
-- `AGENTCORE_GATEWAY_URL` (or `AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL`) pointing at
-  the Gateway,
-- `MEMORY_CLAIMSAGENTMEMORY_ID` for AgentCore Memory,
-- `GUARDRAIL_ID` / `GUARDRAIL_VERSION` for the no-personal-advice guardrail.
+The agent needs the same deploy-time wiring as before: a Cognito M2M credential provider, `AGENTCORE_GATEWAY_URL`, the memory id
+(the stack publishes `AGENTCORE_MEMORY_ID`) and `GUARDRAIL_ID` / `GUARDRAIL_VERSION`.
 
 ---
 

@@ -191,10 +191,15 @@ MEMBERS = [
 ]
 
 
-def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffix="Policies"):
-    """Discover the deployed Policies table name; fall back to the naming convention."""
+def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffix="Policies", ctx=None):
+    """Discover the deployed Policies table name; fall back to the naming convention.
+
+    For a client (ctx.client) the stack is the client's own and the fallback is its EXACT table name: the fuzzy scan below would
+    pick up another client's table in a shared account, so it is never used."""
     import boto3
 
+    if ctx is not None:
+        stack_name = ctx.stack_name
     cfn = boto3.client("cloudformation", region_name=region)
     try:
         resp = cfn.list_stack_resources(StackName=stack_name)
@@ -203,6 +208,8 @@ def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffi
                 return r["PhysicalResourceId"]
     except Exception:
         pass
+    if ctx is not None and ctx.client:
+        return ctx.table(logical_suffix)
     dynamodb = boto3.client("dynamodb", region_name=region)
     try:
         for t in dynamodb.list_tables()["TableNames"]:
@@ -213,8 +220,8 @@ def get_table_name(region, stack_name="AgentCore-ClaimsAgent-dev", logical_suffi
     return "ClaimsAgent-dev-Policies"
 
 
-def seed(region, dry_run):
-    table_name = get_table_name(region)
+def seed(region, dry_run, ctx=None):
+    table_name = get_table_name(region, ctx=ctx)
     print(f"🌱 Seeding {len(MEMBERS)} HESTA member records into: {table_name} ({region})")
     if dry_run:
         print("   (dry-run: no writes)")
@@ -273,9 +280,19 @@ if __name__ == "__main__":
     parser.add_argument("--region", default="ap-southeast-2")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be written, no AWS writes.")
     parser.add_argument("--list", action="store_true", help="Print a markdown reference of all members (no AWS).")
+    import clientctx
+
+    clientctx.add_arguments(parser)  # --client: seed that client's own Policies table, never another's
     args = parser.parse_args()
 
     if args.list:
         print_reference()
     else:
-        seed(args.region, args.dry_run)
+        try:
+            _ctx = clientctx.context_from_args(args)
+        except clientctx.CtxError as exc:
+            import sys
+
+            print(f"ERROR: {exc}", file=sys.stderr)
+            raise SystemExit(2)
+        seed(args.region, args.dry_run, _ctx)

@@ -5,11 +5,13 @@ description = "HESTA member-email agentic pilot, composed entirely in YAML"
 requires-python = ">=3.11"
 dependencies = [
     "strands-compose-agentcore>=0.10.0,<1.0.0",
-    # AgentCore Memory session manager (agents.context_manager.session_manager)
-    # and the Identity M2M token for the Gateway (hesta/gateway.py).
-    "bedrock-agentcore",
+    # AgentCore Memory (core/memory.py) and the Identity M2M token for the Gateway (core/gateway.py).
+    "bedrock-agentcore>=1.15.0,<2.0",
     # MCP streamable-HTTP transport used to reach the AgentCore Gateway.
-    "mcp",
+    "mcp>=1.28.0,<2.0",
+    # Provides the `opentelemetry-instrument` command the container starts with (agentcore.json: instrumentation.enableOtel).
+    "aws-opentelemetry-distro>=0.18.0,<1.0",
+    "botocore[crt]>=1.43.36,<2.0",
 ]
 
 [project.optional-dependencies]

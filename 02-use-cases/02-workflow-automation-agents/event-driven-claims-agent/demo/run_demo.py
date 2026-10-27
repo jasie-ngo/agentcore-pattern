@@ -270,7 +270,7 @@ def beat_not_done(s: Screen) -> None:
         "Approvals are not signed. Today an approval is a JSON record anyone could forge.",
         "Nothing delivers a client's pack to a running container. The loader itself now ships in the app's core package.",
         "Rules can be scoped per agent, but only one agent is wired to a pack: an agent with a pack is refused every tool its vocabulary does not list.",
-        "Memory is safe only in the YAML port (verified members only); the deployed app still opens it before checking identity. Dates are checked against today, not the case date.",
+        "Memory is safe only in the YAML port (verified members only); the legacy app still opens it before checking identity. Dates are checked against today, not the case date.",
         "The routing-gate vocabulary is still specific to the first client. Only the tool boundary is extracted.",
         "The framework leans on an alpha, single-maintainer composition library, unpinned in the repo.",
         "No real second client. The health-insurer rules are illustrative, and no health-data threat model exists.",

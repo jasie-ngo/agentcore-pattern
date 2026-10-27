@@ -301,7 +301,8 @@ def test_5_event_driven_email(region):
     print("=" * 70)
 
     account = boto3.client("sts").get_caller_identity()["Account"]
-    bucket_name = f"claims-inbox-{account}-{region}"
+    # The client's own inbox bucket (the original name when there is no client).
+    bucket_name = CTX.bucket(account, region) if CTX is not None else f"claims-inbox-{account}-{region}"
 
     email_content = """From: customer@example.com
 Subject: Insurance Claim - Vehicle Damage
@@ -345,7 +346,7 @@ Jane Doe
     claims_table_name = None
     try:
         cf = boto3.client("cloudformation", region_name=region)
-        resources = cf.list_stack_resources(StackName="AgentCore-ClaimsAgent-dev")["StackResourceSummaries"]
+        resources = cf.list_stack_resources(StackName=STACK_NAME)["StackResourceSummaries"]
         for r in resources:
             if (
                 r["ResourceType"] == "AWS::DynamoDB::Table"
@@ -359,7 +360,9 @@ Jane Doe
         pass
 
     if not claims_table_name:
-        for name in ["ClaimsAgent-dev-Claims", "ClaimsAgent-Claims"]:
+        # A client's table is exactly its own; the original deployment also tries its pre-stage name.
+        fallback_names = [CTX.table("Claims")] if CTX is not None and CTX.client else ["ClaimsAgent-dev-Claims", "ClaimsAgent-Claims"]
+        for name in fallback_names:
             try:
                 boto3.client("dynamodb", region_name=region).describe_table(TableName=name)
                 claims_table_name = name
@@ -395,16 +398,17 @@ Jane Doe
             # Fallback: check Lambda logs
             print("  ⚠️  No POL-67890 claim in DynamoDB. Checking Lambda logs...")
             logs_client = boto3.client("logs", region_name=region)
+            trigger_log_group = f"/aws/lambda/{CTX.function('Trigger')}" if CTX is not None else "/aws/lambda/ClaimsAgent-Trigger"
             try:
                 streams = logs_client.describe_log_streams(
-                    logGroupName="/aws/lambda/ClaimsAgent-Trigger",
+                    logGroupName=trigger_log_group,
                     orderBy="LastEventTime",
                     descending=True,
                     limit=1,
                 )["logStreams"]
                 if streams:
                     events = logs_client.get_log_events(
-                        logGroupName="/aws/lambda/ClaimsAgent-Trigger",
+                        logGroupName=trigger_log_group,
                         logStreamName=streams[0]["logStreamName"],
                         limit=15,
                     )["events"]
@@ -439,8 +443,15 @@ def main():
     parser.add_argument("--region", default="us-west-2")
     parser.add_argument("--test", type=int, default=0, help="Run specific test (1-5), 0=all")
     parser.add_argument("--verbose", "-v", action="store_true", help="Show full agent responses")
+    clientctx.add_arguments(parser)  # --client: run against that client's own stack, bucket and tables
     args = parser.parse_args()
     VERBOSE = args.verbose
+    global STACK_NAME, CTX
+    try:
+        CTX = clientctx.context_from_args(args)
+    except clientctx.CtxError as exc:
+        parser.error(str(exc))
+    STACK_NAME = CTX.stack_name
 
     print("🧪 Event-Driven Claims Agent — E2E Test Suite")
     print(f"   Region: {args.region}")

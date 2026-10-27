@@ -14,13 +14,13 @@ An event-driven insurance claims processing system built on **Amazon Bedrock Age
 
 ## Three agent apps, and the rule-pack layer
 
-`app/` holds three folders that are easy to confuse. Only one is deployed.
+`app/` holds three folders that are easy to confuse. The base `agentcore/agentcore.json` deploys one of them: the YAML port.
 
 | Folder | What it is | Deployed? | How it is built |
 |---|---|---|---|
 | `app/claimsagent/` | The generic insurance claims demo this README describes: Claims Processor plus Validation Agent, confidence-based routing | No. A reference scaffold | Hand-written Python (`main.py`, about 540 lines) |
-| `app/hesta-claimsagent/` | The pilot for an Australian super fund's member-email operations: a pipeline of specialist agents, a deterministic routing gate, nothing auto-sent | **Yes.** `agentcore/agentcore.json` points its runtime here | Hand-written Python (`main.py` about 390 lines, plus `agents/`) |
-| `app/04_hesta_member_email/` | The same pilot rebuilt YAML-first on `strands-compose`: agents, prompts, models and delegation live in `config.yaml` | No. It has no Dockerfile and is not what `agentcore.json` deploys | `config.yaml` plus a small `hesta/` package of tools and the agent factory |
+| `app/hesta-claimsagent/` | The pilot for an Australian super fund's member-email operations: a pipeline of specialist agents, a deterministic routing gate, nothing auto-sent | No longer. It was what `agentcore.json` deployed until 2026-10-25, and is now legacy | Hand-written Python (`main.py` about 390 lines, plus `agents/`) |
+| `app/04_hesta_member_email/` | The same pilot rebuilt YAML-first on `strands-compose`: agents, prompts, models and delegation live in `config.yaml` | **Yes.** `agentcore/agentcore.json` points its runtime here. It has a Dockerfile and locked dependencies | `config.yaml` plus a small `hesta/` package of tools and the agent factory |
 
 The two pilot apps are meant to behave the same. They are kept apart on purpose, and the conformance runner below
 checks them against one feature file (it found a real disagreement between them).
@@ -54,10 +54,36 @@ bash demo/setup.sh && demo/.venv/bin/python demo/run_demo.py     # the demo (nee
 
 **Status: draft.** Be clear about what this is not yet:
 - No pack is approved, and approvals are unsigned JSON, so they can be forged.
-- The Cedar handler is wired into `app/04_hesta_member_email/` only. The **deployed** app, `app/hesta-claimsagent/`, does not use it.
-- Nothing yet delivers a client's pack to a running container. The loader itself now ships inside the app, in `core/`.
-- A rule can be scoped to one agent (`for the agent "X"`), so several agents can share a pack and each is judged as itself. Only `human_handoff` is wired to a pack today, and an agent that carries one is refused every tool its vocabulary does not list, local tools included. Memory is opened only for a verified member in the YAML port, but the deployed app still keys it on the email text before checking identity. Effective dates are checked against today, not the case date.
+- The Cedar handler is wired into `app/04_hesta_member_email/`, which the base spec now deploys, but it is off by default (`CEDAR_PACK_DIR` is empty) and attached only to `human_handoff`. The legacy app, `app/hesta-claimsagent/`, does not use it.
+- A client's pack is copied into its image when the project is assembled and is only switched on if it verifies; nothing here has been deployed to AWS. The loader ships inside the app, in `core/`.
+- A rule can be scoped to one agent (`for the agent "X"`), so several agents can share a pack and each is judged as itself. Only `human_handoff` is wired to a pack today, and an agent that carries one is refused every tool its vocabulary does not list, local tools included. Memory is opened only for a verified member in the YAML port, but the legacy app still keys it on the email text before checking identity. Effective dates are checked against today, not the case date.
 - The Gateway's own Cedar policies (below) still apply. The pack check is an additional, earlier layer, not a replacement.
+
+### Deploying a client: one project per client
+
+`python3 scripts/assemble_client.py <client> [--display-name "…"] [--profile presale] [--pack-dir …] [--enable-pack]` builds
+`build/<client>/` (git-ignored): its own `agentcore.json` (project, memory and credential names for that client; **placeholders for
+its Cognito identity, never another environment's**), the CDK app set to that client, the core and client package with the client's
+pack copied in, and the Lambdas. Two clients in one AWS account then share no physical name, and each gets a key of its own for its
+tables, inbox bucket, review topic and queue. `--enable-pack` is refused unless the pack verifies.
+
+What has been **proved offline** (no AWS credentials were used): the image builds for arm64 and answers `/ping`, runs as a non-root
+user and loads all ten agents inside the container; both assembled projects pass `agentcore validate`; and two assembled clients
+synthesised into one account and region share no physical name. What has **not** been done: any deploy.
+
+`deploy.sh`, `destroy.sh` and the scripts take `--client <slug>` and then act on `build/<slug>` only: its own stack, credential
+provider, Cognito pool and `.env`. With no client they behave as before, with the original names. `--plan` prints every name a
+script would use and stops before any AWS call, so check it first:
+
+```bash
+./deploy.sh ap-southeast-2 --client acme --plan      # names only, nothing changed
+./deploy.sh ap-southeast-2 --client acme             # Cognito, credential, deploy, seed
+./scripts/destroy.sh ap-southeast-2 --client acme    # that client's stack, credential and Cognito pool only
+```
+
+Proved offline: `--plan` for every script (with an `aws` that fails if called), the original names unchanged, two clients sharing no
+name, and refusal of a project that belongs to another client (`tests/test_client_scripts.py`). Not proved: a run against AWS.
+A client's teardown skips the name-matching sweep of leftover AgentCore resources unless you add `--sweep-orphans`.
 
 ## What You'll Learn
 
@@ -104,6 +130,9 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for full component diagrams, 
 - Node.js 18+
 
 ### Deploy
+
+> This quick start is the original single-client flow for the claims demo. To deploy for a client, use the assembled project
+> described under "Deploying a client" above.
 
 ```bash
 cd event-driven-claims-agent
@@ -207,8 +236,8 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 ```
 event-driven-claims-agent/
 ├── app/
-│   ├── hesta-claimsagent/     # The pilot that agentcore.json deploys today (hand-written Python)
-│   ├── 04_hesta_member_email/ # The pilot rebuilt YAML-first (strands-compose). Not deployed
+│   ├── hesta-claimsagent/     # Legacy: the original hand-written pilot (no longer what agentcore.json deploys)
+│   ├── 04_hesta_member_email/ # The pilot, YAML-first (strands-compose): what the base agentcore.json deploys
 │   └── claimsagent/           # Generic insurance demo this README describes. Reference, not deployed
 │       ├── main.py            # Entrypoint: prompts, agents, routing, Identity-managed Gateway OAuth
 │       ├── config.py          # Centralized env var reads

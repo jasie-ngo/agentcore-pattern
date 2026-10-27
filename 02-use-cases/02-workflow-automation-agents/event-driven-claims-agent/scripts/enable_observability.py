@@ -18,6 +18,7 @@ This script is idempotent — safe to run multiple times.
 Usage:
     python3 scripts/enable_observability.py --region us-west-2
     python3 scripts/enable_observability.py --region us-west-2 --stack-name AgentCore-ClaimsAgent-dev
+    python3 scripts/enable_observability.py --region ap-southeast-2 --client acme   # the stack is read from build/acme
 """
 
 import argparse
@@ -26,6 +27,8 @@ import re
 
 import boto3
 from botocore.exceptions import ClientError
+
+import clientctx
 
 DEFAULT_STACK_NAME = "AgentCore-ClaimsAgent-dev"
 
@@ -36,8 +39,15 @@ _NAME_MAX = 60
 def get_args():
     parser = argparse.ArgumentParser(description="Enable AgentCore observability")
     parser.add_argument("--region", default="us-west-2", help="AWS region")
-    parser.add_argument("--stack-name", default=DEFAULT_STACK_NAME, help="CloudFormation stack name")
-    return parser.parse_args()
+    parser.add_argument("--stack-name", default=None, help="CloudFormation stack name (default: the deployment's own stack)")
+    clientctx.add_arguments(parser)
+    args = parser.parse_args()
+    if args.stack_name is None:
+        try:
+            args.stack_name = clientctx.context_from_args(args).stack_name
+        except clientctx.CtxError as exc:
+            parser.error(str(exc))
+    return args
 
 
 def _sanitize(name: str) -> str:

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { AgentCoreStack } from '../lib/cdk-stack';
+import { parseClient } from '../lib/naming';
 import { ConfigIO, type AgentCoreMcpSpec, type AwsDeploymentTarget } from '@aws/agentcore-cdk';
 import { App, Aspects, type Environment } from 'aws-cdk-lib';
 import { AwsSolutionsChecks } from 'cdk-nag';
@@ -11,6 +12,20 @@ function toEnvironment(target: AwsDeploymentTarget): Environment {
     account: target.account,
     region: target.region,
   };
+}
+
+/**
+ * The `context` block of this project's cdk.json, read directly. The CDK command-line tool injects it into the app, but running
+ * the app on its own does not, and the client for a deployment lives there (scripts/assemble_client.py writes it). Reading it
+ * here means every way of running the app agrees.
+ */
+function readCdkJsonContext(): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'cdk.json'), 'utf8'));
+    return (parsed.context ?? {}) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
 }
 
 function sanitize(name: string): string {
@@ -52,6 +67,18 @@ async function main() {
 
   const app = new App();
 
+  // The client this deployment belongs to (ADR-0015 Q7). `-c client=acme` or AGENTCORE_CLIENT. Unset keeps the original shared
+  // names, so an existing deployment is unchanged. A malformed slug stops here with a readable message.
+  // Precedence: CDK context (-c, or cdk.json via the tool), then the environment, then cdk.json read directly.
+  const fileContext = readCdkJsonContext();
+  const client = parseClient(
+    app.node.tryGetContext('client') ?? process.env.AGENTCORE_CLIENT ?? (fileContext.client as string | undefined)
+  );
+  const clientDisplayName: string | undefined =
+    app.node.tryGetContext('clientName') ??
+    (process.env.AGENTCORE_CLIENT_NAME || undefined) ??
+    (fileContext.clientName as string | undefined);
+
   for (const target of targets) {
     const env = toEnvironment(target);
     const stackName = toStackName(spec.name, target.name);
@@ -69,11 +96,14 @@ async function main() {
       spec,
       mcpSpec,
       credentials,
+      client,
+      clientDisplayName,
       env,
       description: `AgentCore stack for ${spec.name} deployed to ${target.name} (${target.region})`,
       tags: {
         'agentcore:project-name': spec.name,
         'agentcore:target-name': target.name,
+        ...(client ? { 'agentcore:client': client } : {}),
       },
     });
   }

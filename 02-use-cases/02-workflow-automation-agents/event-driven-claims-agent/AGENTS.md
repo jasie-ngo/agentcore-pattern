@@ -2,18 +2,20 @@
 
 > **For humans:** This file provides context for AI coding assistants (Kiro, Cursor, Claude Code, GitHub Copilot). For the human-readable documentation, see [docs/](./docs/README.md), [README.md](./README.md), [docs/tutorial.md](./docs/tutorial.md), or [app/hesta-claimsagent/IMPLEMENTATION_PLAN.md](./app/hesta-claimsagent/IMPLEMENTATION_PLAN.md) for the pilot currently deployed.
 
-This repo contains **three agent applications sharing one event-driven scaffold** (only `app/hesta-claimsagent/` is deployed) (S3 → EventBridge → Trigger Lambda → AgentCore Runtime → MCP Gateway → Lambda tools):
+This repo contains **three agent applications sharing one event-driven scaffold** (the base `agentcore.json` deploys `app/04_hesta_member_email/`; the other two are legacy) (S3 → EventBridge → Trigger Lambda → AgentCore Runtime → MCP Gateway → Lambda tools):
 
 - **`app/claimsagent/`** — the original generic **insurance claims demo**: dual-agent (Claims Processor + Validation Agent) with confidence-based auto-approve/human-review routing. Kept in place as the reference scaffold; **not currently deployed**.
-- **`app/hesta-claimsagent/`** — **the actively developed pilot, and the one `agentcore.json` deploys today** (`runtimes[0].name = "hestaclaimsagent"`, `codeLocation = "app/hesta-claimsagent"`). Repurposes the same scaffold into HESTA's (an Australian superannuation fund) member-email agentic operations platform: seven agents understand and prepare a case, a human approves every regulated action, nothing is auto-sent. See [app/hesta-claimsagent/IMPLEMENTATION_PLAN.md](./app/hesta-claimsagent/IMPLEMENTATION_PLAN.md) for the full design (business reframe, intent taxonomy, phased delivery) and `docs/hesta-claims-agent-*.md` at the repo root for the hardening-track spec/decisions log layered on top of it.
+- **`app/hesta-claimsagent/`** — **the original hand-written pilot. Legacy: `agentcore.json` no longer deploys it** (it pointed here until 2026-10-25; a stack deployed before then keeps running it until redeployed). Repurposes the same scaffold into HESTA's (an Australian superannuation fund) member-email agentic operations platform: seven agents understand and prepare a case, a human approves every regulated action, nothing is auto-sent. See [app/hesta-claimsagent/IMPLEMENTATION_PLAN.md](./app/hesta-claimsagent/IMPLEMENTATION_PLAN.md) for the full design (business reframe, intent taxonomy, phased delivery) and `docs/hesta-claims-agent-*.md` at the repo root for the hardening-track spec/decisions log layered on top of it.
 
-- **`app/04_hesta_member_email/`** — the same HESTA pilot rebuilt **YAML-first** on `strands-compose`: agents, prompts, models and delegation are in `config.yaml`, with a small `hesta/` package (tools, factory, gateway, memory). **Not deployed** (no Dockerfile; `agentcore.json` does not point at it). It is where the optional Cedar rule-pack handler is wired in (see Key Invariant 13).
+- **`app/04_hesta_member_email/`** — the same HESTA pilot rebuilt **YAML-first** on `strands-compose`: agents, prompts, models and delegation are in `config.yaml`, with a small `hesta/` package (tools, factory, gateway, memory). **The core, and what the base `agentcore.json` deploys** (`runtimes[0].name = "memberemailagent"`, `codeLocation = "app/04_hesta_member_email"`; it has a Dockerfile and `uv.lock`). It is where the optional Cedar rule-pack handler is wired in (see Key Invariant 13).
 
 > **Important:** AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, OnlineEval) are declared in `agentcore/agentcore.json` and managed by the AgentCore CLI. Supplementary infrastructure (DynamoDB, Lambda tools, SNS, S3, EventBridge) is defined in the TypeScript CDK app at `agentcore/cdk/lib/infra-construct.ts`. The Cognito User Pool (Gateway M2M auth) is managed by `scripts/setup_cognito.sh` (AWS CLI, not CDK). Use `agentcore validate` and `agentcore dev` while iterating; run `agentcore deploy --target dev` to deploy everything together. **This infra layer is shared and unchanged by which app is deployed** — only `agentcore.json`'s `codeLocation` decides whose code the Runtime container runs.
 
 ---
 
-## Architecture — `app/hesta-claimsagent` (the deployed pilot)
+## Architecture — `app/hesta-claimsagent` (the legacy hand-written pilot)
+
+> The YAML port has the same shape (UNDERSTAND, DECIDE, EXECUTE, LEARN), composed in `config.yaml` with identity checked before memory. This section describes the legacy app.
 
 ```
 S3 upload (claims-inbox/ — any file is treated as an inbound "email")
@@ -56,7 +58,7 @@ event-driven-claims-agent/
 ├── README.md                          # Full project documentation (describes the claimsagent scaffold)
 ├── deploy.sh                          # One-command deploy (runs CDK; deploys whatever agentcore.json points at — currently hestaclaimsagent)
 │
-├── app/hesta-claimsagent/             # ★ the pilot agentcore.json deploys today
+├── app/hesta-claimsagent/             # Legacy: the original hand-written pilot (no longer deployed by agentcore.json)
 │   ├── IMPLEMENTATION_PLAN.md         # Authoritative pilot design doc — read this first
 │   ├── README.md                      # AgentCore-CLI-generated boilerplate (local dev basics only)
 │   ├── Dockerfile                     # Multi-stage, Python 3.12, ARM64, uv-managed
@@ -83,7 +85,7 @@ event-driven-claims-agent/
 │   ├── memory/session.py              # AgentCore Memory session manager (SEMANTIC + SUMMARIZATION, actor = member number)
 │   └── tools/gateway.py               # MCP Gateway client + call_tool wrapper
 │
-├── app/04_hesta_member_email/         # HESTA pilot, YAML-first (strands-compose). NOT deployed.
+├── app/04_hesta_member_email/         # ★ THE CORE, YAML-first (strands-compose). What the base agentcore.json deploys. Has a Dockerfile and uv.lock.
 │   ├── config.yaml                    # Agents, prompts, models, delegation. `cedar_pack: ${CEDAR_PACK_DIR:-}` on human_handoff (off by default)
 │   ├── main.py                        # create_app(config.yaml) — AgentCore Runtime entrypoint
 │   ├── core/                          # ★ CLIENT-NEUTRAL core, ships in every container: cedar_pack.py, gherkin.py, factory.py,
@@ -120,7 +122,7 @@ event-driven-claims-agent/
 │
 ├── agentcore/
 │   ├── agentcore.json                 # Declarative AgentCore resources. runtimes[0]: name="hestaclaimsagent",
-│   │                                   #   codeLocation="app/hesta-claimsagent" — THIS is what actually deploys.
+│   │                                   #   codeLocation="app/04_hesta_member_email" — THIS is what the base spec deploys.
 │   ├── aws-targets.json               # Deployment targets (account + region)
 │   └── cdk/lib/
 │       ├── infra-construct.ts         # Supplementary AWS infra (DynamoDB, S3, SNS, EventBridge, Lambdas — Cognito is script-managed)
@@ -129,7 +131,9 @@ event-driven-claims-agent/
 ├── scripts/
 │   ├── deploy.sh                      # Deploy helper
 │   ├── destroy.sh                     # Unified teardown (observability → stack → orphans → Cognito → state)
-│   ├── cleanup_agentcore.py           # Delete orphaned AgentCore control-plane resources (boto3)
+│   ├── cleanup_agentcore.py           # Delete the stack and, for the original deployment (or with --sweep-orphans), orphaned AgentCore resources (boto3)
+│   ├── clientctx.py                   # ★ Which deployment is this? Resolves --client / AGENTCORE_CLIENT to the stack, credential, Cognito and table names
+│   ├── lib/ctx.sh                     # ★ Shared bash: --client, --project-dir, --target, --plan, --sweep-orphans, and `ctx_load`
 │   ├── setup_cognito.sh               # Create Cognito User Pool via AWS CLI (not CDK)
 │   ├── teardown_cognito.sh            # Delete Cognito if script-created
 │   ├── enable_observability.py        # Enable Transaction Search + Gateway/Memory deliveries
@@ -161,6 +165,10 @@ event-driven-claims-agent/
 │   ├── test_core_is_client_neutral.py # ★ core/ names no client, imports no client package, and works with only the app dir
 │   ├── test_hesta_profile_gates.py    # ★ strict/presale profile, sender-authentication cap, COD and RTC rules (ADR-0015)
 │   ├── test_model_pin.py              # ★ the default models are the pinned ones; changing them is a deliberate edit
+│   ├── test_deployable_core.py        # ★ the base spec deploys the YAML port; Dockerfile, lockfile and pinned models agree
+│   ├── test_infra_client_mode.py      # ★ CDK names, per-client key, tags and wording, legacy vs client mode (needs Node)
+│   ├── test_assemble_client.py        # ★ the assembler; two assembled clients share no physical name (integration part needs Node)
+│   ├── test_client_scripts.py         # ★ the scripts act on one deployment: original names unchanged, `--plan` makes no AWS call, wrong project refused
 │   ├── test_trigger.py                # Trigger Lambda
 │   └── sample-claim-email.txt         # Email for E2E test 5 (uses POL-67890)
 │
@@ -192,7 +200,7 @@ event-driven-claims-agent/
 ./deploy.sh [region]          # defaults to us-west-2; HESTA-specific scripts default to ap-southeast-2 — pass explicitly
 ```
 
-This runs: configure target → npm install (CDK) → uv sync (agent) → `agentcore validate` → cdk bootstrap → `agentcore deploy --target dev` → seed DynamoDB → prints test commands. Because `agentcore.json`'s only runtime entry points at `app/hesta-claimsagent`, this deploys the HESTA pilot, not the original insurance demo.
+This runs: configure target → npm install (CDK) → uv sync (agent) → `agentcore validate` → cdk bootstrap → `agentcore deploy --target dev` → seed DynamoDB → prints test commands. Because `agentcore.json`'s only runtime entry points at `app/04_hesta_member_email`, this deploys the YAML port. **This is the original single-client flow with the original names; for a client use `scripts/assemble_client.py` (Key Invariant 20).**
 
 ### Manual AgentCore / CDK operations
 ```bash
@@ -246,7 +254,7 @@ cd 02-use-cases/02-workflow-automation-agents/event-driven-claims-agent
 # strands) are only installed there. Bare python3 produces false-positive import failures.
 ./.venv/bin/python3 -m unittest discover -s tests -v
 ```
-As of this writing: 186 tests, all pass (run under `unittest discover` with `strands-agents[cedar]`, `strands-compose` and `bedrock-agentcore` installed; the new rule-pack tests skip with a reason without them). `test_hesta_*.py` files exercise the HESTA pilot's `routing.py`, `config.py`, and `agents/base.py`; `test_routing.py`/`test_structured_output.py`/etc. exercise the original `app/claimsagent` scaffold. **Both apps have identically-named modules** (`config.py`, `routing.py`, `models.py`) — every `tests/test_hesta_*.py` and `tests/test_routing.py` file pops the relevant module(s) from `sys.modules` *before* importing and restores them in a module-level `tearDownModule()`, so the suite is order-independent under `unittest discover`. Follow this exact pattern in any new test file that imports from either app — see `tests/test_hesta_model_routing.py` for the reference implementation, and don't put the restore logic inside `if __name__ == "__main__":` (it never runs under `discover`).
+As of this writing (2026-10-27): 278 Python tests (plus 9 TypeScript tests via `npm test` in `agentcore/cdk`), all pass (run under `unittest discover` with `strands-agents[cedar]`, `strands-compose` and `bedrock-agentcore` installed; the new rule-pack tests skip with a reason without them). `test_hesta_*.py` files exercise the HESTA pilot's `routing.py`, `config.py`, and `agents/base.py`; `test_routing.py`/`test_structured_output.py`/etc. exercise the original `app/claimsagent` scaffold. **Both apps have identically-named modules** (`config.py`, `routing.py`, `models.py`) — every `tests/test_hesta_*.py` and `tests/test_routing.py` file pops the relevant module(s) from `sys.modules` *before* importing and restores them in a module-level `tearDownModule()`, so the suite is order-independent under `unittest discover`. Follow this exact pattern in any new test file that imports from either app — see `tests/test_hesta_model_routing.py` for the reference implementation, and don't put the restore logic inside `if __name__ == "__main__":` (it never runs under `discover`).
 
 ### Rule packs and the demo
 ```bash
@@ -268,7 +276,7 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 
 ## Key Invariants
 
-1. **`agentcore.json`'s `runtimes[0].codeLocation` decides which app deploys** — currently `app/hesta-claimsagent`. Changing which app is live is a one-line JSON edit, not a code change; check this file first if "the deployed agent" and "the code you're reading" seem to disagree.
+1. **`agentcore.json`'s `runtimes[0].codeLocation` decides which app deploys** — currently `app/04_hesta_member_email` (the YAML port; it was `app/hesta-claimsagent` until 2026-10-25). Changing which app is live is a one-line JSON edit, not a code change; check this file first if "the deployed agent" and "the code you're reading" seem to disagree.
 2. **The pilot's three reuse decisions are deliberate, not gaps** (`app/hesta-claimsagent/IMPLEMENTATION_PLAN.md` §0): identity reuses `lookup_policy`/`PoliciesTable` as-is (no new GSI/table in the pilot); human-in-the-loop is a DynamoDB record via the MCP Gateway, read out-of-band; the Writer's draft is displayed, never sent via SES. Don't "fix" these by adding new AWS infrastructure without checking the hardening-track docs (`docs/hesta-claims-agent-*.md` at the repo root) first — several of them are explicitly scoped as **post-pilot graduation work**, not bugs in the pilot.
 3. **Attachment validation is marker/count-only in the pilot** (`agents/attachment_validation.py`) — no real file bytes are ingested yet, only `[FILENAME]` presence markers. Real content-based classification is a named, not-yet-scoped prerequisite (see `docs/hesta-claims-agent-spec.md` §3.2) — don't assume attachment content is available to any agent.
 4. **`routing.py`'s `decide()` gate is deterministic (no LLM)** and takes `(intent_result, profile, empathy, attach)` — it escalates on regulated intent, unverified identity, low/ambiguous intent confidence, multiple confident intents, empathy vulnerability/priority flags, personal-advice requests, **and** a missing expected attachment (`attach.status == "missing"`, added in the Phase 1 hardening pass — see the SDD plan below). If you add a new agent output that should ever force human review, it must be wired into this function explicitly; nothing does so automatically.
@@ -280,13 +288,15 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 10. **`agentcore/agentcore.json` is the source of truth for AgentCore resources** (Runtime, Gateway, Memory, PolicyEngine, OnlineEval). Supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`; `cdk-stack.ts` wires the two together. Don't hand-edit generated CDK output.
 11. **Two auth paths:** Inbound to Runtime uses AWS_IAM (SigV4). Outbound from Runtime to Gateway uses Cognito M2M JWT via `@requires_access_token(...)` — secrets live in AgentCore Identity vault, not env vars.
 12. **`app/claimsagent` is off-limits for HESTA pilot changes** — it's the reference scaffold. Every hardening-track task (and this plan's global constraints) explicitly excludes touching it.
-13. **The rule-pack Cedar handler is wired into `app/04_hesta_member_email` only — NOT the deployed app.** `hesta_agent(cedar_pack=...)` in `hesta/factory.py` (a thin binding over `core/factory.py`) attaches it, switched on by `CEDAR_PACK_DIR` (empty = off). `app/hesta-claimsagent/` (what `agentcore.json` deploys) does not use it. Do not describe the pack check as protecting the live runtime. The Gateway's Cedar policies below are separate and still apply.
+13. **The rule-pack Cedar handler is wired into `app/04_hesta_member_email`, which the base spec now deploys, but it is off unless a pack is switched on.** `hesta_agent(cedar_pack=...)` in `hesta/factory.py` (a thin binding over `core/factory.py`) attaches it, switched on by `CEDAR_PACK_DIR` (empty = off). The legacy `app/hesta-claimsagent/` does not use it. Do not describe the pack check as protecting a runtime unless `CEDAR_PACK_DIR` is set and the pack verifies. The Gateway's Cedar policies below are separate and still apply.
 14. **Core versus client.** Everything in `app/04_hesta_member_email/core/` must hold no client's name, tool names, arguments or values: those live in a pack's `vocabulary.yaml` and in the client package (`hesta/`). `core/` may import only the standard library, `strands`, `strands_compose`, `bedrock_agentcore`, `mcp`, `yaml` and `cedarpy`, and must work when only the app directory exists; `tests/test_core_is_client_neutral.py` enforces both. A second client is a new package beside `hesta/`, not an edit to `core/`. A client's documents and pack go in `clients/<name>/`, and nothing in `clients/` may be imported by the core. If a client seems to need a core change, record it as a core edit rather than working around it. Known exception: `run_feature.py` still holds the first client's routing-gate steps and adapters (extraction not done).
 15. **Packs are external by design** — not packaged with the app. A pack loads only if its hashes match, a recompile equals the policy on disk, an approval is bound to both the feature file and the vocabulary, and today's date is inside its window. Approvals are currently **unsigned JSON** (forgeable) and no real pack is approved; `_approve_fixture` in `cedar_pack.py` is a labelled test fixture, never a real approval. Nothing yet delivers a pack to a running container. Rules can be scoped per agent (`for the agent "X"`): the names are listed in the vocabulary's optional `agents:` section and compile to the principal `Agent::"<name>"`, which is how `hesta/factory.py` builds each agent. An agent that carries a pack is denied every tool not allowed for it, **local tools included**, so list them in the vocabulary (a tool's `action` is the local tool's name). Only `human_handoff` is wired to a pack in `config.yaml`.
 16. **Never put a client or prospect name on a demo screen.** Everything the demo prints goes through `demo/anonymise.py` (the client is renamed; a prospect raises an error). The health-insurer pack is illustrative and must keep that label.
-17. **Memory in the YAML port is gated on a verified identity; in the deployed app it is not.** `app/04_hesta_member_email` has no session manager. `recall_member_memory` and `remember_member_contact` (`hesta/tools.py`, logic in `core/memory.py`) do nothing unless `classify_verification` has verified that member number for that sender address, and the actor is the member number. `app/hesta-claimsagent/main.py` still keys memory on the number in the email text (or the sender address) and opens it before the identity check, so a sender can recall and write into another member's memory. Known gap, deliberately not fixed there. Do not describe the deployed app's memory as per-member-safe.
+17. **Memory in the YAML port is gated on a verified identity; in the legacy app it is not.** `app/04_hesta_member_email` has no session manager. `recall_member_memory` and `remember_member_contact` (`hesta/tools.py`, logic in `core/memory.py`) do nothing unless `classify_verification` has verified that member number for that sender address, and the actor is the member number. `app/hesta-claimsagent/main.py` still keys memory on the number in the email text (or the sender address) and opens it before the identity check, so a sender can recall and write into another member's memory. Known gap, deliberately not fixed there. Do not describe the legacy app's memory as per-member-safe, and do not redeploy it for real member data.
 18. **Deployment profile (ADR-0015).** `DEPLOYMENT_PROFILE` is `strict` unless it is exactly `presale` (`core/profile.py`; a typo means strict). Strict caps a sender who has not passed DMARC at `partial`; presale accepts the address match and is for synthetic data only. **Today nothing sets the authentication signal** (the Trigger Lambda forwards only the body and `From:`), so every strict case is capped. The report stamp is a prompt instruction, not code-enforced. Real member data must never go into a presale deployment: that is a rule, not something the code can detect.
 19. **COD and RTC take the light path only if the request is not an email change or login restore (COD) and not an instruction to move money (RTC).** Enforced in `route_decision` by two intent flags plus a deliberately broad pattern backstop. A bare imperative ("Transfer my super") relies on the flag. Models are pinned (`tests/test_model_pin.py`).
+20. **One project per client (ADR-0015 Q7).** `scripts/assemble_client.py <client>` builds `build/<client>/` with that client's `agentcore.json` (project, memory and credential names; placeholders for Cognito identity, never the base's), the CDK app set to the client in `cdk.json`, and the core plus client package with the client's pack copied in. It refuses to overwrite a directory it did not make, and `--enable-pack` is refused unless the pack verifies. Do not edit `build/` by hand and do not commit it.
+21. **Infrastructure names carry the client, and no client means the original names.** `agentcore/cdk/lib/naming.ts` produces every physical name for the stack's own resources; with no client they are exactly the original ones (so an existing deployment is not replaced), with a client each is prefixed and the data stores use a key of the client's own. `tests/test_infra_client_mode.py` and `tests/test_assemble_client.py` prove this from synthesised templates, including that two assembled clients in one account and region share no name. The one change that applies to every mode is the extra `AGENTCORE_MEMORY_ID` variable on the runtime. **The scripts take the client too (2026-10-27).** `deploy.sh`, `destroy.sh`, `scripts/destroy.sh`, `setup_cognito.sh`, `teardown_cognito.sh`, `fix_credential_region.sh`, `cleanup_agentcore.py`, the observability, seed and test scripts accept `--client <slug>` (or `AGENTCORE_CLIENT`) and get every name from `scripts/clientctx.py` (shell scripts through `scripts/lib/ctx.sh`), which reads the assembled project's own `agentcore.json` and refuses a project that belongs to another client. No client means the original names, and they are pinned by `tests/test_client_scripts.py`. `--plan` prints the names and stops before any AWS call. A client's teardown does not sweep leftover AgentCore resources by name unless `--sweep-orphans` is given, and then matches the client's project name as a whole word, never "contains claims" (that loose match is kept for the original deployment only). In client mode seeding never falls back to scanning for any table with `Policies` in its name. **Not done:** the scripts have not been run against AWS (only `--plan` and the offline tests), and the runtime's `bedrock:InvokeModel` policy lists only the Sonnet foundation model (whether Haiku calls pass is unverified without AWS access). `deploy.sh` Step 4 now installs dependencies in the runtime's own `codeLocation` from `agentcore.json`; it was hard-coded to `app/claimsagent`.
 
 ---
 
