@@ -21,7 +21,8 @@ S3 upload (claims-inbox/)
             Phase 2: claims_validator (Haiku) → ClaimValidation (CONFIDENCE + ROUTING)
             Phase 3: execute_claim_decision tool (no LLM) → create_claim / human_review / send_notification
         → AgentCore Gateway (MCP, Cognito CUSTOM_JWT auth, Cedar policy enforcement)
-            → 6 Lambda tool functions (lambdas/<tool>/handler.py)
+            → tool Lambdas declared in app/<use_case>/gateway_tools.yaml
+              (blueprints: lambdas/blueprints/*, custom: lambdas/<use_case>/<tool>)
 ```
 
 **Auth (two separate paths):**
@@ -47,30 +48,32 @@ event-driven-claims-agent/
 │   │   ├── factory.py                 # Agent factory: structured output + Gateway attachment
 │   │   ├── gateway.py                 # Identity-managed Gateway MCP client, GATEWAY_TOOL_NAMES
 │   │   ├── memory.py                  # AgentCore Memory session manager (local fallback)
+│   │   ├── ingestion.py               # Generic message normaliser → envelope (stdlib only; bundled into the Trigger)
 │   │   └── settings.py                # Generic env vars (region, Gateway)
 │   ├── claims_agent/
 │   │   ├── config.yaml                # Agents, prompts, models, orchestration
+│   │   ├── gateway_tools.yaml         # Gateway tools this use case owns (blueprint + custom)
+│   │   ├── ingestion.yaml             # How inbound submissions are cleaned up
 │   │   ├── schemas.py                 # ClaimDecision, ClaimValidation (structured output)
 │   │   ├── routing.py                 # Phase-3 routing: decide_action, resolve_decision/routing
 │   │   ├── tools.py                   # execute_claim_decision (deterministic Phase 3)
 │   │   └── settings.py                # AUTO_APPROVE_THRESHOLD
-│   └── hesta_agent/                   # HESTA member-email use case (config.yaml + domain modules)
-├── lambdas/                           # One directory per Gateway tool
-│   ├── schemas/                       # MCP tool schemas (JSON) — matched by CDK
-│   ├── trigger/handler.py             # EventBridge → Runtime invocation (SigV4 auth)
-│   ├── create_claim/handler.py        # DDB put on ClaimsTable
-│   ├── policy_lookup/handler.py       # DDB get on PoliciesTable
-│   ├── list_pending_claims/handler.py # DDB scan for pending_review claims
-│   ├── resolve_claim/handler.py       # DDB update on ClaimsTable + ReviewsTable
-│   ├── human_review/handler.py        # DDB put on ReviewsTable + SNS publish
-│   └── notification/handler.py        # SES send email
+│   └── hesta_agent/                   # HESTA member-email use case (config.yaml, ingestion.yaml, gateway_tools.yaml `uses:`, domain modules)
+├── lambdas/                           # Gateway tool Lambdas (declared in app/<use_case>/gateway_tools.yaml)
+│   ├── blueprints/retrieval/          # Blueprint: read records (configured by TOOL_CONFIG)
+│   ├── blueprints/record_write/       # Blueprint: create / find-or-create records
+│   ├── claims_agent/notification/     # Custom tool: SES email (handler.py + schema.json)
+│   ├── claims_agent/resolve_claim/    # Custom tool: approve/deny claim + close reviews
+│   └── trigger/handler.py             # S3 → pick use case → envelope → Runtime (SigV4 auth)
 ├── agentcore/
-│   ├── agentcore.json                 # Declarative AgentCore resources (Runtime/Gateway/Memory/PolicyEngine/Eval)
+│   ├── agentcore.json                 # Declarative AgentCore resources (Runtime/Gateway/Memory/PolicyEngine/Eval); Gateway targets are generated
+│   ├── generated/                     # Built by scripts/build_tools.py — tool schemas + manifest.json (never edit)
 │   ├── aws-targets.json               # Deployment targets (account + region)
 │   └── cdk/lib/
 │       ├── infra-construct.ts         # Supplementary AWS infra (DynamoDB, S3, SNS, EventBridge, Lambdas — Cognito is script-managed)
 │       └── cdk-stack.ts               # Integration: wires infra ARNs + JWT authorizer + runtime env vars
 ├── scripts/
+│   ├── build_tools.py                 # gateway_tools.yaml + ingestion.yaml → schemas, Gateway targets, manifest
 │   ├── deploy.sh                      # Deploy helper
 │   ├── destroy.sh                     # Unified teardown (observability → stack → orphans → Cognito → state)
 │   ├── cleanup_agentcore.py           # Delete orphaned AgentCore control-plane resources (boto3)
@@ -88,10 +91,13 @@ event-driven-claims-agent/
 ├── tests/                             # Offline unit tests (pytest)
 │   ├── test_routing.py                # Phase-3 routing logic
 │   ├── test_claims_tools.py           # execute_claim_decision against a fake Gateway
-│   ├── test_lambda_handlers.py        # Lambda tool handlers
+│   ├── test_lambda_handlers.py        # Blueprint tools, loaded with the real generated settings
+│   ├── test_ingestion.py              # Generic normaliser + each use case's ingestion.yaml
+│   ├── test_build_tools.py            # Generator: generated files fresh, validation rules
 │   ├── test_trigger.py                # Trigger Lambda
 │   └── sample-claim-email.txt        # Email for E2E test 5 (uses POL-67890)
 ├── docs/
+│   ├── FRAMEWORK.md                  # Framework architecture: use cases, envelope, blueprint tools, build step
 │   ├── ARCHITECTURE.md               # System design and data flows
 │   ├── deployment.md                 # Step-by-step deploy, verify, teardown
 │   ├── decisions/                    # Architectural decision records (ADR-0001..0010)
@@ -107,7 +113,7 @@ event-driven-claims-agent/
 ./deploy.sh [region]          # defaults to us-west-2
 ```
 
-This runs: configure target → npm install (CDK) → uv sync (agent) → `agentcore validate` → cdk bootstrap → `agentcore deploy --target dev` → seed DynamoDB → prints test commands.
+This runs: configure target → npm install (CDK) → uv sync (agent) → `scripts/build_tools.py` (Gateway tools) → `agentcore validate` → cdk bootstrap → `agentcore deploy --target dev` → seed DynamoDB → prints test commands.
 
 ### Manual AgentCore / CDK operations
 ```bash
@@ -159,13 +165,14 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 
 1. **Lambda handlers return `json.dumps({...})` directly** — no `{statusCode, body}` envelope. The Gateway strips the HTTP wrapper.
 2. **Agent routing controls claim status** — the `create_claim` Lambda accepts `status` and `decision` as optional parameters from the agent. Do not add routing logic to the Lambda itself.
-3. **Tool schemas live in `lambdas/schemas/`** — each file maps to a Gateway target in the CDK stack via the `toolSchemaFile` field in `agentcore.json`. Keep schemas in sync with Lambda parameters.
+3. **Gateway tools are declared in `app/<use_case>/gateway_tools.yaml`** — blueprint tools (`retrieval`, `record_write`) are a form entry, custom tools point at `lambdas/<use_case>/<tool>/`. After editing, run `uv run --project app python scripts/build_tools.py`: it writes `agentcore/generated/` (schemas + manifest) and the Gateway `targets` in `agentcore.json`. Never edit those by hand; CDK refuses to synth if they are stale. See `docs/FRAMEWORK.md`.
 4. **Container build, not CodeZip** — runtime deps go in `app/pyproject.toml` (managed by `uv`; run `uv lock` in `app/` after changing them). The Dockerfile runs `uv sync --frozen`. `codeLocation` is the whole `app/` folder; switching use case is `USE_CASE` in `app/main.py`, never an `agentcore.json` edit.
 5. **`agentcore/agentcore.json` is the source of truth for AgentCore resources** (Runtime, Gateway, Memory, PolicyEngine, OnlineEval). Supplementary AWS infra is in `agentcore/cdk/lib/infra-construct.ts`; `cdk-stack.ts` wires the two together (patches Lambda ARNs + the Gateway CUSTOM_JWT authorizer discovery URL, injects runtime env vars). Don't hand-edit generated CDK output.
 6. **Two auth paths:** Inbound to Runtime uses AWS_IAM (SigV4) — CDK grants `runtime.grantInvoke()` to the Trigger Lambda. Outbound from Runtime to Gateway uses Cognito M2M JWT via `@requires_access_token(provider_name="cognito-gateway-m2m", auth_flow="M2M")` — secrets live in AgentCore Identity vault, not env vars.
 7. **Structured output** (`claims_agent/schemas.py`) — the processor and validator return `ClaimDecision` / `ClaimValidation` via `agent_kwargs.structured_output`. When a result is missing, routing defaults to safe fallbacks (REJECT for missing decision, HUMAN_REVIEW for missing validation), and AUTO_APPROVE below `AUTO_APPROVE_THRESHOLD` is overridden to HUMAN_REVIEW.
 8. **Phase 3 is deterministic (no LLM picks tools)** — `claims_agent/tools.py:execute_claim_decision` resolves routing and calls Gateway tools directly via `MCPClient.call_tool_async()` using structured data from Phase 1/2. All Phase 3 actions are non-fatal (log + continue on failure).
 9. **`_shared/` stays use-case-neutral** — no domain names, prompts or thresholds there; those live in the use case folder.
+10. **Inbound messages arrive as an envelope** — the Trigger normalises every S3 upload with `app/_shared/ingestion.py` + `app/<use_case>/ingestion.yaml` and sends JSON with `envelope_version` as the prompt. `ingestion.py` must stay standard-library only (it is bundled into the Trigger Lambda). Uploads route by folder: `claims-inbox/<use_case>/<file>`.
 
 ---
 
@@ -186,10 +193,10 @@ find app/ lambdas/ scripts/ -name "*.py" -exec python3 -m py_compile {} \;
 ### Lambda functions (set by CDK)
 | Variable | Lambda(s) | Value |
 |---|---|---|
-| `CLAIMS_TABLE` | create_claim, list_pending, resolve_claim | `ClaimsAgent-dev-Claims` |
-| `POLICIES_TABLE` | policy_lookup | `ClaimsAgent-dev-Policies` |
-| `REVIEWS_TABLE` | human_review, resolve_claim | `ClaimsAgent-dev-Reviews` |
-| `REVIEW_SNS_TOPIC_ARN` | human_review | SNS topic ARN |
+| `TABLE_NAME`, `TOOL_CONFIG` | blueprint tools (lookup_policy, list_pending_claims, create_claim, request_human_review) | the tool's table; its gateway_tools.yaml entry as JSON |
+| `NOTIFY_TOPIC_ARN` | request_human_review | SNS topic ARN |
+| `CLAIMS_TABLE` | resolve_claim | `ClaimsAgent-dev-Claims` |
+| `REVIEWS_TABLE` | resolve_claim | `ClaimsAgent-dev-Reviews` |
 | `SENDER_EMAIL` | notification | SES verified sender |
 
 ### Trigger Lambda (set by CDK)

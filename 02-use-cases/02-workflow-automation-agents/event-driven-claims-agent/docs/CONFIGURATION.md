@@ -52,42 +52,35 @@ cp .env.example .env
 
 > **Table naming convention:** DynamoDB tables follow the pattern `ClaimsAgent-{target}-{Purpose}` where `{target}` is the deployment target name (e.g., `dev`). If you deploy with `--target staging`, tables will be named `ClaimsAgent-staging-Policies`, etc.
 
-### ClaimsAgent-PolicyLookup
-| Variable | Value |
-|----------|-------|
-| `POLICIES_TABLE` | `ClaimsAgent-dev-Policies` |
+### Gateway tool Lambdas
 
-### ClaimsAgent-CreateClaim
-| Variable | Value |
-|----------|-------|
-| `CLAIMS_TABLE` | `ClaimsAgent-dev-Claims` |
+Tool Lambdas are generated from `app/<use_case>/gateway_tools.yaml` (see
+[FRAMEWORK.md](FRAMEWORK.md#4-gateway-tools-blueprints-and-custom-tools)) and named
+`AgentCore-ClaimsAgent-<target>-<gateway target>`, e.g. `AgentCore-ClaimsAgent-dev-policy-lookup`.
 
-### ClaimsAgent-HumanReview
-| Variable | Value |
-|----------|-------|
-| `REVIEWS_TABLE` | `ClaimsAgent-dev-Reviews` |
-| `REVIEW_SNS_TOPIC_ARN` | SNS topic ARN (from CDK) |
+**Blueprint tools** (`lookup_policy`, `list_pending_claims`, `create_claim`, `request_human_review`):
 
-### ClaimsAgent-Notification
 | Variable | Value |
 |----------|-------|
-| `SENDER_EMAIL` | CDK context `sender_email` or `noreply@example.com` |
+| `TABLE_NAME` | The tool's table, e.g. `ClaimsAgent-dev-Policies` |
+| `TOOL_CONFIG` | JSON — the tool's entry from `gateway_tools.yaml` (lookup keys, returned fields, inputs, rules, id…) |
+| `NOTIFY_TOPIC_ARN` | SNS topic ARN — only for tools with `notify:` (`request_human_review`) |
 
-### ClaimsAgent-ListPending
-| Variable | Value |
-|----------|-------|
-| `CLAIMS_TABLE` | `ClaimsAgent-dev-Claims` |
+**Custom tools** get the variables their `custom.environment` declares:
 
-### ClaimsAgent-ResolveClaim
-| Variable | Value |
-|----------|-------|
-| `CLAIMS_TABLE` | `ClaimsAgent-dev-Claims` |
-| `REVIEWS_TABLE` | `ClaimsAgent-dev-Reviews` |
+| Tool | Variable | Value |
+|------|----------|-------|
+| `send_notification` | `SENDER_EMAIL` | `SENDER_EMAIL` at deploy time, or `noreply@example.com` |
+| `resolve_claim` | `CLAIMS_TABLE`, `REVIEWS_TABLE` | `ClaimsAgent-dev-Claims`, `ClaimsAgent-dev-Reviews` |
 
 ### ClaimsAgent-Trigger
 | Variable | Value | Notes |
 |----------|-------|-------|
 | `AGENTCORE_RUNTIME_ARN` | Runtime ARN (from CDK) | Used to construct the SigV4-signed HTTPS invocation URL |
+
+The Trigger also carries `ingestion.py` and `ingestion_configs.json` (each use case's
+`ingestion.yaml` + the default use case), bundled at synth — see
+[FRAMEWORK.md](FRAMEWORK.md#3-front-door-the-envelope).
 
 ---
 
@@ -99,7 +92,7 @@ Cedar policies are declared in `agentcore/agentcore.json` under `policyEngines[0
 
 ## MCP Tool Schema Format
 
-Tool schemas in `lambdas/schemas/` define the contract between the MCP Gateway and each Lambda tool. The Gateway uses these schemas for tool discovery (semantic search matches against `description`) and input validation.
+Tool schemas define the contract between the MCP Gateway and each Lambda tool. The Gateway uses these schemas for tool discovery (semantic search matches against `description`) and input validation.
 
 **Format:** Each file is a JSON array containing one tool object:
 
@@ -118,8 +111,8 @@ Tool schemas in `lambdas/schemas/` define the contract between the MCP Gateway a
 ```
 
 **How it's wired:**
-1. Schema file lives at `lambdas/schemas/<tool_name>.json`
-2. `agentcore/agentcore.json` references it via `toolSchemaFile: "lambdas/schemas/<tool_name>.json"`
+1. Blueprint tools: generated from `gateway_tools.yaml` into `agentcore/generated/schemas/<tool_name>.json`. Custom tools: hand-written `lambdas/<use_case>/<tool>/schema.json`
+2. `scripts/build_tools.py` writes the `toolSchemaFile` path into `agentcore/agentcore.json` — never edit the Gateway targets by hand
 3. CDK loads it via `ToolSchema.from_local_asset(...)` during synthesis
 4. The Gateway registers the tool with its name, description, and input schema
 5. The agent discovers tools via semantic search (matching the `description` field)

@@ -1,21 +1,24 @@
-"""Unit tests for the Trigger Lambda's pure email-parsing helpers.
+"""Unit tests for the Trigger Lambda's parsing, routing and normalising helpers.
 
-Covers `parse_email` and `is_email_format` in lambdas/trigger/handler.py — the
-stdlib-only functions that turn an S3 object into a structured prompt. The
-handler imports boto3 (lazy clients, no network at import), so importing it is
-safe without AWS credentials.
+Covers `parse_email`, `is_email_format`, `use_case_for_key` and `build_envelope`
+in lambdas/trigger/handler.py — the functions that turn an S3 object into the
+envelope the agent receives. The handler imports boto3 (lazy clients, no network
+at import), so importing it is safe without AWS credentials. From the repo it
+reads ingestion settings from agentcore/generated/manifest.json.
 
 Run:
     python3 -m unittest discover -s tests
 """
 
+import json
 import os
 import sys
 import unittest
 
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-west-2")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas", "trigger"))
 
-from handler import is_email_format, parse_email  # noqa: E402
+from handler import INGESTION, build_envelope, is_email_format, parse_email, use_case_for_key  # noqa: E402
 
 
 class IsEmailFormatTests(unittest.TestCase):
@@ -74,6 +77,43 @@ class ParseEmailTests(unittest.TestCase):
         headers, _ = parse_email(content)
         self.assertIn("from", headers)
         self.assertNotIn("x-custom", headers)
+
+
+
+class UseCaseRoutingTests(unittest.TestCase):
+    def test_folder_selects_use_case(self):
+        self.assertEqual(use_case_for_key("claims-inbox/claims_agent/a.json"), "claims_agent")
+        self.assertEqual(use_case_for_key("claims-inbox/hesta_agent/b.txt"), "hesta_agent")
+
+    def test_no_or_unknown_folder_uses_default(self):
+        default = INGESTION["default_use_case"]
+        self.assertEqual(use_case_for_key("claims-inbox/a.eml"), default)
+        self.assertEqual(use_case_for_key("claims-inbox/unknown/a.eml"), default)
+
+
+class BuildEnvelopeTests(unittest.TestCase):
+    def test_email_headers_reach_the_envelope(self):
+        content = "From: Jane Doe <jane@example.com>\nSubject: Hail damage\n\nPlease process POL-12345, $4000."
+        env = build_envelope(content, "bucket", "claims-inbox/claims_agent/x.eml")
+        self.assertEqual(env["use_case"], "claims_agent")
+        self.assertEqual(env["from_email"], "jane@example.com")
+        self.assertEqual(env["subject"], "Hail damage")
+        self.assertEqual(env["id_for_lookup"], "POL-12345")
+        self.assertEqual(env["source"], "s3://bucket/claims-inbox/claims_agent/x.eml")
+
+    def test_json_claim_uses_claimant_email(self):
+        content = json.dumps({"policy_number": "POL-67890", "claimant_email": "j@x.co", "amount": 100})
+        env = build_envelope(content, "b", "claims-inbox/claims_agent/c.json")
+        self.assertEqual((env["from_email"], env["id_for_lookup"]), ("j@x.co", "POL-67890"))
+
+    def test_sample_payload_prompt_is_unwrapped(self):
+        content = json.dumps({"prompt": "Member number: 60030001 please help", "sender_email": "a@b.co"})
+        env = build_envelope(content, "b", "claims-inbox/hesta_agent/p.json")
+        self.assertEqual(env["latest_message"], "Member number: 60030001 please help")
+        self.assertEqual(env["id_for_lookup"], "60030001")
+
+    def test_envelope_is_json_serialisable(self):
+        json.dumps(build_envelope("plain text", "b", "claims-inbox/x.txt"))
 
 
 if __name__ == "__main__":

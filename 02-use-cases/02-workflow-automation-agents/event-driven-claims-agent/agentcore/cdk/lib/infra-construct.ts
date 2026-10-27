@@ -2,12 +2,16 @@
  * InfraConstruct: Supplementary infrastructure for the Claims Agent.
  *
  * Creates resources that the AgentCore CLI cannot manage natively:
- * - DynamoDB tables (Policies, Claims, Reviews)
+ * - Shared DynamoDB tables (Policies, Claims, Reviews) + any tables the use cases declare
  * - S3 bucket (claims email inbox, EventBridge enabled)
- * - Lambda tool functions (6 tools wired to Gateway via lambdaArnMap)
- * - Trigger Lambda (EventBridge → Runtime invocation)
+ * - Gateway tool Lambdas — one per tool in app/<use_case>/gateway_tools.yaml, built
+ *   from a blueprint (lambdas/blueprints/*) or custom code, wired via lambdaArnMap
+ * - Trigger Lambda (EventBridge → normalise with app/_shared/ingestion.py → Runtime)
  * - EventBridge rule (S3 PutObject → Trigger)
  * - SNS topic (human review notifications)
+ *
+ * Tools and ingestion settings come from agentcore/generated/manifest.json, written by
+ * scripts/build_tools.py. Synth fails if the YAML forms changed since that build.
  *
  * Cognito is managed externally (scripts/setup_cognito.sh) and its values
  * are passed via environment variables at synth time.
@@ -27,7 +31,95 @@ import * as eventsTargets from 'aws-cdk-lib/aws-events-targets';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as bedrock from 'aws-cdk-lib/aws-bedrock';
 import { Construct } from 'constructs';
+import * as crypto from 'crypto';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+
+/** Tool/ingestion manifest written by scripts/build_tools.py (see docs/FRAMEWORK.md). */
+interface TableRef {
+  existing?: string;
+  created?: string;
+}
+interface KeySpec {
+  name: string;
+  type: string;
+}
+interface CreatedTableSpec {
+  id: string;
+  use_case: string;
+  key: string;
+  partition_key: KeySpec;
+  sort_key?: KeySpec | null;
+  indexes: { name: string; partition_key: KeySpec; sort_key?: KeySpec }[];
+}
+interface ToolSpec {
+  name: string;
+  target: string;
+  use_case: string;
+  kind: 'blueprint' | 'custom';
+  code: string;
+  // blueprint tools
+  table?: TableRef;
+  table_access?: 'read' | 'write';
+  tool_config?: Record<string, unknown>;
+  notify?: boolean;
+  // custom tools
+  environment?: Record<string, { table?: TableRef; env?: string; default?: string; value?: string }>;
+  table_grants?: { table: TableRef; access: 'read' | 'write' }[];
+  permissions?: string[];
+}
+interface ToolManifest {
+  source_hash: string;
+  default_use_case: string;
+  tables: CreatedTableSpec[];
+  tools: ToolSpec[];
+  ingestion: Record<string, unknown>;
+}
+
+const REBUILD_HINT = 'run: uv run --project app python scripts/build_tools.py';
+
+/** Same hash as scripts/build_tools.py:source_hash() — path + content (CRLF→LF) per file. */
+function toolSourceHash(projectRoot: string): string {
+  const app = path.join(projectRoot, 'app');
+  const files = [path.join(app, 'main.py')];
+  for (const entry of fs.readdirSync(app, { withFileTypes: true })) {
+    const dir = path.join(app, entry.name);
+    if (!entry.isDirectory() || entry.name.startsWith('_') || !fs.existsSync(path.join(dir, 'config.yaml'))) continue;
+    for (const name of ['gateway_tools.yaml', 'ingestion.yaml']) {
+      if (fs.existsSync(path.join(dir, name))) files.push(path.join(dir, name));
+    }
+  }
+  const rel = (f: string) => path.relative(projectRoot, f).split(path.sep).join('/');
+  files.sort((a, b) => (rel(a) < rel(b) ? -1 : rel(a) > rel(b) ? 1 : 0));
+  const hash = crypto.createHash('sha256');
+  for (const f of files) {
+    hash.update(Buffer.concat([Buffer.from(rel(f)), Buffer.from([0])]));
+    const content = fs.readFileSync(f).toString('latin1').replace(/\r\n/g, '\n');
+    hash.update(Buffer.concat([Buffer.from(content, 'latin1'), Buffer.from([0])]));
+  }
+  return hash.digest('hex');
+}
+
+function loadToolManifest(projectRoot: string): ToolManifest {
+  const manifestPath = path.join(projectRoot, 'agentcore', 'generated', 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    throw new Error(`agentcore/generated/manifest.json is missing — ${REBUILD_HINT}`);
+  }
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as ToolManifest;
+  if (manifest.source_hash !== toolSourceHash(projectRoot)) {
+    throw new Error(`app/*/gateway_tools.yaml or ingestion.yaml changed since the last tool build — ${REBUILD_HINT}`);
+  }
+  return manifest;
+}
+
+const pascal = (s: string) =>
+  s
+    .split(/[^A-Za-z0-9]+/)
+    .filter(Boolean)
+    .map(w => w[0].toUpperCase() + w.slice(1))
+    .join('');
+const attrType = (t: string) => (t === 'number' ? dynamodb.AttributeType.NUMBER : dynamodb.AttributeType.STRING);
 
 export interface InfraConstructProps {
   /** Whether to destroy data on stack delete (default: true for dev) */
@@ -115,93 +207,86 @@ export class InfraConstruct extends Construct {
     this.cognitoDiscoveryUrl = process.env.COGNITO_DISCOVERY_URL || 'PLACEHOLDER_DISCOVERY_URL';
     this.cognitoClientId = process.env.AGENTCORE_GATEWAY_CLIENT_ID || 'PLACEHOLDER_CLIENT_ID';
 
-    // ─── Lambda Tool Functions ─────────────────────────────────────
+    // ─── Gateway tool Lambdas (from app/<use_case>/gateway_tools.yaml) ──
+    // One Lambda per tool. Blueprint tools share code (lambdas/blueprints/<type>) and
+    // differ only in their settings; custom tools bring their own code folder.
 
     const lambdasPath = path.join(projectRoot, 'lambdas');
-
-    const policyLookupFn = new lambda_.Function(this, 'PolicyLookupFn', {
-      functionName: 'ClaimsAgent-PolicyLookup',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'policy_lookup')),
-      environment: { POLICIES_TABLE: policiesTable.tableName },
-      timeout: cdk.Duration.seconds(10),
-    });
-    policiesTable.grantReadData(policyLookupFn);
-
-    const createClaimFn = new lambda_.Function(this, 'CreateClaimFn', {
-      functionName: 'ClaimsAgent-CreateClaim',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'create_claim')),
-      environment: { CLAIMS_TABLE: claimsTable.tableName },
-      timeout: cdk.Duration.seconds(10),
-    });
-    claimsTable.grantReadWriteData(createClaimFn);
-
-    const humanReviewFn = new lambda_.Function(this, 'HumanReviewFn', {
-      functionName: 'ClaimsAgent-HumanReview',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'human_review')),
-      environment: {
-        REVIEWS_TABLE: reviewsTable.tableName,
-        REVIEW_SNS_TOPIC_ARN: reviewTopic.topicArn,
-      },
-      timeout: cdk.Duration.seconds(10),
-    });
-    reviewsTable.grantReadWriteData(humanReviewFn);
-    reviewTopic.grantPublish(humanReviewFn);
-
-    const notificationFn = new lambda_.Function(this, 'NotificationFn', {
-      functionName: 'ClaimsAgent-Notification',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'notification')),
-      environment: { SENDER_EMAIL: process.env.SENDER_EMAIL || 'noreply@example.com' },
-      timeout: cdk.Duration.seconds(10),
-    });
-    notificationFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ses:SendEmail', 'ses:SendRawEmail'],
-        resources: [`arn:aws:ses:${stack.region}:${stack.account}:identity/*`],
-      })
-    );
-
-    const listPendingFn = new lambda_.Function(this, 'ListPendingFn', {
-      functionName: 'ClaimsAgent-ListPending',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'list_pending_claims')),
-      environment: { CLAIMS_TABLE: claimsTable.tableName },
-      timeout: cdk.Duration.seconds(10),
-    });
-    claimsTable.grantReadData(listPendingFn);
-
-    const resolveClaimFn = new lambda_.Function(this, 'ResolveClaimFn', {
-      functionName: 'ClaimsAgent-ResolveClaim',
-      runtime: lambda_.Runtime.PYTHON_3_12,
-      handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'resolve_claim')),
-      environment: {
-        CLAIMS_TABLE: claimsTable.tableName,
-        REVIEWS_TABLE: reviewsTable.tableName,
-      },
-      timeout: cdk.Duration.seconds(10),
-    });
-    claimsTable.grantReadWriteData(resolveClaimFn);
-    reviewsTable.grantReadWriteData(resolveClaimFn);
-
-    // ─── Lambda ARN Map (gateway target name → function ARN) ──────
-
-    this.lambdaArnMap = {
-      'policy-lookup': policyLookupFn.functionArn,
-      'create-claim': createClaimFn.functionArn,
-      'human-review': humanReviewFn.functionArn,
-      'notification': notificationFn.functionArn,
-      'list-pending-claims': listPendingFn.functionArn,
-      'resolve-claim': resolveClaimFn.functionArn,
+    const manifest = loadToolManifest(projectRoot);
+    const existingTables: Record<string, dynamodb.Table> = {
+      Policies: policiesTable,
+      Claims: claimsTable,
+      Reviews: reviewsTable,
     };
+    const createdTables: Record<string, dynamodb.Table> = {};
+    for (const spec of manifest.tables) {
+      const table = new dynamodb.Table(this, `Table${pascal(spec.id)}`, {
+        tableName: `${stack.stackName}-${spec.use_case}-${spec.key}`.replace(/_/g, '-'),
+        partitionKey: { name: spec.partition_key.name, type: attrType(spec.partition_key.type) },
+        sortKey: spec.sort_key ? { name: spec.sort_key.name, type: attrType(spec.sort_key.type) } : undefined,
+        billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+        removalPolicy,
+      });
+      for (const index of spec.indexes) {
+        table.addGlobalSecondaryIndex({
+          indexName: index.name,
+          partitionKey: { name: index.partition_key.name, type: attrType(index.partition_key.type) },
+          sortKey: index.sort_key ? { name: index.sort_key.name, type: attrType(index.sort_key.type) } : undefined,
+          projectionType: dynamodb.ProjectionType.ALL,
+        });
+      }
+      createdTables[spec.id] = table;
+    }
+    const tableFor = (ref: TableRef | undefined, tool: string): dynamodb.Table => {
+      const table = ref?.existing ? existingTables[ref.existing] : ref?.created ? createdTables[ref.created] : undefined;
+      if (!table) throw new Error(`Tool ${tool}: unknown table ${JSON.stringify(ref)} — ${REBUILD_HINT}`);
+      return table;
+    };
+    const grant = (table: dynamodb.Table, fn: lambda_.Function, access: 'read' | 'write') =>
+      access === 'write' ? table.grantReadWriteData(fn) : table.grantReadData(fn);
+
+    this.lambdaArnMap = {};
+    for (const tool of manifest.tools) {
+      const environment: Record<string, string> = {};
+      if (tool.kind === 'blueprint') {
+        environment.TABLE_NAME = tableFor(tool.table, tool.name).tableName;
+        environment.TOOL_CONFIG = JSON.stringify(tool.tool_config ?? {});
+        if (tool.notify) environment.NOTIFY_TOPIC_ARN = reviewTopic.topicArn;
+      } else {
+        for (const [name, spec] of Object.entries(tool.environment ?? {})) {
+          if (spec.table) environment[name] = tableFor(spec.table, tool.name).tableName;
+          else if (spec.env) environment[name] = process.env[spec.env] || spec.default || '';
+          else environment[name] = spec.value ?? '';
+        }
+      }
+
+      const kindLabel = tool.kind === 'blueprint' ? path.basename(tool.code) : 'custom';
+      const fn = new lambda_.Function(this, `Tool${pascal(tool.target)}Fn`, {
+        functionName: `${stack.stackName}-${tool.target}`.slice(0, 64),
+        description: `Gateway tool ${tool.name} (${tool.use_case}, ${kindLabel})`,
+        runtime: lambda_.Runtime.PYTHON_3_12,
+        handler: 'handler.handler',
+        code: lambda_.Code.fromAsset(path.join(projectRoot, tool.code)),
+        environment,
+        timeout: cdk.Duration.seconds(10),
+      });
+
+      if (tool.kind === 'blueprint') {
+        grant(tableFor(tool.table, tool.name), fn, tool.table_access ?? 'read');
+        if (tool.notify) reviewTopic.grantPublish(fn);
+      } else {
+        for (const g of tool.table_grants ?? []) grant(tableFor(g.table, tool.name), fn, g.access);
+        if (tool.permissions?.includes('ses_send')) {
+          fn.addToRolePolicy(
+            new iam.PolicyStatement({
+              actions: ['ses:SendEmail', 'ses:SendRawEmail'],
+              resources: [`arn:aws:ses:${stack.region}:${stack.account}:identity/*`],
+            })
+          );
+        }
+      }
+      this.lambdaArnMap[tool.target] = fn.functionArn;
+    }
 
     // ─── Dead-Letter Queue (failed claim triggers) ────────────────
 
@@ -225,11 +310,22 @@ export class InfraConstruct extends Construct {
 
     // ─── Trigger Lambda (EventBridge → Runtime) ───────────────────
 
+    // The Trigger normalises every upload with the same code the agents use
+    // (app/_shared/ingestion.py) and each use case's ingestion settings. Its files are
+    // staged together at synth time rather than kept as copies in the repo.
+    const triggerStage = fs.mkdtempSync(path.join(os.tmpdir(), 'agentcore-trigger-'));
+    fs.copyFileSync(path.join(lambdasPath, 'trigger', 'handler.py'), path.join(triggerStage, 'handler.py'));
+    fs.copyFileSync(path.join(projectRoot, 'app', '_shared', 'ingestion.py'), path.join(triggerStage, 'ingestion.py'));
+    fs.writeFileSync(
+      path.join(triggerStage, 'ingestion_configs.json'),
+      JSON.stringify({ default_use_case: manifest.default_use_case, use_cases: manifest.ingestion }, null, 2)
+    );
+
     this.triggerFn = new lambda_.Function(this, 'TriggerFn', {
       functionName: 'ClaimsAgent-Trigger',
       runtime: lambda_.Runtime.PYTHON_3_12,
       handler: 'handler.handler',
-      code: lambda_.Code.fromAsset(path.join(lambdasPath, 'trigger')),
+      code: lambda_.Code.fromAsset(triggerStage),
       environment: {
         // AGENTCORE_RUNTIME_ARN injected by parent stack after Runtime is created
         AGENTCORE_RUNTIME_ARN: 'PENDING',

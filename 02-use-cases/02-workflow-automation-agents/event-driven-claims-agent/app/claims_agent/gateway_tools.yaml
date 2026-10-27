@@ -1,0 +1,99 @@
+# Gateway tools owned by the claims use case.
+#
+# Each entry becomes: a Lambda (built from a blueprint, or your own code), a tool
+# schema the agent sees, and a Gateway target. After editing, rebuild:
+#   uv run --project app python scripts/build_tools.py
+# See docs/FRAMEWORK.md for every option.
+#
+# These tools are also used by hesta_agent (see its gateway_tools.yaml `uses:`).
+
+# Tables the tools read and write. `existing` = a shared table created by the
+# framework's CDK stack (Policies, Claims, Reviews). A table without `existing`
+# is created for this use case from its keys.
+tables:
+  policies: { existing: Policies }
+  claims:   { existing: Claims }
+  reviews:  { existing: Reviews }
+
+tools:
+  # ── Blueprint tools: fill in the form, no code ─────────────────────────────
+
+  - name: lookup_policy
+    target: policy-lookup
+    description: Look up insurance policy details by policy number
+    blueprint: retrieval
+    table: policies
+    lookup:
+      - { key: policy_number, description: "The policy identifier (e.g., POL-2024-001)" }
+    returns: [policy_number, holder_name, email, policy_type, coverage_amount, deductible, status, vehicle]
+
+  - name: list_pending_claims
+    target: list-pending-claims
+    description: List all insurance claims currently awaiting human review
+    blueprint: retrieval
+    table: claims
+    filter: { index: status-index, key: status, value: pending_review }
+    result_key: claims
+    returns: [claim_id, policy_number, description, estimated_amount, category, created_at]
+
+  - name: create_claim
+    target: create-claim
+    description: >-
+      Create a new insurance claim record. The same policy_number + source always
+      maps to the same claim, so re-delivered submissions are not recorded twice.
+    blueprint: record_write
+    table: claims
+    id: { field: claim_id, prefix: CLM, from: [policy_number, source] }
+    if_exists: return_existing
+    inputs:
+      policy_number:    { type: string, required: true, description: "Policy to file claim against" }
+      description:      { type: string, required: true, description: "Description of damage or loss" }
+      estimated_amount: { type: integer, required: true, description: "Estimated dollar amount" }
+      category:         { type: string, required: true, description: "Claim category (auto_collision, property_damage, theft, natural_disaster, medical)" }
+      status:           { type: string, description: "Initial claim status (approved, pending_review). Agent sets this based on routing decision." }
+      decision:         { type: string, description: "Routing decision from the agent (auto_approved, agent_routed, escalated)." }
+      source:           { type: string, description: "Where the submission came from (the envelope's source). Identifies re-deliveries of the same submission." }
+    rules:
+      description:      { max_length: 5000 }
+      estimated_amount: { min: 0, max: 10000000 }
+    defaults: { category: general, status: pending_review, decision: agent_routed }
+    timestamps: [created_at]
+
+  - name: request_human_review
+    target: human-review
+    description: Submit a claim for human review by a senior claims adjuster
+    blueprint: record_write
+    table: reviews
+    id: { field: review_id, prefix: REV }
+    inputs:
+      claim_id:         { type: string, required: true, description: "The claim ID to escalate" }
+      reason:           { type: string, required: true, description: "Why human review is needed" }
+      estimated_amount: { type: number, required: true, description: "Claim amount for prioritization" }
+    set: { status: pending }
+    derived:
+      priority: { from: estimated_amount, gte: 50000, then: high, else: medium }
+    timestamps: [submitted_at]
+    notify: { subject: "[{priority}] Review needed: {claim_id}" }
+
+  # ── Custom tools: real business logic, hand-written Lambda ─────────────────
+
+  - name: send_notification
+    target: notification
+    description: Send email notification to claimant about claim status
+    custom:
+      code: lambdas/claims_agent/notification
+      schema: lambdas/claims_agent/notification/schema.json
+      environment:
+        SENDER_EMAIL: { env: SENDER_EMAIL, default: noreply@example.com }
+      permissions: [ses_send]
+
+  - name: resolve_claim
+    target: resolve-claim
+    description: Approve or deny a pending claim as a human reviewer
+    custom:
+      code: lambdas/claims_agent/resolve_claim
+      schema: lambdas/claims_agent/resolve_claim/schema.json
+      environment:
+        CLAIMS_TABLE:  { table: claims }
+        REVIEWS_TABLE: { table: reviews }
+      tables: { claims: write, reviews: write }

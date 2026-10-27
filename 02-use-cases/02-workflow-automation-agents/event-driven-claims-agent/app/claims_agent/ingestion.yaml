@@ -1,0 +1,10 @@
+# How inbound claim submissions are cleaned up before the agents see them.
+# Read by app/_shared/ingestion.py in the Trigger Lambda (every S3 upload). Direct
+# invocations skip it: the claims coordinator reads raw text as-is.
+# Rebuild after editing: uv run --project app python scripts/build_tools.py
+
+# A SecureGuard policy number, e.g. POL-12345.
+id_patterns:
+  - { regex: '\bPOL-[A-Za-z0-9-]+\b', uppercase: true }
+
+default_sender_type: claimant

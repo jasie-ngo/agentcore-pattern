@@ -16,6 +16,10 @@ echo "Running ruff format check..."
 ruff format --check --verbose --exclude .venv app/ lambdas/ scripts/ tests/
 echo "  ✓ ruff format passed"
 
+echo "Checking generated tool files are up to date..."
+uv run --project app python scripts/build_tools.py --check
+echo "  ✓ generated tool files up to date"
+
 echo "Checking TypeScript compilation..."
 (cd agentcore/cdk && npx tsc --noEmit --listFiles)
 echo "  ✓ TypeScript compiles"

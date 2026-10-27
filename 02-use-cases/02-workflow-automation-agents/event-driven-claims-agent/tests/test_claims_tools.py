@@ -29,9 +29,10 @@ except ImportError:
 class _FakeGateway:
     """Stands in for MCPClient: records calls, returns canned Gateway results."""
 
-    def __init__(self, failing_tools=()):
+    def __init__(self, failing_tools=(), existing_claim=False):
         self.calls = []
         self.failing_tools = set(failing_tools)
+        self.existing_claim = existing_claim
 
     def __enter__(self):
         return self
@@ -43,7 +44,9 @@ class _FakeGateway:
         self.calls.append((name, arguments))
         if name in self.failing_tools:
             return {"status": "error", "toolUseId": tool_use_id, "content": [{"text": "denied by policy"}]}
-        payload = {"claim_id": "CLM-TEST1"} if name.endswith("create_claim") else {"ok": True}
+        payload = {"ok": True}
+        if name.endswith("create_claim"):
+            payload = {"claim_id": "CLM-TEST1", "result": "existing" if self.existing_claim else "created"}
         return {"status": "success", "toolUseId": tool_use_id, "content": [{"text": json.dumps(payload)}]}
 
 
@@ -123,6 +126,27 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
     def test_gateway_unavailable_makes_no_calls(self):
         summary = self._run(None)
         self.assertIn("Gateway unavailable", summary)
+
+    def test_source_is_passed_to_create_claim(self):
+        gw = _FakeGateway()
+        self._run(gw, source="s3://b/claims-inbox/x.eml")
+        self.assertEqual(gw.calls[0][1]["source"], "s3://b/claims-inbox/x.eml")
+
+    def test_no_source_is_not_sent(self):
+        gw = _FakeGateway()
+        self._run(gw)
+        self.assertNotIn("source", gw.calls[0][1])
+
+    def test_redelivered_claim_skips_review_and_notification(self):
+        gw = _FakeGateway(existing_claim=True)
+        summary = self._run(gw, confidence=55, routing="HUMAN_REVIEW", source="s3://b/k")
+        self.assertEqual(self._called(gw), ["create_claim"])
+        self.assertIn("duplicate delivery", summary)
+
+    def test_redelivered_approval_skips_notification(self):
+        gw = _FakeGateway(existing_claim=True)
+        self._run(gw, source="s3://b/k")
+        self.assertEqual(self._called(gw), ["create_claim"])
 
 
 if __name__ == "__main__":

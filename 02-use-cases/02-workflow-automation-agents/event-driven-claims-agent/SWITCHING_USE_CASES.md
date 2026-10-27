@@ -33,7 +33,9 @@ app/
 | Domain logic / deterministic tools for one use case | `app/<use_case>/*.py` |
 | Gateway auth, Memory, agent factory (all use cases) | `app/_shared/*.py` |
 | Which use case is deployed | `app/main.py` → `USE_CASE` |
-| New Lambda tool, Gateway target, Memory strategy | `agentcore/agentcore.json` (infrastructure, not a switch) |
+| How inbound messages are cleaned up | `app/<use_case>/ingestion.yaml` |
+| Gateway tools (lookups, record writes, custom tools) | `app/<use_case>/gateway_tools.yaml`, then `scripts/build_tools.py` |
+| Memory strategy, Cedar policies | `agentcore/agentcore.json` (infrastructure, not a switch) |
 
 A use case's `config.yaml` references the shared code by relative path, e.g.
 `type: ../_shared/factory.py:agent` and
@@ -64,20 +66,16 @@ their recalled history does not mix).
 
 ## Adding a use case
 
-1. Create `app/<name>/` with `__init__.py`, `config.yaml`, and any `schemas.py` /
-   `tools.py` it needs. Use `type: ../_shared/factory.py:agent` for agents and
-   `structured_output: <name>.schemas:<Class>` for structured output.
-2. Python files in the use case that import siblings put `app/` on `sys.path`
-   first (see the top of `claims_agent/tools.py`) and import as
-   `from <name>.<module> import ...`.
-3. Add any new dependency to `app/pyproject.toml` and run `uv lock` in `app/`.
-4. Point `USE_CASE` at it.
+See [docs/FRAMEWORK.md → How to… add a use case](docs/FRAMEWORK.md#7-how-to). In short:
+create `app/<name>/` with `config.yaml`, `ingestion.yaml` and `gateway_tools.yaml`
+(plus any `schemas.py` / `tools.py`), run
+`uv run --project app python scripts/build_tools.py`, point `USE_CASE` at it,
+and upload test files to `claims-inbox/<name>/`.
 
-## Known limitation: payload fields other than `prompt`
+## Uploads and use cases
 
-`strands-compose-agentcore` passes only the payload's `prompt` to the entry
-agent. The Trigger Lambda's top-level `claimant_email` and `source` keys are
-dropped, so the claims pipeline only sees a claimant email that appears inside
-the prompt text (true for JSON claim files, whose content is embedded in the
-prompt; not for `.eml` claims, whose `From:` header is sent separately). Folding
-those fields into `prompt` in `lambdas/trigger/handler.py` closes the gap.
+The Trigger Lambda picks the use case from the S3 folder —
+`claims-inbox/<use_case>/<file>` — and normalises the message with that use
+case's `ingestion.yaml`. Files directly in `claims-inbox/` go to the deployed
+use case. Sender, subject and source travel inside the prompt as the envelope,
+so they reach the agent (see [FRAMEWORK.md](docs/FRAMEWORK.md#3-front-door-the-envelope)).

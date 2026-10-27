@@ -144,7 +144,15 @@
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_POLICY_LOOKUP",
-            "toolSchemaFile": "lambdas/schemas/policy_lookup.json"
+            "toolSchemaFile": "agentcore/generated/schemas/lookup_policy.json"
+          }
+        },
+        {
+          "name": "list-pending-claims",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_LIST_PENDING_CLAIMS",
+            "toolSchemaFile": "agentcore/generated/schemas/list_pending_claims.json"
           }
         },
         {
@@ -152,7 +160,7 @@
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_CREATE_CLAIM",
-            "toolSchemaFile": "lambdas/schemas/create_claim.json"
+            "toolSchemaFile": "agentcore/generated/schemas/create_claim.json"
           }
         },
         {
@@ -160,7 +168,7 @@
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_HUMAN_REVIEW",
-            "toolSchemaFile": "lambdas/schemas/human_review.json"
+            "toolSchemaFile": "agentcore/generated/schemas/request_human_review.json"
           }
         },
         {
@@ -168,15 +176,7 @@
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_NOTIFICATION",
-            "toolSchemaFile": "lambdas/schemas/notification.json"
-          }
-        },
-        {
-          "name": "list-pending-claims",
-          "targetType": "lambdaFunctionArn",
-          "lambdaFunctionArn": {
-            "lambdaArn": "PLACEHOLDER_LIST_PENDING",
-            "toolSchemaFile": "lambdas/schemas/list_pending_claims.json"
+            "toolSchemaFile": "lambdas/claims_agent/notification/schema.json"
           }
         },
         {
@@ -184,7 +184,7 @@
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_RESOLVE_CLAIM",
-            "toolSchemaFile": "lambdas/schemas/resolve_claim.json"
+            "toolSchemaFile": "lambdas/claims_agent/resolve_claim/schema.json"
           }
         }
       ],

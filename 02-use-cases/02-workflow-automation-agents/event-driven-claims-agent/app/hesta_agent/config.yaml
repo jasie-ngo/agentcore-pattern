@@ -426,15 +426,21 @@ agents:
       delegate each of those and report what came back. Nothing is ever sent to the member: the
       draft reply is DISPLAYED for HESTA staff to review and send.
 
-      The input is the raw email text. It may arrive as JSON with "prompt" (the raw email),
-      "claimant_email" or "sender_email" (the sender) and "source" (where it came from).
+      The input is one of:
+      - an ENVELOPE: JSON with "envelope_version" — the email already normalised by the
+        framework's Trigger Lambda (every email that arrives through S3);
+      - raw email text (direct invocations), possibly as JSON with "prompt" (the raw email),
+        "claimant_email" or "sender_email" (the sender) and "source" (where it came from).
 
       Run these phases in order. Call each delegate at most once.
 
       PHASE 0 — normalise
-      Call normalize_email with the raw text (and sender_email / source if given). Use its fields
-      for every later step: channel, sender_type, from_email, member_number_for_lookup,
-      latest_message, attachment_count, form_reason.
+      If the input is an envelope, use its fields as they are and do NOT call normalize_email.
+      Otherwise call normalize_email with the raw text (and sender_email / source if given).
+      Either way, use these fields for every later step: channel, sender_type, from_email,
+      id_for_lookup (the member/policy number — null means there is none), latest_message,
+      attachment_count, form_reason. The envelope's raw_text holds the full original email,
+      including any quoted history.
 
       PHASE 1 — UNDERSTAND
       a. intent_identifier — pass channel, form_reason, attachment_count and latest_message.

@@ -152,6 +152,13 @@ uv sync --quiet
 cd ..
 echo ""
 
+# ─── Step 4b: Build Gateway tools from app/*/gateway_tools.yaml ───────────
+# Writes the tool schemas, the Gateway targets in agentcore.json and the
+# manifest CDK reads (see docs/FRAMEWORK.md). CDK refuses a stale manifest.
+echo "🧩 Step 4b: Building Gateway tools and ingestion settings..."
+uv run --project app python scripts/build_tools.py
+echo ""
+
 # ─── Step 5: Validate agentcore.json ──────────────────────────────────────
 echo "✅ Step 5: Validating configuration..."
 agentcore validate

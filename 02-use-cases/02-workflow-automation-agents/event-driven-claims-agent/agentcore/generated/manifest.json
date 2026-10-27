@@ -1,0 +1,326 @@
+{
+  "_generated": "by scripts/build_tools.py from app/*/gateway_tools.yaml and app/*/ingestion.yaml — do not edit",
+  "source_hash": "fa03612aaf09decc0cb7a718e3fd48722ef993ecad93c907243d84f73a1c147d",
+  "default_use_case": "hesta_agent",
+  "tables": [],
+  "tools": [
+    {
+      "name": "lookup_policy",
+      "target": "policy-lookup",
+      "use_case": "claims_agent",
+      "kind": "blueprint",
+      "blueprint": "retrieval",
+      "code": "lambdas/blueprints/retrieval",
+      "table": {
+        "existing": "Policies"
+      },
+      "table_access": "read",
+      "tool_config": {
+        "lookup": [
+          {
+            "key": "policy_number"
+          }
+        ],
+        "returns": [
+          "policy_number",
+          "holder_name",
+          "email",
+          "policy_type",
+          "coverage_amount",
+          "deductible",
+          "status",
+          "vehicle"
+        ]
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/lookup_policy.json"
+    },
+    {
+      "name": "list_pending_claims",
+      "target": "list-pending-claims",
+      "use_case": "claims_agent",
+      "kind": "blueprint",
+      "blueprint": "retrieval",
+      "code": "lambdas/blueprints/retrieval",
+      "table": {
+        "existing": "Claims"
+      },
+      "table_access": "read",
+      "tool_config": {
+        "filter": {
+          "index": "status-index",
+          "key": "status",
+          "value": "pending_review"
+        },
+        "returns": [
+          "claim_id",
+          "policy_number",
+          "description",
+          "estimated_amount",
+          "category",
+          "created_at"
+        ],
+        "result_key": "claims"
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/list_pending_claims.json"
+    },
+    {
+      "name": "create_claim",
+      "target": "create-claim",
+      "use_case": "claims_agent",
+      "kind": "blueprint",
+      "blueprint": "record_write",
+      "code": "lambdas/blueprints/record_write",
+      "table": {
+        "existing": "Claims"
+      },
+      "table_access": "write",
+      "tool_config": {
+        "inputs": {
+          "policy_number": {
+            "type": "string",
+            "required": true
+          },
+          "description": {
+            "type": "string",
+            "required": true
+          },
+          "estimated_amount": {
+            "type": "integer",
+            "required": true
+          },
+          "category": {
+            "type": "string",
+            "required": true
+          },
+          "status": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "field": "claim_id",
+          "prefix": "CLM",
+          "from": [
+            "policy_number",
+            "source"
+          ]
+        },
+        "if_exists": "return_existing",
+        "rules": {
+          "description": {
+            "max_length": 5000
+          },
+          "estimated_amount": {
+            "min": 0,
+            "max": 10000000
+          }
+        },
+        "defaults": {
+          "category": "general",
+          "status": "pending_review",
+          "decision": "agent_routed"
+        },
+        "timestamps": [
+          "created_at"
+        ]
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/create_claim.json"
+    },
+    {
+      "name": "request_human_review",
+      "target": "human-review",
+      "use_case": "claims_agent",
+      "kind": "blueprint",
+      "blueprint": "record_write",
+      "code": "lambdas/blueprints/record_write",
+      "table": {
+        "existing": "Reviews"
+      },
+      "table_access": "write",
+      "tool_config": {
+        "inputs": {
+          "claim_id": {
+            "type": "string",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "required": true
+          },
+          "estimated_amount": {
+            "type": "number",
+            "required": true
+          }
+        },
+        "id": {
+          "field": "review_id",
+          "prefix": "REV"
+        },
+        "set": {
+          "status": "pending"
+        },
+        "derived": {
+          "priority": {
+            "from": "estimated_amount",
+            "gte": 50000,
+            "then": "high",
+            "else": "medium"
+          }
+        },
+        "timestamps": [
+          "submitted_at"
+        ],
+        "notify": {
+          "subject": "[{priority}] Review needed: {claim_id}"
+        }
+      },
+      "notify": true,
+      "schema_file": "agentcore/generated/schemas/request_human_review.json"
+    },
+    {
+      "name": "send_notification",
+      "target": "notification",
+      "use_case": "claims_agent",
+      "kind": "custom",
+      "code": "lambdas/claims_agent/notification",
+      "environment": {
+        "SENDER_EMAIL": {
+          "env": "SENDER_EMAIL",
+          "default": "noreply@example.com"
+        }
+      },
+      "table_grants": [],
+      "permissions": [
+        "ses_send"
+      ],
+      "schema_file": "lambdas/claims_agent/notification/schema.json"
+    },
+    {
+      "name": "resolve_claim",
+      "target": "resolve-claim",
+      "use_case": "claims_agent",
+      "kind": "custom",
+      "code": "lambdas/claims_agent/resolve_claim",
+      "environment": {
+        "CLAIMS_TABLE": {
+          "table": {
+            "existing": "Claims"
+          }
+        },
+        "REVIEWS_TABLE": {
+          "table": {
+            "existing": "Reviews"
+          }
+        }
+      },
+      "table_grants": [
+        {
+          "table": {
+            "existing": "Claims"
+          },
+          "access": "write"
+        },
+        {
+          "table": {
+            "existing": "Reviews"
+          },
+          "access": "write"
+        }
+      ],
+      "permissions": [],
+      "schema_file": "lambdas/claims_agent/resolve_claim/schema.json"
+    }
+  ],
+  "ingestion": {
+    "claims_agent": {
+      "id_patterns": [
+        {
+          "regex": "\\bPOL-[A-Za-z0-9-]+\\b",
+          "uppercase": true
+        }
+      ],
+      "default_sender_type": "claimant"
+    },
+    "hesta_agent": {
+      "footer_markers": [
+        "Issued by H.E.S.T"
+      ],
+      "banner_markers": [
+        "WARNING:",
+        "This email originated from outside",
+        "DO NOT click links"
+      ],
+      "form": {
+        "detect": [
+          "form based mail",
+          "Values:"
+        ],
+        "values_marker": "Values:",
+        "labels": [
+          "enquiry-sent-from",
+          "email-address",
+          "member-number",
+          "name",
+          "phone",
+          "reason-for-enquiry",
+          "message"
+        ],
+        "fields": {
+          "id": "member-number",
+          "sender_email": "email-address",
+          "name": "name",
+          "reason": "reason-for-enquiry",
+          "message": "message",
+          "sender_kind": "enquiry-sent-from"
+        },
+        "sender_kinds": [
+          {
+            "contains": "non-member",
+            "type": "non_member"
+          },
+          {
+            "contains": "member",
+            "type": "member"
+          }
+        ]
+      },
+      "id_patterns": [
+        {
+          "regex": "\\bPOL-[A-Za-z0-9-]+\\b",
+          "uppercase": true
+        },
+        {
+          "regex": "member(?:ship)?\\s*(?:number|no\\.?|#)\\s*:?\\s*([A-Za-z0-9-]{3,})",
+          "group": 1
+        },
+        {
+          "regex": "\\b\\d{5,9}\\b"
+        }
+      ],
+      "sender_types": [
+        {
+          "type": "solicitor",
+          "channel": "third_party",
+          "markers": [
+            "we refer to the above matter",
+            "our office",
+            "solicitor",
+            "law firm",
+            "lawyers",
+            "family law",
+            "dear sir/madam"
+          ]
+        }
+      ],
+      "default_sender_type": "member"
+    }
+  }
+}

@@ -1,0 +1,54 @@
+# How HESTA's inbound messages are cleaned up before the agents see them.
+# Read by app/_shared/ingestion.py — in the Trigger Lambda (every S3 upload) and
+# by this use case's normalize_email tool (direct invocations).
+# Rebuild after editing: uv run --project app python scripts/build_tools.py
+
+# Everything from this text onwards is HESTA's standard legal footer — dropped.
+footer_markers:
+  - "Issued by H.E.S.T"
+
+# Lines starting with these are the external-mail security banner — dropped.
+banner_markers:
+  - "WARNING:"
+  - "This email originated from outside"
+  - "DO NOT click links"
+
+# The hesta.com.au Contact-Us web form.
+form:
+  detect: ["form based mail", "Values:"]
+  values_marker: "Values:"
+  # Field labels as they appear in the form, in order.
+  labels: [enquiry-sent-from, email-address, member-number, name, phone, reason-for-enquiry, message]
+  # Which label holds each envelope field.
+  fields:
+    id: member-number
+    sender_email: email-address
+    name: name
+    reason: reason-for-enquiry
+    message: message
+    sender_kind: enquiry-sent-from
+  # enquiry-sent-from value → sender_type (first match wins, so non-member first).
+  sender_kinds:
+    - { contains: non-member, type: non_member }
+    - { contains: member, type: member }
+
+# How a HESTA member/policy number looks, tried in order.
+# Bracketed placeholders such as "[MEMBER NUMBER]" are always ignored.
+id_patterns:
+  - { regex: '\bPOL-[A-Za-z0-9-]+\b', uppercase: true }
+  - { regex: 'member(?:ship)?\s*(?:number|no\.?|#)\s*:?\s*([A-Za-z0-9-]{3,})', group: 1 }
+  - { regex: '\b\d{5,9}\b' }
+
+# Non-form emails: phrases that identify the sender type (first match wins).
+sender_types:
+  - type: solicitor
+    channel: third_party
+    markers:
+      - "we refer to the above matter"
+      - "our office"
+      - "solicitor"
+      - "law firm"
+      - "lawyers"
+      - "family law"
+      - "dear sir/madam"
+default_sender_type: member

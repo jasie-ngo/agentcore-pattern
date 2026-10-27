@@ -25,51 +25,55 @@ attached to the relevant agents as a live MCP tool provider (``_shared/gateway.p
 from __future__ import annotations
 
 import sys
-from dataclasses import asdict
 from pathlib import Path
 
 _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
+from _shared.ingestion import load_config, normalize
 from strands import tool
 
 from hesta_agent import knowledge, taxonomy
-from hesta_agent.ingestion import normalize_email as _normalize_email
 from hesta_agent.settings import INTENT_CONFIDENCE_THRESHOLD
+
+_INGESTION = load_config(Path(__file__).with_name("ingestion.yaml"))
 
 # ─── Phase 0 — ingestion ──────────────────────────────────────────────────────
 
 
 @tool
-def normalize_email(raw: str, sender_email: str = "", source: str = "") -> dict:
-    """Normalise a raw inbound email into the canonical envelope for the pipeline.
+def normalize_email(raw: str, sender_email: str = "", source: str = "", subject: str = "") -> dict:
+    """Normalise a raw inbound email into the standard envelope for the pipeline.
+
+    Only needed when the input is raw text. Messages that arrive through S3 are
+    already normalised by the Trigger Lambda and reach the agent as an envelope.
 
     Strips the security banner, the HESTA legal footer and quoted thread history
     to isolate the member's latest message; parses Contact-Us form fields; counts
     attachment markers; and extracts a real-looking member/policy number
     (placeholders like "[MEMBER NUMBER]" are treated as absent).
 
-    Call this ONCE, first, on the raw email text. Every other step works from the
-    fields it returns.
-
     Args:
         raw: The raw email text exactly as received.
         sender_email: Envelope sender address, if the caller knows it. Optional.
         source: Where the email came from (e.g. the S3 object key). Optional.
+        subject: Subject line, if the caller knows it. Optional.
 
     Returns:
-        channel, sender_type, from_email, subject, member_number,
-        member_number_for_lookup, form_reason, latest_message, attachment_count.
+        The envelope: channel, sender_type, from_email, sender_name, subject,
+        id_raw, id_for_lookup, form_reason, latest_message, attachment_count.
     """
-    inbound = _normalize_email(
+    envelope = normalize(
         raw,
+        _INGESTION,
+        use_case="hesta_agent",
         sender_email=sender_email or None,
+        subject=subject or None,
         source=source or None,
     )
-    fields = asdict(inbound)
-    fields.pop("raw", None)  # keep the tool result small; the agent already has it
-    return fields
+    envelope.pop("raw_text", None)  # keep the tool result small; the agent already has it
+    return envelope
 
 
 # ─── AI-004 — attachment validation ───────────────────────────────────────────
@@ -194,11 +198,7 @@ def classify_verification(
         }
 
     factors = ["member_number"]  # the number resolved to a record
-    email_match = bool(
-        sender_email
-        and record_email
-        and sender_email.strip().lower() == record_email.strip().lower()
-    )
+    email_match = bool(sender_email and record_email and sender_email.strip().lower() == record_email.strip().lower())
     if email_match:
         factors.append("email")
     if record_policy_type:
@@ -211,10 +211,7 @@ def classify_verification(
         notes = "Member number resolved and sender email matches an active record."
     elif record_status == "active":
         level, required = "partial", True
-        notes = (
-            "Record found and active, but sender email does not match "
-            "— request identity verification."
-        )
+        notes = "Record found and active, but sender email does not match — request identity verification."
     else:
         level, required = "unverified", True
         notes = f"Record found but status is '{record_status}' — treat as unverified."
@@ -334,9 +331,7 @@ def route_decision(
     if primary_intent_id == taxonomy.OTHER_UNKNOWN or needs_human_triage:
         reasons.append("intent unclear / flagged for triage")
     elif int(primary_confidence) < INTENT_CONFIDENCE_THRESHOLD:
-        reasons.append(
-            f"low intent confidence ({primary_confidence} < {INTENT_CONFIDENCE_THRESHOLD})"
-        )
+        reasons.append(f"low intent confidence ({primary_confidence} < {INTENT_CONFIDENCE_THRESHOLD})")
 
     if int(confident_intent_count) > 1:
         reasons.append(f"multiple intents detected ({confident_intent_count})")

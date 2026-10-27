@@ -1,4 +1,4 @@
-"""Deterministic Phase 3 for the claims pipeline — referenced from ``config.yaml``.
+"""Deterministic tools for the claims pipeline — referenced from ``config.yaml``.
 
 ``execute_claim_decision`` is one ``@tool`` that does the REJECT / AUTO_APPROVE /
 HUMAN_REVIEW branching (``routing.py``) and calls the Gateway tools directly via
@@ -6,7 +6,9 @@ MCP, so execution costs zero extra LLM calls: the coordinator calls it once with
 the Processor's and Validator's structured outputs and reports what it returns.
 
 All Gateway calls are non-fatal — a failure is logged, reported in the summary,
-and the remaining steps still run.
+and the remaining steps still run. ``create_claim`` derives the claim id from
+policy number + source, so a re-delivered submission finds its existing claim;
+when that happens the follow-up review request and notification are skipped.
 """
 
 from __future__ import annotations
@@ -70,6 +72,7 @@ async def execute_claim_decision(
     routing: str,
     concerns: str = "None",
     claimant_email: str = "",
+    source: str = "",
 ) -> str:
     """Execute the final claim action deterministically — no model call inside.
 
@@ -91,6 +94,9 @@ async def execute_claim_decision(
         routing: The Validator's AUTO_APPROVE or HUMAN_REVIEW ("" if it gave none).
         concerns: Validator's flagged concerns, or "None".
         claimant_email: Claimant's email for notification, or "" to skip.
+        source: Where the submission came from (the envelope's ``source``), or "".
+            Together with the policy number it identifies the claim, so a
+            re-delivered submission is not recorded twice.
 
     Returns:
         A human-readable summary of what was executed.
@@ -123,7 +129,21 @@ async def execute_claim_decision(
         "estimated_amount": amount,
         "category": category,
     }
+    if source:
+        claim_fields["source"] = source
     notify = bool(claimant_email) and claimant_email != "unknown"
+
+    def _claim_line(prefix: str):
+        def _line(result: dict) -> str:
+            claim_id = result.get("claim_id", "unknown")
+            if result.get("result") == "existing":
+                return f"Claim already recorded (duplicate delivery): {claim_id} — no further actions"
+            return f"{prefix}: {claim_id}"
+
+        return _line
+
+    def _is_duplicate(result: dict | None) -> bool:
+        return bool(result) and result.get("result") == "existing"
 
     with mcp:
         if action == REJECT:
@@ -139,12 +159,12 @@ async def execute_claim_decision(
                 )
 
         elif action == AUTO_APPROVE:
-            await _safe_call(
+            claim_result = await _safe_call(
                 "create_claim",
                 {**claim_fields, "status": "approved", "decision": "auto_approved"},
-                lambda r: f"Claim created: {r.get('claim_id', 'unknown')}",
+                _claim_line("Claim created"),
             )
-            if notify:
+            if notify and not _is_duplicate(claim_result):
                 await _safe_call(
                     "send_notification",
                     {
@@ -164,11 +184,12 @@ async def execute_claim_decision(
             claim_result = await _safe_call(
                 "create_claim",
                 {**claim_fields, "status": "pending_review", "decision": "escalated"},
-                lambda r: f"Claim created (pending review): {r.get('claim_id', 'unknown')}",
+                _claim_line("Claim created (pending review)"),
             )
             claim_id = claim_result.get("claim_id", "unknown") if claim_result else None
+            duplicate = _is_duplicate(claim_result)
 
-            if claim_id:
+            if claim_id and not duplicate:
                 await _safe_call(
                     "request_human_review",
                     {
@@ -179,7 +200,7 @@ async def execute_claim_decision(
                     "Escalated to human review",
                 )
 
-            if notify:
+            if notify and not duplicate:
                 await _safe_call(
                     "send_notification",
                     {

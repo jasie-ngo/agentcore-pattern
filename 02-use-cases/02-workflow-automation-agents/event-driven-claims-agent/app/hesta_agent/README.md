@@ -48,7 +48,7 @@ existing Gateway tools — no new AWS resources.
 | `schemas.py` | Pydantic structured-output contracts |
 | `taxonomy.py` | The 8 HESTA intents |
 | `knowledge.py` | HESTA house style + per-intent snippets |
-| `ingestion.py` | Email normaliser |
+| `ingestion.yaml` | How inbound emails are cleaned up (footer, banner, web form, member-number patterns) — applied by `../_shared/ingestion.py` |
 | `settings.py` | HESTA-only env vars (intent threshold, HITL flag, guardrail sentinel) |
 | `sample_emails/*.json` | Payloads to try: contact form, hardship with attachment, personal-advice request |
 | `../_shared/` | Agent factory, Gateway MCP client, Memory session manager, generic settings |

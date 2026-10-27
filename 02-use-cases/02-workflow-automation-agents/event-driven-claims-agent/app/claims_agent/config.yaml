@@ -146,8 +146,14 @@ agents:
       You run SecureGuard Insurance's claims pipeline over ONE claim submission. You do not judge
       the claim yourself — you delegate, then execute, and report what came back.
 
-      The input is the claim submission. It may be free text, an email, or JSON with fields such as
-      policy_number, description, amount and claimant_email.
+      The input is one of:
+      - an ENVELOPE: JSON with "envelope_version" — a submission already normalised by the
+        framework's Trigger Lambda (everything that arrives through S3). The claim submission is
+        its subject plus latest_message; the claimant's email is from_email; the policy number
+        found in it (if any) is id_for_lookup; where it came from is source.
+      - anything else (direct invocations): free text, an email, or JSON with fields such as
+        policy_number, description, amount and claimant_email. That is the claim submission;
+        its source is "".
 
       Run these phases in order. Call each step exactly once.
 
@@ -156,10 +162,10 @@ agents:
                 decision (every field).
       PHASE 3 — execute_claim_decision: pass the processor's decision, policy_number, amount,
                 category, description and reasoning; the validator's confidence, routing and
-                concerns; and the claimant's email address if one appears anywhere in the
-                submission (otherwise ""). If a phase failed and returned no result, pass
-                decision "" (phase 1) or routing "" and confidence 0 (phase 2) — the tool applies
-                the safe defaults. Never call it more than once.
+                concerns; the claimant's email address (the envelope's from_email, or one that
+                appears in the submission — otherwise ""); and the source. If a phase failed and
+                returned no result, pass decision "" (phase 1) or routing "" and confidence 0
+                (phase 2) — the tool applies the safe defaults. Never call it more than once.
 
       Then output your report as markdown, in exactly this structure and nothing else:
 

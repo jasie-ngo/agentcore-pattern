@@ -4,6 +4,9 @@
 
 The Event-Driven Claims Agent is an insurance claims processor built on Amazon Bedrock AgentCore. It accepts claim submissions via email (through S3/EventBridge) or direct API invocation, processes them through a dual-agent pipeline, and routes outcomes to auto-approval or human review.
 
+For the framework itself — use-case folders, the envelope, blueprint tools and the
+build step — see [FRAMEWORK.md](FRAMEWORK.md).
+
 This document explains:
 - **Components** — what each piece does and how they connect
 - **Data flows** — how a claim moves from submission to resolution
@@ -62,16 +65,16 @@ Policy Engine operates in `ENFORCE` mode — blocked tool calls return an author
 
 ### Lambda Tool Functions
 
-| Tool | Lambda | DynamoDB | Notes |
-|------|--------|----------|-------|
-| `lookup_policy` | `ClaimsAgent-PolicyLookup` | PoliciesTable (read) | Returns policy details or "not found" |
-| `create_claim` | `ClaimsAgent-CreateClaim` | ClaimsTable (write) | Agent passes `status` + `decision` |
-| `request_human_review` | `ClaimsAgent-HumanReview` | ReviewsTable (write) | Also publishes to SNS |
-| `send_notification` | `ClaimsAgent-Notification` | — | SES send email |
-| `list_pending_claims` | `ClaimsAgent-ListPending` | ClaimsTable (scan) | Filters `status=pending_review` |
-| `resolve_claim` | `ClaimsAgent-ResolveClaim` | ClaimsTable + ReviewsTable (update) | Human operator resolves |
+| Tool | Lambda (`AgentCore-ClaimsAgent-dev-…`) | Kind | DynamoDB | Notes |
+|------|--------|------|----------|-------|
+| `lookup_policy` | `policy-lookup` | blueprint `retrieval` | PoliciesTable (read) | Returns only the listed fields, or `found: false` + error |
+| `create_claim` | `create-claim` | blueprint `record_write` | ClaimsTable (write) | Find-or-create on policy number + source; agent passes `status` + `decision` |
+| `request_human_review` | `human-review` | blueprint `record_write` | ReviewsTable (write) | Derived priority; also publishes to SNS |
+| `send_notification` | `notification` | custom | — | SES send email |
+| `list_pending_claims` | `list-pending-claims` | blueprint `retrieval` (list) | ClaimsTable (status-index) | Filters `status=pending_review` |
+| `resolve_claim` | `resolve-claim` | custom | ClaimsTable + ReviewsTable (update) | Human operator resolves |
 
-All handlers return `json.dumps({...})` directly — no HTTP envelope.
+Tools are declared in `app/<use_case>/gateway_tools.yaml` and built by `scripts/build_tools.py` — see [FRAMEWORK.md](FRAMEWORK.md#4-gateway-tools-blueprints-and-custom-tools). All handlers return `json.dumps({...})` directly — no HTTP envelope.
 
 ### Trigger Lambda
 

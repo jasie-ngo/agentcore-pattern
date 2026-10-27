@@ -141,6 +141,7 @@ The demo shows: (1) auto-approved claim with email notification, (2) Cedar polic
 | [Architecture](./docs/ARCHITECTURE.md) | System components, data flows, dual-agent pipeline, Mermaid diagrams |
 | [Deployment Guide](./docs/deployment.md) | Prerequisites, step-by-step deploy, verify, local dev, troubleshooting, teardown |
 | [Configuration Reference](./docs/CONFIGURATION.md) | All env vars, Cedar policies, Cognito, SES, model, memory settings |
+| [Framework](./docs/FRAMEWORK.md) | How use cases, the envelope, blueprint tools and the build step fit together |
 | [Switching Use Cases](./SWITCHING_USE_CASES.md) | Switch the deployed use case, or add a new one |
 
 ## AgentCore Services Demonstrated
@@ -169,8 +170,9 @@ event-driven-claims-agent/
 ├── agentcore/
 │   ├── agentcore.json         # AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, Eval)
 │   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge — NO Cognito)
-├── lambdas/                   # One Lambda per Gateway tool
-│   ├── schemas/               # MCP tool schemas (JSON)
+├── lambdas/                   # Gateway tool Lambdas (declared in app/<use_case>/gateway_tools.yaml)
+│   ├── blueprints/            # Reusable tool code: retrieval, record_write
+│   ├── claims_agent/          # Custom tools: notification, resolve_claim
 │   ├── trigger/               # EventBridge → Runtime invocation (SigV4 auth)
 │   ├── create_claim/          # DynamoDB write
 │   ├── policy_lookup/         # DynamoDB read
@@ -218,7 +220,7 @@ Edit `app/claims_agent/config.yaml` (prompts, models, orchestration), then redep
 
 ### Add a new tool
 
-Add a Lambda in `lambdas/<tool>/`, its schema in `lambdas/schemas/`, a Gateway target (with a `PLACEHOLDER_*` ARN) in `agentcore/agentcore.json`, and the Lambda + ARN patching in `agentcore/cdk/lib/`. See [ADR-0001](./docs/decisions/0001-agentcore-cli-plus-cdk.md).
+Lookups and record writes need no code: add an entry to `app/<use_case>/gateway_tools.yaml` and run `uv run --project app python scripts/build_tools.py`. For real business logic, write a custom Lambda in `lambdas/<use_case>/<tool>/` and point a `custom:` entry at it. See [docs/FRAMEWORK.md](./docs/FRAMEWORK.md#7-how-to).
 
 ### Adapt to a different domain
 
