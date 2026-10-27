@@ -1,0 +1,3 @@
+# Per-run scratch (pid files, logs, assembled projects) and proof artifacts are local to whoever ran the verification.
+.run/
+artifacts/

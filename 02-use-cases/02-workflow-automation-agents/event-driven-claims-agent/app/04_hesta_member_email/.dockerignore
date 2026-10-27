@@ -1,0 +1,16 @@
+# A host-built virtualenv must never reach the image: its console scripts point at host paths, and the builder stage
+# creates its own /app/.venv. (The same trap is documented in app/hesta-claimsagent/.dockerignore.)
+.venv/
+
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Not needed at runtime
+.git
+.gitignore
+Dockerfile
+.dockerignore
+sample_emails/
