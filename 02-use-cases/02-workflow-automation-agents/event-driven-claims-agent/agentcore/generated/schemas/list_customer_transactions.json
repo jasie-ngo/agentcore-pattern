@@ -1,0 +1,18 @@
+[
+  {
+    "name": "list_customer_transactions",
+    "description": "List a customer's most recent card transactions, newest first",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "Customer number whose transactions to list"
+        }
+      },
+      "required": [
+        "customer_id"
+      ]
+    }
+  }
+]

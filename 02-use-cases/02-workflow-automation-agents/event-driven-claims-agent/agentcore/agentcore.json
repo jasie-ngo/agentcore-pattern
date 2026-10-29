@@ -140,6 +140,38 @@
       "description": "MCP Gateway for claims processing tools: policy lookup, claim creation, human review, notifications, and claim resolution",
       "targets": [
         {
+          "name": "lookup-customer",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_LOOKUP_CUSTOMER",
+            "toolSchemaFile": "agentcore/generated/schemas/lookup_customer.json"
+          }
+        },
+        {
+          "name": "list-customer-transactions",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_LIST_CUSTOMER_TRANSACTIONS",
+            "toolSchemaFile": "agentcore/generated/schemas/list_customer_transactions.json"
+          }
+        },
+        {
+          "name": "create-dispute",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_CREATE_DISPUTE",
+            "toolSchemaFile": "agentcore/generated/schemas/create_dispute.json"
+          }
+        },
+        {
+          "name": "request-dispute-review",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_REQUEST_DISPUTE_REVIEW",
+            "toolSchemaFile": "agentcore/generated/schemas/request_dispute_review.json"
+          }
+        },
+        {
           "name": "policy-lookup",
           "targetType": "lambdaFunctionArn",
           "lambdaFunctionArn": {
@@ -185,6 +217,14 @@
           "lambdaFunctionArn": {
             "lambdaArn": "PLACEHOLDER_RESOLVE_CLAIM",
             "toolSchemaFile": "lambdas/claims_agent/resolve_claim/schema.json"
+          }
+        },
+        {
+          "name": "list-member-cases",
+          "targetType": "lambdaFunctionArn",
+          "lambdaFunctionArn": {
+            "lambdaArn": "PLACEHOLDER_LIST_MEMBER_CASES",
+            "toolSchemaFile": "agentcore/generated/schemas/list_member_cases.json"
           }
         }
       ],

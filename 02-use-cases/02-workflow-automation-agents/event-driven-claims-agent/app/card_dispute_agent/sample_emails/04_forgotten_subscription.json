@@ -1,0 +1,6 @@
+{
+  "prompt": "Hi team, what is the $29.95 charge from FITLIFE GYM on 1 October? I don't recognise it. Customer no CUST-100004.\n\nNoah",
+  "sender_email": "noah.williams@example.com",
+  "source": "sample:04_forgotten_subscription",
+  "_expected_outcome": "decline_with_explanation"
+}

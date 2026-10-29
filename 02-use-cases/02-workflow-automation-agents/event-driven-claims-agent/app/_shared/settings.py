@@ -30,9 +30,7 @@ GATEWAY_OAUTH_SCOPES = os.getenv("AGENTCORE_GATEWAY_OAUTH_SCOPES", "agentcore/in
 # Identity credential provider — registered via `agentcore add credential`
 # during deploy.  The @requires_access_token decorator uses this name to fetch
 # tokens from the AgentCore Identity token vault (Secrets Manager-backed).
-GATEWAY_CREDENTIAL_PROVIDER = os.getenv(
-    "AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER", "cognito-gateway-m2m"
-)
+GATEWAY_CREDENTIAL_PROVIDER = os.getenv("AGENTCORE_GATEWAY_CREDENTIAL_PROVIDER", "cognito-gateway-m2m")
 
 # Seconds to wait for the Gateway MCP handshake before giving up.
 GATEWAY_STARTUP_TIMEOUT = int(os.getenv("AGENTCORE_GATEWAY_STARTUP_TIMEOUT", "60"))

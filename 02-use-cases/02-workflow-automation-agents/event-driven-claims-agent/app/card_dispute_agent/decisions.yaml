@@ -1,0 +1,62 @@
+# Harbour Bank card-dispute decision table — deterministic, no model involved.
+# Rules are checked top to bottom; the first rule whose conditions all hold
+# decides. Applied by _shared/decision_table.py (bound in tools.py).
+# Operators: plain value (equals), eq, ne, lt, lte, gt, gte, in, not_in, is_empty.
+
+name: decide_dispute
+description: >-
+  Decide what happens to a card-dispute email, from the classifier's intent,
+  the assessor's findings and the reviewer's verdict.
+
+inputs:
+  intent:             { type: string,  description: "Classifier primary_id" }
+  assessment:         { type: string,  description: "Assessor outcome" }
+  customer_status:    { type: string,  description: "Account status from lookup_customer (active, suspended, closed)" }
+  card_status:        { type: string,  description: "Card status from lookup_customer (active, blocked)" }
+  amount:             { type: number,  description: "Disputed amount, from the matched transaction" }
+  fraud_signals:      { type: boolean, description: "Assessor found a fraud pattern" }
+  prior_disputes_90d: { type: integer, description: "Disputes this customer raised in the last 90 days" }
+  review_approved:    { type: boolean, description: "Reviewer approved the assessment" }
+
+rules:
+  - id: not_a_dispute
+    when: { intent: { ne: card_dispute } }
+    then: { outcome: route_to_service_team, escalate: true, reason: "Not a card dispute; route to the matching service team." }
+
+  - id: unknown_customer
+    when: { assessment: customer_not_found }
+    then: { outcome: request_information, escalate: false, reason: "Customer could not be identified; ask them to confirm their details." }
+
+  - id: account_not_active
+    when: { customer_status: { not_in: [active] } }
+    then: { outcome: human_review, escalate: true, reason: "Account is not active; a disputes officer must handle it." }
+
+  - id: review_not_approved
+    when: { review_approved: false }
+    then: { outcome: human_review, escalate: true, reason: "The independent review did not approve the assessment." }
+
+  - id: review_missing
+    when: { review_approved: { is_empty: true } }
+    then: { outcome: human_review, escalate: true, reason: "No independent review result; a disputes officer must check it." }
+
+  - id: fraud_pattern
+    when: { fraud_signals: true }
+    then: { outcome: block_card_and_escalate, escalate: true, reason: "Fraud pattern found; block the card and escalate." }
+
+  - id: needs_information
+    when: { assessment: needs_information }
+    then: { outcome: request_information, escalate: false, reason: "The transaction could not be matched; ask for the date, amount and merchant." }
+
+  - id: likely_genuine
+    when: { assessment: likely_genuine_purchase }
+    then: { outcome: decline_with_explanation, escalate: true, reason: "Looks like a genuine purchase; a disputes officer confirms before declining." }
+
+  - id: small_valid_dispute
+    when: { assessment: valid_dispute, amount: { lt: 100 }, prior_disputes_90d: { lt: 3 } }
+    then: { outcome: provisional_credit, escalate: false, reason: "Small, valid dispute with no repeat pattern; credit provisionally." }
+
+  - id: valid_dispute_needs_officer
+    when: { assessment: valid_dispute }
+    then: { outcome: human_review, escalate: true, reason: "Valid dispute above the provisional-credit limit or with repeat disputes." }
+
+default: { outcome: human_review, escalate: true, reason: "No rule matched; a disputes officer decides." }

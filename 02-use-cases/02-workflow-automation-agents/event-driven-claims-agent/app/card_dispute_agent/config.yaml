@@ -1,0 +1,253 @@
+# card_dispute_agent — card-dispute triage for Harbour Bank (a fictional bank).
+#
+# Built entirely from framework blueprints: every specialist is an agent
+# blueprint (../_shared/agent_blueprints.py) filled in below, the Gateway tools
+# are tool blueprints (gateway_tools.yaml), the decision is a decision table
+# (decisions.yaml). Only the coordinator's flow is written by hand.
+#
+#   UNDERSTAND  intent_classifier (classifier) · dispute_extractor (extractor)
+#   DECIDE      dispute_assessor (assessor + Gateway lookups) · dispute_reviewer (reviewer)
+#               decide_dispute (decision table — deterministic)
+#   EXECUTE     create_dispute / request_dispute_review (Gateway) · reply_writer (writer)
+#
+# Run (from the event-driven-claims-agent folder):
+#   sca dev --config app/card_dispute_agent/config.yaml
+# Deployed: selected in app/main.py (see SWITCHING_USE_CASES.md).
+
+version: "1"
+log_level: ${LOG_LEVEL:-INFO}
+
+vars:
+  primary_model: ${AGENT_MODEL_ID:-global.anthropic.claude-sonnet-4-6}
+  fast_model: ${FAST_MODEL_ID:-global.anthropic.claude-haiku-4-5-20251001-v1:0}
+  bank: "Harbour Bank"
+  context: >-
+    You work in Harbour Bank's card services team, helping triage customer emails
+    about card transactions. Harbour Bank is an Australian retail bank.
+
+models:
+  primary:
+    provider: bedrock
+    model_id: ${primary_model}
+  fast:
+    provider: bedrock
+    model_id: ${fast_model}
+
+agents:
+  # ── UNDERSTAND ─────────────────────────────────────────────────────────────
+
+  intent_classifier:
+    type: ../_shared/agent_blueprints.py:classifier
+    model: fast
+    description: "Classify why a Harbour Bank customer is emailing, with a confidence per intent."
+    agent_kwargs:
+      context: ${context}
+      task: "Classify why the customer is contacting the bank."
+      labels:
+        - id: card_dispute
+          description: "the customer disputes a card transaction they did not make or do not recognise"
+          signals: ["don't recognise", "didn't make this purchase", "charge I never authorised", "unknown transaction"]
+          examples: ["There's a $42.50 charge from STREAMFLIX on my card that I don't recognise."]
+        - id: lost_or_stolen_card
+          description: "the card is lost, stolen or needs replacing, with no specific charge disputed"
+          signals: ["lost my card", "card was stolen", "need a new card"]
+        - id: fee_query
+          description: "a question about a bank fee or interest charge"
+          signals: ["fee", "interest", "charged for"]
+      fallback: other
+      flags:
+        fraud_suspected: "the customer reports several unknown charges or says the card details were compromised"
+        complaint: "the tone reads as a complaint about the bank's service"
+
+  dispute_extractor:
+    type: ../_shared/agent_blueprints.py:extractor
+    model: fast
+    description: "Extract the disputed transaction's details from the customer's message."
+    agent_kwargs:
+      context: ${context}
+      task: "Extract the details of the transaction the customer is disputing."
+      fields:
+        amount:           { type: number, description: "Disputed amount in dollars" }
+        merchant:         { type: string, description: "Merchant name as the customer wrote it" }
+        transaction_date: { type: string, description: "Date of the charge as the customer wrote it" }
+        card_last4:       { type: string, description: "Last four digits of the card, if given" }
+        customer_id:      { type: string, description: "Customer number, e.g. CUST-100001, if given" }
+        other_charges:    { type: integer, description: "How many other unknown charges the customer mentions" }
+
+  # ── DECIDE ─────────────────────────────────────────────────────────────────
+
+  dispute_assessor:
+    type: ../_shared/agent_blueprints.py:assessor
+    model: primary
+    description: "Identify the customer, find the disputed transaction and assess the dispute."
+    agent_kwargs:
+      gateway: true
+      context: ${context}
+      task: "Identify the customer, find the disputed transaction, and assess the dispute."
+      outcomes:
+        - { id: valid_dispute, when: "the transaction exists and nothing suggests the customer made it" }
+        - { id: likely_genuine_purchase, when: "the customer has used this merchant regularly (merchant_history_count of 3 or more)" }
+        - { id: needs_information, when: "the customer is known but the transaction cannot be matched" }
+        - { id: customer_not_found, when: "no customer matches the customer number or email" }
+      fallback_outcome: needs_information
+      criteria:
+        - "Identify the customer with the tool ending in lookup_customer: by customer number if there is one, otherwise by the sender's email."
+        - "List the customer's transactions with the tool ending in list_customer_transactions and find the one matching the amount and merchant (and date, if given)."
+        - "fraud_signals is true when two or more unrecognised charges at the same merchant were made within 24 hours, or the card status is compromised."
+      facts:
+        customer_id:        { type: string,  description: "Matched customer number" }
+        customer_status:    { type: string,  description: "Account status from lookup_customer" }
+        card_status:        { type: string,  description: "Card status from lookup_customer" }
+        prior_disputes_90d: { type: integer, description: "prior_disputes_90d from lookup_customer" }
+        transaction_id:     { type: string,  description: "The matched transaction" }
+        amount:             { type: number,  description: "Amount of the matched transaction" }
+        merchant:           { type: string,  description: "Merchant of the matched transaction" }
+        fraud_signals:      { type: boolean, description: "Whether a fraud pattern was found" }
+
+  dispute_reviewer:
+    type: ../_shared/agent_blueprints.py:reviewer
+    model: fast
+    description: "Independently check the dispute assessment before any decision."
+    agent_kwargs:
+      context: ${context}
+      task: "Independently check the dispute assessment against the customer's message and the evidence."
+      checks:
+        outcome_supported: "the outcome follows from the reasons and the facts"
+        transaction_matches: "the matched transaction's amount and merchant agree with what the customer described"
+        fraud_assessment_reasonable: "fraud_signals is consistent with the transactions described"
+        no_invented_facts: "every fact comes from the message or from a tool result"
+
+  # ── EXECUTE ────────────────────────────────────────────────────────────────
+
+  reply_writer:
+    type: ../_shared/agent_blueprints.py:writer
+    model: primary
+    description: "Draft the reply email to the customer for a disputes officer to review and send."
+    agent_kwargs:
+      context: ${context}
+      task: "Draft the reply to the customer, matching the decision you are given."
+      style:
+        - "Warm, plain English, short paragraphs."
+        - "Address the customer by first name when known."
+        - "Refer to the transaction by merchant, amount and date."
+      rules:
+        - "Never ask for a full card number, PIN, password or one-time code."
+        - "Use the knowledge topic named after the decision's outcome."
+      knowledge:
+        provisional_credit: >-
+          We've opened a dispute and credited the amount to your account while we
+          investigate. The credit is provisional: if the investigation finds the
+          charge was valid it may be reversed, and we'll tell you before that happens.
+        block_card_and_escalate: >-
+          To protect you, we've blocked your card and a member of our fraud team will
+          contact you within one business day. A replacement card will be posted to
+          your address on file.
+        decline_with_explanation: >-
+          Our records show regular payments to this merchant from your card. If you
+          no longer recognise the subscription, please contact the merchant to cancel
+          it. A disputes officer has reviewed this and can help further if needed.
+        request_information: >-
+          We couldn't match the charge you described. Please reply with your customer
+          number, the date, amount and merchant shown on your statement.
+        human_review: >-
+          A disputes officer is reviewing your case and will contact you within two
+          business days.
+        route_to_service_team: >-
+          We've passed your message to the right team, who will contact you shortly.
+      signoff: "Kind regards,\nCard Services Team\n${bank}"
+
+  # ── Coordinator ────────────────────────────────────────────────────────────
+  # The one hand-written agent: it owns the flow. It calls the specialists as
+  # delegate tools, the decision table, and the two Gateway write tools.
+
+  coordinator:
+    type: ../_shared/factory.py:agent
+    model: primary
+    description: "Run Harbour Bank's card-dispute pipeline over one customer email."
+    tools:
+      - ./tools.py:normalize_email
+      - ./tools.py:decide_dispute
+    agent_kwargs:
+      gateway: true
+    system_prompt: |
+      You run ${bank}'s card-dispute pipeline over ONE customer email. You do not judge the case
+      yourself: you delegate, apply the decision table, record the case, and report what came
+      back. Nothing is ever sent to the customer — the reply is a draft for a disputes officer.
+
+      The input is either an ENVELOPE (JSON with "envelope_version", already normalised) or raw
+      email text. For raw text, first call normalize_email. Then use: from_email, subject,
+      id_for_lookup (the customer number, may be null), latest_message, source.
+
+      Call each step at most once, in this order:
+
+      1. intent_classifier — pass latest_message.
+      2. If primary_id is card_dispute: dispute_extractor — pass latest_message.
+         Otherwise skip steps 2–4 and go to step 5 with only intent set.
+      3. dispute_assessor — pass the customer number (id_for_lookup, or the extractor's
+         customer_id), from_email, and every extracted field.
+      4. dispute_reviewer — pass latest_message and the assessor's complete result.
+      5. decide_dispute — pass intent (primary_id), assessment (the assessor's outcome),
+         customer_status, card_status, amount, fraud_signals, prior_disputes_90d (all from the
+         assessor) and review_approved (the reviewer's approved). Its decision is final.
+      6. If the outcome is provisional_credit, block_card_and_escalate, decline_with_explanation or
+         human_review AND the assessor found both customer_id and transaction_id: call the Gateway
+         tool ending in create_dispute with customer_id, transaction_id, amount, merchant, outcome,
+         reason (the decision's reason) and source.
+      7. If the decision says escalate AND create_dispute returned a dispute_id AND its result is
+         not "existing": call the Gateway tool ending in request_dispute_review with dispute_id,
+         reason and amount.
+      8. reply_writer — pass the decision's outcome and reason, the customer's name if known, the
+         merchant, amount and date, and latest_message.
+
+      Use only the Gateway tools named above. If a step fails, say so in its section with the real
+      reason and continue — an unclear case always ends in human review.
+
+      Then output your report as markdown, exactly in this structure:
+
+      # ${bank} — Card Dispute Triage
+
+      **From:** … · **Customer:** … · **Source:** …
+
+      ## 1 · Understand
+      - **Intent:** `<primary_id>` (<confidence>/100) · fraud suspected: … · complaint: …
+      - **Extracted:** amount … · merchant … · date … · card …   (or "skipped — not a dispute")
+
+      ## 2 · Decide
+      - **Assessment:** `<outcome>` (<confidence>/100) — <reasons, one line each>
+      - **Review:** approved <true|false> — <issues, if any>
+      - **Decision:** `<outcome>` (rule `<rule_id>`) — <reason> · escalate: <true|false>
+
+      ## 3 · Execute
+      - **Dispute:** <dispute_id and whether it was created or already existed> (or why none)
+      - **Review queue:** <review_id> (or "not needed")
+
+      ### ✉️ Draft reply — for a disputes officer to review and send (NOT sent)
+      **Subject:** <subject>
+      ```text
+      <body>
+      ```
+
+      ✅ Processing complete.
+
+orchestrations:
+  main:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: intent_classifier
+        description: "Classify why the customer is emailing. Input: the customer's latest message."
+        preserve_context: false
+      - agent: dispute_extractor
+        description: "Extract the disputed transaction's details. Input: the customer's latest message."
+        preserve_context: false
+      - agent: dispute_assessor
+        description: "Identify the customer and the disputed transaction via the Gateway and assess the dispute. Input: customer number (if any), sender email and the extracted fields."
+        preserve_context: false
+      - agent: dispute_reviewer
+        description: "Independently check the assessment. Input: the customer's message and the assessor's complete result."
+        preserve_context: false
+      - agent: reply_writer
+        description: "Draft the reply to the customer. Input: the decision's outcome and reason, customer name, merchant, amount, date and the customer's message."
+        preserve_context: false
+
+entry: main

@@ -1,0 +1,6 @@
+{
+  "prompt": "CAUTION: This email came from outside Harbour Bank. Do not click links unless you trust the sender.\nHello,\n\nThere is a payment of $1,249.00 to TECHWORLD ONLINE on 23 October that I did not make. I still have my card (ending 7734). Customer number CUST-100002.\n\nLiam O'Brien\n\nHarbour Bank Limited ABN 12 345 678 901 AFSL 234567. This email is confidential.",
+  "sender_email": "liam.obrien@example.com",
+  "source": "sample:02_large_unrecognised_charge",
+  "_expected_outcome": "human_review"
+}

@@ -1,0 +1,18 @@
+[
+  {
+    "name": "list_member_cases",
+    "description": "List a member's cases that are pending review, by member/policy number",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "policy_number": {
+          "type": "string",
+          "description": "The member/policy number whose cases to list"
+        }
+      },
+      "required": [
+        "policy_number"
+      ]
+    }
+  }
+]

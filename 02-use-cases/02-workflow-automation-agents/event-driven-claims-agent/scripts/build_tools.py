@@ -103,6 +103,28 @@ def default_use_case() -> str:
 # ─── Validation + translation ──────────────────────────────────────────────────
 
 
+def _key(spec: dict | None, loc: str) -> dict | None:
+    if not spec:
+        return None
+    if not spec.get("name") or spec.get("type", "string") not in KEY_TYPES:
+        raise BuildError(f"{loc}: needs {{name, type: string|number}}")
+    return {"name": spec["name"], "type": spec.get("type", "string")}
+
+
+def _index(spec: dict, loc: str) -> dict:
+    if not spec.get("name"):
+        raise BuildError(f"{loc}: every index needs a name")
+    out = {
+        "name": spec["name"],
+        "partition_key": _key(spec.get("partition_key"), f"{loc}.{spec['name']}.partition_key"),
+    }
+    if not out["partition_key"]:
+        raise BuildError(f"{loc}.{spec['name']}: needs a partition_key")
+    if spec.get("sort_key"):
+        out["sort_key"] = _key(spec["sort_key"], f"{loc}.{spec['name']}.sort_key")
+    return out
+
+
 def _resolve_tables(uc: str, spec: dict, where: str) -> tuple[dict, list[dict]]:
     """Return ({table key → reference}, [tables to create])."""
     refs: dict[str, dict] = {}
@@ -126,8 +148,8 @@ def _resolve_tables(uc: str, spec: dict, where: str) -> tuple[dict, list[dict]]:
                 "use_case": uc,
                 "key": key,
                 "partition_key": {"name": pk["name"], "type": pk.get("type", "string")},
-                "sort_key": table.get("sort_key"),
-                "indexes": table.get("indexes") or [],
+                "sort_key": _key(table.get("sort_key"), f"{loc}.sort_key"),
+                "indexes": [_index(ix, f"{loc}.indexes") for ix in table.get("indexes") or []],
             }
         )
         refs[key] = {"created": table_id}
@@ -149,8 +171,23 @@ def _blueprint_tool(tool: dict, loc: str, tables: dict) -> tuple[dict, dict]:
         lookup, flt = tool.get("lookup"), tool.get("filter")
         if bool(lookup) == bool(flt):
             raise BuildError(f"{loc}: retrieval needs exactly one of lookup: or filter:")
-        if flt and not all(k in flt for k in ("index", "key", "value")):
-            raise BuildError(f"{loc}: filter needs index, key and value")
+        if flt and not (flt.get("index") and flt.get("key") and ("value" in flt) != bool(flt.get("from_input"))):
+            raise BuildError(f"{loc}: filter needs index, key and exactly one of value or from_input: true")
+        if flt and flt.get("from_input"):
+            properties[flt["key"]] = {
+                "type": "number" if flt.get("type") == "number" else "string",
+                "description": flt.get("description", f"{flt['key']} to list records for"),
+            }
+            required = [flt["key"]]
+        where = (flt or {}).get("where") or {}
+        if not isinstance(where, dict):
+            raise BuildError(f"{loc}: filter.where must map each field to its description")
+        for field, description in where.items():
+            properties[field] = {
+                "type": "string",
+                "description": description or f"Only records whose {field} equals this",
+            }
+            required.append(field)
         for entry in lookup or []:
             properties[entry["key"]] = {
                 "type": "number" if entry.get("type") == "number" else "string",
@@ -159,6 +196,10 @@ def _blueprint_tool(tool: dict, loc: str, tables: dict) -> tuple[dict, dict]:
         if lookup and len(lookup) == 1:
             required = [lookup[0]["key"]]
         config = {k: tool[k] for k in ("lookup", "filter", "returns", "result_key") if tool.get(k) is not None}
+        if config.get("filter"):
+            config["filter"] = {k: v for k, v in config["filter"].items() if k != "description"}
+            if config["filter"].get("where"):
+                config["filter"]["where"] = list(config["filter"]["where"])
         config["lookup"] = [{k: v for k, v in e.items() if k != "description"} for e in config.get("lookup", [])]
         if not config["lookup"]:
             del config["lookup"]

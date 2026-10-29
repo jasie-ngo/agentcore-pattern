@@ -19,7 +19,7 @@ from pathlib import Path
 
 from strands_compose_agentcore import create_app
 
-USE_CASE = "hesta_agent"  # change to "claims_agent" to switch use case
+USE_CASE = "hesta_agent"  # or "claims_agent" / "card_dispute_agent" — see SWITCHING_USE_CASES.md
 
 app = create_app(Path(__file__).parent / USE_CASE / "config.yaml")
 

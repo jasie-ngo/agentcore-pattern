@@ -1,0 +1,31 @@
+# Synthetic test data for Harbour Bank (fictional — no real customers).
+# Load into the deployed tables with:
+#   uv run --project app python scripts/seed_tables.py card_dispute_agent --region <region>
+# Each customer matches one sample email in sample_emails/.
+
+customers:
+  - { customer_id: CUST-100001, name: Mia Chen,      email: mia.chen@example.com,      status: active,    card_last4: "4821", card_status: active,  prior_disputes_90d: 0 }
+  - { customer_id: CUST-100002, name: Liam O'Brien,  email: liam.obrien@example.com,   status: active,    card_last4: "7734", card_status: active,  prior_disputes_90d: 0 }
+  - { customer_id: CUST-100003, name: Ava Patel,     email: ava.patel@example.com,     status: active,    card_last4: "3390", card_status: active,  prior_disputes_90d: 0 }
+  - { customer_id: CUST-100004, name: Noah Williams, email: noah.williams@example.com,  status: active,    card_last4: "5512", card_status: active,  prior_disputes_90d: 1 }
+  - { customer_id: CUST-100005, name: Grace Kim,     email: grace.kim@example.com,     status: suspended, card_last4: "6603", card_status: blocked, prior_disputes_90d: 0 }
+
+transactions:
+  # Mia — one small unrecognised charge → provisional_credit
+  - { transaction_id: TXN-500101, customer_id: CUST-100001, posted_at: "2026-10-20T09:14:00Z", merchant: WOOLWORTHS SYDNEY,  amount: 86.40, card_last4: "4821", channel: in_store, merchant_history_count: 24 }
+  - { transaction_id: TXN-500102, customer_id: CUST-100001, posted_at: "2026-10-22T21:03:00Z", merchant: STREAMFLIX PREMIUM, amount: 42.50, card_last4: "4821", channel: online,   merchant_history_count: 0 }
+
+  # Liam — one large unrecognised charge → human_review
+  - { transaction_id: TXN-500201, customer_id: CUST-100002, posted_at: "2026-10-23T14:47:00Z", merchant: TECHWORLD ONLINE,   amount: 1249.00, card_last4: "7734", channel: online, merchant_history_count: 0 }
+  - { transaction_id: TXN-500202, customer_id: CUST-100002, posted_at: "2026-10-21T08:02:00Z", merchant: CITY TRANSIT,       amount: 4.50,    card_last4: "7734", channel: in_store, merchant_history_count: 40 }
+
+  # Ava — three charges at one merchant within two hours → block_card_and_escalate
+  - { transaction_id: TXN-500301, customer_id: CUST-100003, posted_at: "2026-10-24T01:12:00Z", merchant: QUICKBET GAMING,    amount: 89.00,  card_last4: "3390", channel: online, merchant_history_count: 0 }
+  - { transaction_id: TXN-500302, customer_id: CUST-100003, posted_at: "2026-10-24T01:58:00Z", merchant: QUICKBET GAMING,    amount: 120.00, card_last4: "3390", channel: online, merchant_history_count: 1 }
+  - { transaction_id: TXN-500303, customer_id: CUST-100003, posted_at: "2026-10-24T02:41:00Z", merchant: QUICKBET GAMING,    amount: 250.00, card_last4: "3390", channel: online, merchant_history_count: 2 }
+
+  # Noah — a monthly gym membership he forgot → decline_with_explanation
+  - { transaction_id: TXN-500401, customer_id: CUST-100004, posted_at: "2026-10-01T06:00:00Z", merchant: FITLIFE GYM,        amount: 29.95, card_last4: "5512", channel: online, merchant_history_count: 11 }
+
+  # Grace — suspended account → human_review
+  - { transaction_id: TXN-500501, customer_id: CUST-100005, posted_at: "2026-10-19T17:30:00Z", merchant: SKYHIGH AIRLINES,   amount: 612.00, card_last4: "6603", channel: online, merchant_history_count: 0 }

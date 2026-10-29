@@ -124,10 +124,7 @@ def build_gateway_client() -> MCPClient | None:
     """
     global LAST_ERROR
     if not GATEWAY_URL:
-        LAST_ERROR = (
-            "GATEWAY_URL not set "
-            "(AGENTCORE_GATEWAY_URL / AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL missing)"
-        )
+        LAST_ERROR = "GATEWAY_URL not set (AGENTCORE_GATEWAY_URL / AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL missing)"
         log.warning("%s — agents will run without Gateway tools", LAST_ERROR)
         return None
     try:

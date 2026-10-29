@@ -1,0 +1,6 @@
+{
+  "prompt": "CAUTION: This email came from outside Harbour Bank. Do not click links unless you trust the sender.\nHi, I think I lost my card at the shops today. Can you send me a new one? CUST-100001. Mia\n\nHarbour Bank Limited ABN 12 345 678 901 AFSL 234567. This email is confidential.",
+  "sender_email": "mia.chen@example.com",
+  "source": "sample:07_lost_card",
+  "_expected_outcome": "route_to_service_team"
+}

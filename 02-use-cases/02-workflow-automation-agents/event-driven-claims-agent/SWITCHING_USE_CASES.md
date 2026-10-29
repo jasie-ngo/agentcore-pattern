@@ -4,7 +4,7 @@ One AgentCore Runtime (`multiusecaseagent`) serves one use case at a time. Which
 one is decided by a single line in [`app/main.py`](app/main.py):
 
 ```python
-USE_CASE = "hesta_agent"  # change to "claims_agent" to switch use case
+USE_CASE = "hesta_agent"  # or "claims_agent" / "card_dispute_agent"
 ```
 
 `agentcore/agentcore.json` is **not** edited to switch. It points the runtime at
@@ -23,14 +23,16 @@ app/
 │   ├── gateway.py      MCP Gateway client (Cognito M2M via AgentCore Identity)
 │   ├── memory.py       AgentCore Memory session manager + local fallback
 │   └── settings.py     generic env vars (region, Gateway)
-├── hesta_agent/      # HESTA member-email: config.yaml + its own Python
-└── claims_agent/     # insurance claims:   config.yaml + its own Python
+├── hesta_agent/        # HESTA member-email: blueprints + decision tables, no domain Python
+├── claims_agent/       # insurance claims:   blueprints + one deterministic executor (tools.py)
+└── card_dispute_agent/ # bank card disputes: blueprints + decision tables, no domain Python
 ```
 
 | Change | Where |
 |---|---|
 | Prompt, model, agent, orchestration for one use case | `app/<use_case>/config.yaml` |
-| Domain logic / deterministic tools for one use case | `app/<use_case>/*.py` |
+| Deterministic rules (routing, thresholds, checks) | `app/<use_case>/decisions.yaml` |
+| Anything blueprints can't express | `app/<use_case>/tools.py` |
 | Gateway auth, Memory, agent factory (all use cases) | `app/_shared/*.py` |
 | Which use case is deployed | `app/main.py` → `USE_CASE` |
 | How inbound messages are cleaned up | `app/<use_case>/ingestion.yaml` |
@@ -43,13 +45,14 @@ A use case's `config.yaml` references the shared code by relative path, e.g.
 
 ## Switch procedure
 
-1. **Run locally first (optional).** Both configs run locally without touching
+1. **Run locally first (optional).** Every config runs locally without touching
    `app/main.py` at all — use this to verify a change before the edit + redeploy:
    ```bash
    sca dev --config app/hesta_agent/config.yaml
    sca dev --config app/claims_agent/config.yaml
+   sca dev --config app/card_dispute_agent/config.yaml
    ```
-2. Edit `app/main.py`: set `USE_CASE = "claims_agent"` (or `"hesta_agent"`).
+2. Edit `app/main.py`: set `USE_CASE` to `"hesta_agent"`, `"claims_agent"` or `"card_dispute_agent"`.
 3. Redeploy. This fully replaces whatever was running before — it's a switch,
    not an addition:
    ```bash
@@ -59,16 +62,18 @@ A use case's `config.yaml` references the shared code by relative path, e.g.
    (`agentcore dev --runtime multiusecaseagent` for a local runtime check):
    - **HESTA:** invoke with a `prompt` from `app/hesta_agent/sample_emails/*.json`.
    - **Claims:** `python3 scripts/test_invoke.py --region <region> --prompt 'File a claim for POL-12345. $5000 storm damage. Claimant email: john@example.com'`
+   - **Card disputes:** seed first (`uv run --project app python scripts/seed_tables.py card_dispute_agent --region <region>`), then invoke with a `prompt` from `app/card_dispute_agent/sample_emails/*.json`.
 
-Both use cases share the same Gateway tools, DynamoDB tables and AgentCore Memory
-resource; they differ only in their `config.yaml` (Memory actor ids differ, so
-their recalled history does not mix).
+All use cases share one Gateway, one Memory resource and the shared tables.
+HESTA and claims use the same claims tools; `card_dispute_agent` declares and
+creates its own tables and tools in its `gateway_tools.yaml`. Memory actor ids
+differ per use case, so recalled history does not mix.
 
 ## Adding a use case
 
 See [docs/FRAMEWORK.md → How to… add a use case](docs/FRAMEWORK.md#7-how-to). In short:
 create `app/<name>/` with `config.yaml`, `ingestion.yaml` and `gateway_tools.yaml`
-(plus any `schemas.py` / `tools.py`), run
+(plus `decisions.yaml` / `tools.py` when needed), run
 `uv run --project app python scripts/build_tools.py`, point `USE_CASE` at it,
 and upload test files to `claims-inbox/<name>/`.
 

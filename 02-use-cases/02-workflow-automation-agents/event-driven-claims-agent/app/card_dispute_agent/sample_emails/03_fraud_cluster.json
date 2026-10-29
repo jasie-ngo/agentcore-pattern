@@ -1,0 +1,6 @@
+{
+  "prompt": "URGENT - I woke up to three charges from QUICKBET GAMING overnight ($89, $120 and $250). I have never gambled online. I think my card details have been stolen. Please stop this! CUST-100003\n\nAva",
+  "sender_email": "ava.patel@example.com",
+  "source": "sample:03_fraud_cluster",
+  "_expected_outcome": "block_card_and_escalate"
+}

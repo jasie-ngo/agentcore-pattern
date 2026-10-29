@@ -1,0 +1,127 @@
+# HESTA's deterministic decisions — no model involved, same inputs give the same answer.
+#
+# Three tables, each bound as a coordinator tool in tools.py:
+#   verify_identity    how far the sender's identity is verified (AI-003 policy)
+#   check_attachments  the document an intent expects vs what arrived (AI-004)
+#   route_case         whether a human must review before anything is sent
+#
+# First matching rule wins, except route_case (hit_policy: collect), which lists
+# EVERY reason that applies. ${VAR:-default} is filled from the environment.
+# Engine and operators: app/_shared/decision_table.py.
+
+tables:
+  # ── AI-003 — identity verification policy ──────────────────────────────────
+  - name: verify_identity
+    description: >-
+      Apply HESTA's identity-verification policy to the member-record lookup. Call it
+      after lookup_policy (or straight away when there is no member number).
+    inputs:
+      member_number:   { type: string,  description: "Member/policy number from the email; empty if none" }
+      sender_email:    { type: string,  description: "The sender's email address" }
+      record_found:    { type: boolean, description: "True only if lookup_policy returned a record" }
+      record_email:    { type: string,  description: "The record's email" }
+      record_status:   { type: string,  description: "The record's status, e.g. active" }
+    rules:
+      - id: no_member_number
+        when: { member_number: { is_empty: true } }
+        then: { outcome: unverified, verification_required: true, notes: "No member/policy number found in the email — identity cannot be verified." }
+      - id: no_record
+        when: { record_found: { ne: true } }
+        then: { outcome: unverified, verification_required: true, notes: "No member record found for this number (or the lookup failed)." }
+      - id: lookup_not_run
+        when: { record_found: { is_empty: true } }
+        then: { outcome: unverified, verification_required: true, notes: "The member record was not looked up (Gateway unavailable?) — treat as unverified." }
+      - id: verified
+        when: { record_status: active, record_email: { same_as: sender_email } }
+        then: { outcome: verified, verification_required: false, notes: "Member number resolved and sender email matches an active record." }
+      - id: email_mismatch
+        when: { record_status: active }
+        then: { outcome: partial, verification_required: true, notes: "Record found and active, but sender email does not match — request identity verification." }
+    default: { outcome: unverified, verification_required: true, notes: "Record found but the account is not active — treat as unverified." }
+
+  # ── AI-004 — attachment expectation (markers only; no file bytes in the pilot) ─
+  - name: check_attachments
+    description: Compare the document the primary intent expects with the attachments the email contained.
+    inputs:
+      primary_intent_id: { type: string,  description: "The primary intent id" }
+      attachment_count:  { type: integer, description: "Attachment markers in the email" }
+    rules:
+      - id: bdbn_missing
+        when: { primary_intent_id: death_benefit_nomination, attachment_count: { lte: 0 } }
+        then: { outcome: missing, expected_document: "Binding Death Nomination form", notes: "Expected a Binding Death Nomination form but none was attached — ask the member to provide it." }
+      - id: bdbn_present
+        when: { primary_intent_id: death_benefit_nomination }
+        then: { outcome: present_unverified, expected_document: "Binding Death Nomination form", notes: "Attachment present; contents cannot be validated in the pilot — a human should confirm." }
+      - id: hardship_missing
+        when: { primary_intent_id: financial_hardship, attachment_count: { lte: 0 } }
+        then: { outcome: missing, expected_document: "bank statement / evidence of hardship", notes: "Expected evidence of hardship but none was attached — ask the member to provide it." }
+      - id: hardship_present
+        when: { primary_intent_id: financial_hardship }
+        then: { outcome: present_unverified, expected_document: "bank statement / evidence of hardship", notes: "Attachment present; contents cannot be validated in the pilot — a human should confirm." }
+      - id: family_law_missing
+        when: { primary_intent_id: family_law_split, attachment_count: { lte: 0 } }
+        then: { outcome: missing, expected_document: "court order / legal documents", notes: "Expected a court order or legal documents but none was attached." }
+      - id: family_law_present
+        when: { primary_intent_id: family_law_split }
+        then: { outcome: present_unverified, expected_document: "court order / legal documents", notes: "Attachment present; contents cannot be validated in the pilot — a human should confirm." }
+      - id: noi_missing
+        when: { primary_intent_id: notice_of_intent_tax_deduction, attachment_count: { lte: 0 } }
+        then: { outcome: missing, expected_document: "ATO Notice of Intent form", notes: "Expected an ATO Notice of Intent form but none was attached." }
+      - id: noi_present
+        when: { primary_intent_id: notice_of_intent_tax_deduction }
+        then: { outcome: present_unverified, expected_document: "ATO Notice of Intent form", notes: "Attachment present; contents cannot be validated in the pilot — a human should confirm." }
+      - id: unexpected_attachment
+        when: { attachment_count: { gt: 0 } }
+        then: { outcome: present_unverified, expected_document: none, notes: "Attachment(s) detected but none is expected for this intent — check relevance." }
+    default: { outcome: not_applicable, expected_document: none, notes: "No attachment expected for this intent, and none detected." }
+
+  # ── Routing gate — human in the loop ───────────────────────────────────────
+  - name: route_case
+    description: >-
+      Decide whether a human must review this case before anything is sent. Every
+      matching rule is a reason to escalate; no match means no escalation.
+    hit_policy: collect
+    inputs:
+      primary_intent_id:         { type: string,  description: "Primary intent id" }
+      primary_confidence:        { type: integer, description: "Confidence (0-100) of the primary intent" }
+      confident_intent_count:    { type: integer, description: "How many intents scored at or above the confidence threshold" }
+      needs_human_triage:        { type: boolean, description: "The intent identifier's needs_triage flag" }
+      personal_advice_requested: { type: boolean, description: "The intent identifier's personal-advice flag" }
+      verification_required:     { type: boolean, description: "From verify_identity" }
+      vulnerability_flag_count:  { type: integer, description: "How many vulnerability flags empathy returned" }
+      priority:                  { type: string,  description: "low | normal | high | urgent, from empathy" }
+    rules:
+      - id: regulated_intent
+        when:
+          primary_intent_id:
+            in: [death_benefit_nomination, withdrawal_benefit_payment, departing_australia_payment,
+                 financial_hardship, family_law_split, notice_of_intent_tax_deduction]
+        then: { outcome: escalate, reason: "regulated intent" }
+      - id: personal_advice
+        when: { personal_advice_requested: true }
+        then: { outcome: escalate, reason: "PERSONAL ADVICE requested — do NOT provide personal financial advice" }
+      - id: identity_not_verified
+        when: { verification_required: { ne: false } }
+        then: { outcome: escalate, reason: "identity not verified" }
+      - id: identity_unknown
+        when: { verification_required: { is_empty: true } }
+        then: { outcome: escalate, reason: "identity not checked" }
+      - id: intent_unknown
+        when: { primary_intent_id: other_unknown }
+        then: { outcome: escalate, reason: "intent unclear" }
+      - id: flagged_for_triage
+        when: { needs_human_triage: true }
+        then: { outcome: escalate, reason: "flagged for triage" }
+      - id: low_confidence
+        when: { primary_confidence: { lt: ${INTENT_CONFIDENCE_THRESHOLD:-70} } }
+        then: { outcome: escalate, reason: "low intent confidence (below ${INTENT_CONFIDENCE_THRESHOLD:-70})" }
+      - id: multiple_intents
+        when: { confident_intent_count: { gt: 1 } }
+        then: { outcome: escalate, reason: "multiple intents detected" }
+      - id: vulnerability
+        when: { vulnerability_flag_count: { gt: 0 } }
+        then: { outcome: escalate, reason: "vulnerability flagged" }
+      - id: high_priority
+        when: { priority: { in: [high, urgent] } }
+        then: { outcome: escalate, reason: "high/urgent priority" }
+    default: { outcome: no_escalation, reason: "draft ready for a quick staff check" }

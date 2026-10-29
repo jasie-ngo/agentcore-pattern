@@ -1,10 +1,21 @@
 # Multi-use-case agent framework — architecture and logic
 
 This project is a small framework for **event-driven agents** on Amazon Bedrock
-AgentCore. A use case (today: insurance **claims** and **HESTA** member email) is
-a folder of configuration plus a little domain code. The framework supplies
-everything else: the front door, the Gateway tools, the agent wiring and the
-deployment.
+AgentCore. A use case is a folder of configuration plus — only where a real
+business rule needs it — a little domain code. The framework supplies everything
+else: the front door, the Gateway tools, the agent roles, the decision engine,
+the wiring and the deployment.
+
+Three use cases run on the same, unchanged core:
+
+| Use case | Domain | How it is built |
+|---|---|---|
+| `hesta_agent` | super fund member email (HESTA) | **blueprints only** — 5 blueprint agents, 3 decision tables, 1 blueprint Gateway tool |
+| `claims_agent` | insurance claims (fictional SecureGuard) | blueprint agents + a decision table; one hand-written Phase-3 executor; owns the shared tools |
+| `card_dispute_agent` | card disputes (fictional Harbour Bank) | **blueprints only** — no prompts from scratch, no schemas, no Lambda or decision code |
+
+In every use case the only hand-written prompt is the coordinator's — the flow
+itself (which step runs when, what is passed on, the report layout).
 
 The rule behind the whole design:
 
@@ -28,7 +39,8 @@ The rule behind the whole design:
  ┌──────────── AgentCore Runtime  (container = app/) ───────────────┐
  │ app/main.py  → app/<USE_CASE>/config.yaml  (strands-compose)    │
  │   agents, prompts, models, orchestration — YAML                 │
- │   deterministic decisions — app/<use_case>/tools.py (@tool)     │
+ │   agent roles — _shared/agent_blueprints.py (filled in by YAML) │
+ │   decisions — decision tables (YAML) or app/<use_case>/tools.py │
  │   agent factory, Gateway client, Memory — app/_shared/          │
  └──────────────────────────────┬───────────────────────────────────┘
                                 ▼  MCP + Cognito M2M token
@@ -45,13 +57,14 @@ The rule behind the whole design:
                      DynamoDB / SNS / SES
 ```
 
-There are three layers, and each one has a "fill in a form" part and a "write
+There are four layers, and each one has a "fill in a form" part and a "write
 code" part:
 
 | Layer | Form (no code) | Code (only for business rules) |
 |---|---|---|
 | **Front door** — clean up inbound messages | `app/<use_case>/ingestion.yaml` | — (the normaliser is generic) |
-| **Agents** — understand, decide, draft | `app/<use_case>/config.yaml` (agents, prompts, models, orchestration) | `app/<use_case>/tools.py` — deterministic decisions such as routing gates |
+| **Agents** — understand, assess, review, draft | `app/<use_case>/config.yaml` — agent blueprints filled in (classifier, extractor, assessor, reviewer, writer), models, orchestration | a hand-written agent prompt, when no blueprint fits |
+| **Decisions** — deterministic business rules | `app/<use_case>/decisions.yaml` (decision table) | `app/<use_case>/tools.py` — `@tool` functions for rules a table cannot express |
 | **Gateway tools** — read and write data | `app/<use_case>/gateway_tools.yaml` (blueprint tools) | `lambdas/<use_case>/<tool>/` — custom tools |
 
 ---
@@ -63,9 +76,9 @@ app/<use_case>/
 ├── config.yaml          agents, prompts, models, memory, orchestration (strands-compose)
 ├── ingestion.yaml       how inbound messages are cleaned up
 ├── gateway_tools.yaml   the Gateway tools this use case owns (or uses)
-├── schemas.py           structured-output contracts (Pydantic)
-├── tools.py             deterministic @tool functions — business rules
-├── settings.py          use-case-only environment variables
+├── decisions.yaml       decision table(s) — deterministic business rules
+├── seed_data.yaml       test data for the tables this use case creates
+├── tools.py             binds decision tables / ingestion as tools; @tool functions for complex rules
 └── __init__.py
 lambdas/<use_case>/<tool>/   custom tool Lambdas, if any (handler.py + schema.json)
 ```
@@ -180,11 +193,21 @@ Lambda runs ──reads its settings──▶ looks in the right table, returns 
   returns: [policy_number, holder_name, email, status]   # only these fields go back
 ```
 
-List mode — every record matching a fixed value, via an index:
+List mode — every record matching a value, via an index. The value is fixed
+(`value:`) or taken from the caller (`from_input: true`):
 
 ```yaml
   filter: { index: status-index, key: status, value: pending_review }
   result_key: claims
+
+  # or: this customer's 25 most recent transactions (sorted by the index's sort key)
+  filter: { index: customer-index, key: customer_id, from_input: true, limit: 25, newest_first: true }
+  result_key: transactions
+
+  # or: pending cases, narrowed to the caller's member number (a DynamoDB filter
+  # after the index query; each `where` field becomes a required argument)
+  filter: { index: status-index, key: status, value: pending_review, where: { policy_number: "Member number" } }
+  result_key: cases
 ```
 
 Responses: `{"found": true, …fields}`, `{"found": false, "error": "Record not found for …"}`,
@@ -267,8 +290,8 @@ tables:
 Tool names and targets are unique across the whole project — the Gateway is
 shared. A use case that relies on another use case's tools lists them under
 `uses:` so the dependency is explicit and checked at build time. HESTA does this
-today: it reuses the claims tools, with HESTA members stored in the Policies
-table.
+today: it reuses `lookup_policy`, `create_claim` and `request_human_review`, with
+HESTA members stored in the Policies table, and owns `list_member_cases`.
 
 ### Which tools are which today
 
@@ -280,6 +303,16 @@ table.
 | `request_human_review` | claims | blueprint `record_write` (derived priority + SNS) |
 | `send_notification` | claims | custom |
 | `resolve_claim` | claims | custom |
+| `lookup_customer` | card_dispute | blueprint `retrieval` (by id, or by email via an index) |
+| `list_customer_transactions` | card_dispute | blueprint `retrieval` (list mode, `from_input`) |
+| `create_dispute` | card_dispute | blueprint `record_write` (find-or-create on customer + transaction) |
+| `request_dispute_review` | card_dispute | blueprint `record_write` (derived priority) |
+| `list_member_cases` | hesta | blueprint `retrieval` (list mode, `where` on the caller's member number) |
+
+Test data for a use case's own tables goes in `app/<use_case>/seed_data.yaml`
+and is loaded with
+`uv run --project app python scripts/seed_tables.py <use_case> --region <region>`
+(`--dry-run` shows the plan without AWS calls).
 
 ---
 
@@ -325,20 +358,124 @@ forgotten rebuild too.
 
 ---
 
-## 6. Inside the Runtime
+## 6. Inside the Runtime: agent blueprints and decision tables
 
 * `app/main.py` loads `app/<USE_CASE>/config.yaml` with strands-compose.
-* Agents are built per session by `app/_shared/factory.py`, which adds what YAML
-  cannot express: structured output (`agent_kwargs.structured_output:
-  <use_case>.schemas:<Class>`) and the Gateway client (`agent_kwargs.gateway: true`,
-  with a Cognito M2M token from AgentCore Identity fetched on the request thread).
 * AgentCore Memory comes from `app/_shared/memory.py`, which falls back to local
   sessions when no memory id is configured.
-* Each coordinator prompt accepts the envelope; with raw text it normalises
-  first (HESTA calls `normalize_email`; claims reads raw text as-is).
-* **Decisions stay deterministic.** LLMs read and write; Python tools decide —
-  e.g. HESTA's `route_decision` and `classify_verification`, claims'
-  `execute_claim_decision`. Prompts tell agents to pass those results on unchanged.
+* Each coordinator prompt accepts the envelope; with raw text it normalises first.
+
+### Agent blueprints — common roles, filled in per use case
+
+Pipelines reuse the same few agent **roles**; only the **content** changes. An
+agent blueprint (`app/_shared/agent_blueprints.py`) writes the system prompt and
+generates the structured-output schema from the YAML form:
+
+| Blueprint | Role | The use case fills in | Output (generated schema) |
+|---|---|---|---|
+| `classifier` | what is this about? | `labels` (id, description, signals, examples), `flags`, `fields`, `fallback` | labels with confidence, `primary_id`, `needs_triage`, one boolean per flag, each field |
+| `extractor` | pull fields out of text | `fields` (type, description, enum) | each field (or null), `missing`, `notes` |
+| `assessor` | gather evidence with tools, choose an outcome | `outcomes`, `criteria`, `facts`, `fallback_outcome` | `outcome`, `confidence`, `reasons`, each fact |
+| `reviewer` | independent second check | `checks` (name → what must hold) | each check, `approved`, `confidence`, `issues` |
+| `writer` | draft a reply | `style`, `knowledge`, `rules`, `signoff` | `subject`, `body`, `assumptions` |
+
+Every blueprint also takes `context` (who the agent works for), `task`,
+`extra_instructions` and `gateway: true`. Example from the bank use case:
+
+```yaml
+intent_classifier:
+  type: ../_shared/agent_blueprints.py:classifier
+  model: fast
+  agent_kwargs:
+    context: ${context}
+    task: "Classify why the customer is contacting the bank."
+    labels:
+      - { id: card_dispute, description: "disputes a card transaction", signals: ["don't recognise"] }
+      - { id: fee_query, description: "a question about a fee" }
+    flags:
+      fraud_suspected: "the customer reports several unknown charges"
+```
+
+All three use cases build every specialist this way. How the earlier
+hand-written agents map onto blueprints:
+
+| Agent | Blueprint | What the form holds |
+|---|---|---|
+| HESTA `intent_identifier` | classifier | the 8-intent taxonomy, the personal-advice flag, `sender_type` field |
+| HESTA `context_manager`, `empathy` | extractor | summary/state/outstanding; sentiment/vulnerability/priority |
+| HESTA `writer` | writer | house style, per-intent knowledge, identity and advice-decline wording, legal sign-off |
+| HESTA `reviewer_editor`, claims `claims_validator` | reviewer | accuracy/tone/compliance; decision/amount/description/category checks |
+| claims `claims_processor` | assessor | ACCEPT/REJECT criteria, claim facts, REJECT fallback |
+
+Agents that only wrapped a deterministic tool (HESTA's identity, attachment,
+case-status and hand-off agents) became decision tables or direct Gateway calls
+by the coordinator — the same result for fewer model calls.
+
+When no role fits, or a prompt needs domain tuning beyond `extra_instructions`,
+write the agent by hand with `type: ../_shared/factory.py:agent` and a
+`system_prompt:` (and `agent_kwargs.structured_output: <module>:<Class>` for a
+schema). The coordinators are written this way.
+
+### Decision tables — deterministic rules as a form
+
+LLMs read and write; **decisions stay deterministic.** A decision table
+(`app/<use_case>/decisions.yaml`, evaluated by `app/_shared/decision_table.py`)
+is an ordered list of rules: the first rule whose conditions all hold decides,
+otherwise `default` does. No model is involved, and the business can review the
+rules without reading code:
+
+```yaml
+name: decide_dispute
+description: Decide what happens to a card dispute.
+inputs:
+  amount:        { type: number }
+  fraud_signals: { type: boolean }
+  assessment:    { type: string }
+rules:
+  - id: fraud_pattern
+    when: { fraud_signals: true }
+    then: { outcome: block_card_and_escalate, escalate: true, reason: "Fraud pattern found." }
+  - id: small_valid_dispute
+    when: { assessment: valid_dispute, amount: { lt: 100 } }
+    then: { outcome: provisional_credit, escalate: false, reason: "Small, valid dispute." }
+default: { outcome: human_review, escalate: true, reason: "No rule matched." }
+```
+
+Conditions: a plain value means "equals"; otherwise `eq, ne, lt, lte, gt, gte,
+in, not_in, is_empty, same_as`. `same_as: <input>` compares two inputs (text
+trimmed and case-insensitive — e.g. sender email vs the email on record). A
+missing input fails every condition except `is_empty: true`. The result names
+the rule that decided (`rule_id`).
+
+`hit_policy: collect` applies **every** matching rule instead of the first — for
+checklists like HESTA's `route_case` ("escalate if ANY of these holds, and list
+every reason"). The result adds `matches` and `rule_ids`; no match gives the
+default. `${VAR:-default}` in the file is filled from the environment when the
+table is loaded, so thresholds stay tunable per deployment
+(`AUTO_APPROVE_THRESHOLD`, `INTENT_CONFIDENCE_THRESHOLD`). One file may hold
+several tables under `tables:`.
+
+A use case turns its forms into agent tools in `tools.py` — bindings only:
+
+```python
+from _shared.local_tools import decision_table_tool, ingestion_tool
+normalize_email = ingestion_tool(HERE / "ingestion.yaml", use_case="card_dispute_agent")
+decide_dispute = decision_table_tool(HERE / "decisions.yaml")
+```
+
+Code that applies a table without an agent in between uses
+`load_table(path, name)` and `decision_table.evaluate()` — claims'
+`execute_claim_decision` does, then runs the Phase 3 Gateway calls. That ordered
+sequence of side effects (create, escalate, notify; stop on a re-delivery) is
+the one thing no form expresses, so it stays a Python `@tool`.
+
+### Agent wiring
+
+Agents are built per session by `app/_shared/factory.py`, which adds what YAML
+cannot express: structured output (generated by a blueprint, or
+`agent_kwargs.structured_output: <module>:<Class>` for a hand-written agent) and the Gateway
+client (`agent_kwargs.gateway: true`, with a Cognito M2M token from AgentCore
+Identity fetched on the request thread).
 
 ---
 
@@ -347,6 +484,14 @@ forgotten rebuild too.
 ### Add a lookup or a record write
 Add an entry to `app/<use_case>/gateway_tools.yaml`, rebuild, mention the tool
 in the relevant agent's prompt, deploy. No Lambda code.
+
+### Add an agent
+Pick the blueprint for the role (§6) and fill in its form in `config.yaml`. Write
+a hand-written agent only when no blueprint fits.
+
+### Change a business rule
+Edit `app/<use_case>/decisions.yaml` (or the `@tool` function, for rules a table
+cannot express). No rebuild needed — it ships with the Runtime.
 
 ### Add a custom tool
 Create `lambdas/<use_case>/<tool>/handler.py` and `schema.json`, add a `custom:`
@@ -357,13 +502,15 @@ Edit `app/<use_case>/ingestion.yaml`, rebuild, deploy (the Trigger is rebundled)
 
 ### Add a use case
 1. Create `app/<new_use_case>/` with `__init__.py`, `config.yaml`,
-   `ingestion.yaml`, `gateway_tools.yaml` and any `schemas.py` / `tools.py`.
-   Use `type: ../_shared/factory.py:agent` for agents.
+   `ingestion.yaml`, `gateway_tools.yaml`, and as needed `decisions.yaml`,
+   `seed_data.yaml`, `tools.py`. Start from `app/card_dispute_agent/` — it is
+   built from blueprints only.
 2. Python files that import siblings put `app/` on `sys.path` first (see the top
    of `claims_agent/tools.py`) and import as `from <new_use_case>.<module> import …`.
 3. Rebuild (`scripts/build_tools.py`), run the tests, try it locally with
    `sca dev --config app/<new_use_case>/config.yaml`.
-4. Point `USE_CASE` at it and deploy. Upload test files to
+4. Point `USE_CASE` at it and deploy, then seed its tables with
+   `scripts/seed_tables.py <new_use_case>`. Upload test files to
    `claims-inbox/<new_use_case>/`.
 
 ---
@@ -382,6 +529,10 @@ Edit `app/<use_case>/ingestion.yaml`, rebuild, deploy (the Trigger is rebundled)
   rejection notification again.
 * **Blueprints cover one table per tool.** Anything touching several tables, or
   with rules about how values may change, is a custom tool.
+* **Generic prompts are a starting point.** Agent blueprints give a correct,
+  consistent prompt from the form; a domain that needs tuned wording uses
+  `extra_instructions` or a hand-written agent. Only the decision tables are
+  unit-tested against the scenarios — the agents' judgement needs a model run.
 
 ## File map
 
@@ -389,12 +540,17 @@ Edit `app/<use_case>/ingestion.yaml`, rebuild, deploy (the Trigger is rebundled)
 |---|---|
 | `app/main.py` | Runtime entrypoint; `USE_CASE` selects the use case |
 | `app/_shared/ingestion.py` | Generic normaliser (stdlib only; also bundled into the Trigger) |
+| `app/_shared/agent_blueprints.py` | Agent blueprints: classifier, extractor, assessor, reviewer, writer |
+| `app/_shared/decision_table.py`, `local_tools.py` | Decision-table engine; builders that turn forms into agent tools |
 | `app/_shared/factory.py`, `gateway.py`, `memory.py`, `settings.py` | Agent wiring shared by every use case |
 | `app/<use_case>/` | A use case (see §2) |
 | `lambdas/blueprints/retrieval/`, `record_write/` | Blueprint tool code |
 | `lambdas/<use_case>/<tool>/` | Custom tool code + schema |
 | `lambdas/trigger/` | Front door |
 | `scripts/build_tools.py` | Forms → schemas, Gateway targets, manifest |
+| `scripts/seed_tables.py` | Loads a use case's `seed_data.yaml` into the tables it created |
 | `agentcore/generated/` | Build output — never edit by hand |
 | `agentcore/cdk/lib/infra-construct.ts` | Shared tables, tool Lambdas from the manifest, Trigger |
 | `tests/test_ingestion.py`, `test_lambda_handlers.py`, `test_build_tools.py`, `test_trigger.py` | Framework tests (run against the real forms) |
+| `tests/test_agent_blueprints.py`, `test_decision_table.py` | Agent blueprints, tool builders, every use case's config, every bank decision scenario |
+| `tests/test_use_case_decisions.py` | Claims routing and HESTA identity / attachment / routing tables |

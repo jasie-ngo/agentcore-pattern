@@ -1,0 +1,19 @@
+# How Harbour Bank customer emails are cleaned up before the agents see them.
+# Read by app/_shared/ingestion.py — in the Trigger Lambda (every S3 upload) and
+# by this use case's normalize_email tool (direct invocations).
+# Rebuild after editing: uv run --project app python scripts/build_tools.py
+
+# Everything from this text onwards is the bank's standard email footer — dropped.
+footer_markers:
+  - "Harbour Bank Limited ABN"
+
+# Lines starting with these are the external-mail security banner — dropped.
+banner_markers:
+  - "CAUTION: This email came from outside Harbour Bank"
+
+# A Harbour Bank customer number, e.g. CUST-100001.
+# Bracketed placeholders such as "[CUSTOMER NUMBER]" are always ignored.
+id_patterns:
+  - { regex: '\bCUST-\d{6}\b', uppercase: true }
+
+default_sender_type: customer

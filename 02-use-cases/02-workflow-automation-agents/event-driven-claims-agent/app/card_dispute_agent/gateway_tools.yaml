@@ -1,0 +1,79 @@
+# Gateway tools for the card-dispute use case (Harbour Bank — a fictional bank).
+#
+# Everything here is a blueprint: no Lambda code. Each entry becomes a Lambda
+# built from lambdas/blueprints/*, a tool schema and a Gateway target. The
+# tables are created for this use case from the keys below. Rebuild after editing:
+#   uv run --project app python scripts/build_tools.py
+# Test data: uv run --project app python scripts/seed_tables.py card_dispute_agent
+
+tables:
+  customers:
+    partition_key: { name: customer_id, type: string }
+    indexes:
+      - { name: email-index, partition_key: { name: email, type: string } }
+  transactions:
+    partition_key: { name: transaction_id, type: string }
+    indexes:
+      - name: customer-index
+        partition_key: { name: customer_id, type: string }
+        sort_key: { name: posted_at, type: string }
+  disputes:
+    partition_key: { name: dispute_id, type: string }
+  dispute_reviews:
+    partition_key: { name: review_id, type: string }
+
+tools:
+  - name: lookup_customer
+    description: Look up a bank customer by customer number, or by email address when no number is known
+    blueprint: retrieval
+    table: customers
+    lookup:
+      - { key: customer_id, description: "Customer number, e.g. CUST-100001" }
+      - { key: email, index: email-index, description: "Customer email address" }
+    returns: [customer_id, name, email, status, card_last4, card_status, prior_disputes_90d]
+
+  - name: list_customer_transactions
+    description: List a customer's most recent card transactions, newest first
+    blueprint: retrieval
+    table: transactions
+    filter: { index: customer-index, key: customer_id, from_input: true, limit: 25, newest_first: true,
+              description: "Customer number whose transactions to list" }
+    result_key: transactions
+    returns: [transaction_id, posted_at, merchant, amount, card_last4, channel, merchant_history_count]
+
+  - name: create_dispute
+    description: >-
+      Record a card dispute. The same customer + transaction always maps to the
+      same dispute, so a re-sent email never opens a second dispute.
+    blueprint: record_write
+    table: disputes
+    id: { field: dispute_id, prefix: DSP, from: [customer_id, transaction_id] }
+    if_exists: return_existing
+    inputs:
+      customer_id:    { type: string, required: true, description: "Customer number" }
+      transaction_id: { type: string, required: true, description: "The disputed transaction" }
+      amount:         { type: number, required: true, description: "Disputed amount" }
+      merchant:       { type: string, description: "Merchant name on the transaction" }
+      outcome:        { type: string, required: true, description: "The decision table's outcome" }
+      reason:         { type: string, description: "Why, in one or two sentences" }
+      source:         { type: string, description: "Where the email came from (the envelope's source)" }
+    rules:
+      amount: { min: 0, max: 1000000 }
+      outcome:
+        one_of: [provisional_credit, block_card_and_escalate, decline_with_explanation, human_review]
+    defaults: { status: open }
+    timestamps: [created_at]
+
+  - name: request_dispute_review
+    description: Queue a dispute for a disputes officer to review
+    blueprint: record_write
+    table: dispute_reviews
+    id: { field: review_id, prefix: DREV }
+    inputs:
+      dispute_id: { type: string, required: true, description: "The dispute to review" }
+      reason:     { type: string, required: true, description: "Why a human must review it" }
+      amount:     { type: number, required: true, description: "Disputed amount (sets priority)" }
+    set: { status: pending }
+    derived:
+      priority: { from: amount, gte: 1000, then: high, else: normal }
+    timestamps: [submitted_at]

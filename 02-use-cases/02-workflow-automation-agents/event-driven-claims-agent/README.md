@@ -166,7 +166,8 @@ event-driven-claims-agent/
 │   ├── pyproject.toml         # Dependencies (uv.lock pinned)
 │   ├── _shared/               # Agent factory, Gateway client (Identity OAuth), Memory, settings
 │   ├── claims_agent/          # config.yaml (agents + prompts), schemas, routing, Phase 3 tool
-│   └── hesta_agent/           # HESTA member-email use case
+│   ├── hesta_agent/           # HESTA member-email use case
+│   └── card_dispute_agent/    # Bank card disputes — built only from blueprints
 ├── agentcore/
 │   ├── agentcore.json         # AgentCore resources (Runtime, Gateway, Memory, PolicyEngine, Eval)
 │   └── cdk/lib/               # CDK: supplementary infra (DynamoDB, S3, Lambda, EventBridge — NO Cognito)
@@ -212,7 +213,7 @@ The $100k blocking threshold is in `agentcore/agentcore.json` → `policyEngines
 
 ### Adjust the auto-approve confidence threshold
 
-Set `AUTO_APPROVE_THRESHOLD` in `agentcore/agentcore.json` → `runtimes[0].envVars` (default `80`), then redeploy. Both the validator prompt (`app/claims_agent/config.yaml`) and the deterministic routing (`app/claims_agent/routing.py`) read it.
+Set `AUTO_APPROVE_THRESHOLD` in `agentcore/agentcore.json` → `runtimes[0].envVars` (default `80`), then redeploy. Both the validator prompt (`app/claims_agent/config.yaml`) and the deterministic routing table (`app/claims_agent/decisions.yaml`) read it.
 
 ### Change prompts or agents
 

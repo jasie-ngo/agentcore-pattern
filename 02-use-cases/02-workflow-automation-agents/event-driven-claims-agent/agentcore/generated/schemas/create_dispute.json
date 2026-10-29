@@ -1,0 +1,45 @@
+[
+  {
+    "name": "create_dispute",
+    "description": "Record a card dispute. The same customer + transaction always maps to the same dispute, so a re-sent email never opens a second dispute.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "Customer number"
+        },
+        "transaction_id": {
+          "type": "string",
+          "description": "The disputed transaction"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Disputed amount"
+        },
+        "merchant": {
+          "type": "string",
+          "description": "Merchant name on the transaction"
+        },
+        "outcome": {
+          "type": "string",
+          "description": "The decision table's outcome"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why, in one or two sentences"
+        },
+        "source": {
+          "type": "string",
+          "description": "Where the email came from (the envelope's source)"
+        }
+      },
+      "required": [
+        "customer_id",
+        "transaction_id",
+        "amount",
+        "outcome"
+      ]
+    }
+  }
+]

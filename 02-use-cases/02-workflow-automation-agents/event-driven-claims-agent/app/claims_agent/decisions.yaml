@@ -1,0 +1,26 @@
+# The claims routing decision — deterministic, no model involved.
+#
+# Applied inside execute_claim_decision (tools.py) to the Processor's decision and
+# the Validator's review, then the matching Phase 3 actions run. First matching
+# rule wins. Safe defaults: no decision -> REJECT; anything unproven -> HUMAN_REVIEW,
+# so no claim is auto-approved without a passing validation.
+# ${AUTO_APPROVE_THRESHOLD:-80} is filled from the environment (set by CDK).
+# Engine and operators: app/_shared/decision_table.py.
+
+name: route_claim
+description: Decide the final action for a claim from the processor's decision and the validator's review.
+inputs:
+  decision:   { type: string,  description: "The processor's ACCEPT or REJECT (empty if it gave none)" }
+  confidence: { type: integer, description: "The validator's confidence 0-100 (empty if it gave none)" }
+  approved:   { type: boolean, description: "The validator approved the decision (every check passed)" }
+rules:
+  - id: no_decision
+    when: { decision: { is_empty: true } }
+    then: { outcome: REJECT, reason: "No decision from the Claims Processor — rejected by default" }
+  - id: rejected
+    when: { decision: REJECT }
+    then: { outcome: REJECT, reason: "The Claims Processor rejected the claim" }
+  - id: auto_approve
+    when: { decision: ACCEPT, approved: true, confidence: { gte: ${AUTO_APPROVE_THRESHOLD:-80} } }
+    then: { outcome: AUTO_APPROVE, reason: "Accepted and validated with high confidence" }
+default: { outcome: HUMAN_REVIEW, reason: "Accepted but not validated with enough confidence" }

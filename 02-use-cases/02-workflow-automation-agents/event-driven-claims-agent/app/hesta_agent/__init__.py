@@ -1,9 +1,8 @@
-"""Supporting Python for the YAML-defined HESTA member-email pipeline.
+"""The YAML-defined HESTA member-email pipeline.
 
-Nothing here orchestrates anything — ``config.yaml`` does. These modules are the
-ported domain logic (``schemas``, ``taxonomy``, ``knowledge``), ``ingestion.yaml``
-(how inbound messages are cleaned up — applied by ``_shared/ingestion.py``),
-the deterministic steps exposed as tools (``tools``) and the HESTA-only settings.
-The generic wiring (agent factory, Gateway client, Memory session manager) lives
-in ``app/_shared/``.
+There is no domain Python here: ``config.yaml`` holds the agents (each one an
+agent blueprint filled in) and the flow, ``decisions.yaml`` the deterministic
+rules, ``ingestion.yaml`` how inbound messages are cleaned up and
+``gateway_tools.yaml`` the Gateway tools. ``tools`` only binds the YAML forms as
+agent tools. The generic wiring lives in ``app/_shared/``.
 """

@@ -1,9 +1,261 @@
 {
   "_generated": "by scripts/build_tools.py from app/*/gateway_tools.yaml and app/*/ingestion.yaml — do not edit",
-  "source_hash": "fa03612aaf09decc0cb7a718e3fd48722ef993ecad93c907243d84f73a1c147d",
+  "source_hash": "6289ef1048b504d0e8fc7428c2ecd2d07329a8bd6b3ab4d801a82b6d41bbda0d",
   "default_use_case": "hesta_agent",
-  "tables": [],
+  "tables": [
+    {
+      "id": "card_dispute_agent.customers",
+      "use_case": "card_dispute_agent",
+      "key": "customers",
+      "partition_key": {
+        "name": "customer_id",
+        "type": "string"
+      },
+      "sort_key": null,
+      "indexes": [
+        {
+          "name": "email-index",
+          "partition_key": {
+            "name": "email",
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_dispute_agent.transactions",
+      "use_case": "card_dispute_agent",
+      "key": "transactions",
+      "partition_key": {
+        "name": "transaction_id",
+        "type": "string"
+      },
+      "sort_key": null,
+      "indexes": [
+        {
+          "name": "customer-index",
+          "partition_key": {
+            "name": "customer_id",
+            "type": "string"
+          },
+          "sort_key": {
+            "name": "posted_at",
+            "type": "string"
+          }
+        }
+      ]
+    },
+    {
+      "id": "card_dispute_agent.disputes",
+      "use_case": "card_dispute_agent",
+      "key": "disputes",
+      "partition_key": {
+        "name": "dispute_id",
+        "type": "string"
+      },
+      "sort_key": null,
+      "indexes": []
+    },
+    {
+      "id": "card_dispute_agent.dispute_reviews",
+      "use_case": "card_dispute_agent",
+      "key": "dispute_reviews",
+      "partition_key": {
+        "name": "review_id",
+        "type": "string"
+      },
+      "sort_key": null,
+      "indexes": []
+    }
+  ],
   "tools": [
+    {
+      "name": "lookup_customer",
+      "target": "lookup-customer",
+      "use_case": "card_dispute_agent",
+      "kind": "blueprint",
+      "blueprint": "retrieval",
+      "code": "lambdas/blueprints/retrieval",
+      "table": {
+        "created": "card_dispute_agent.customers"
+      },
+      "table_access": "read",
+      "tool_config": {
+        "lookup": [
+          {
+            "key": "customer_id"
+          },
+          {
+            "key": "email",
+            "index": "email-index"
+          }
+        ],
+        "returns": [
+          "customer_id",
+          "name",
+          "email",
+          "status",
+          "card_last4",
+          "card_status",
+          "prior_disputes_90d"
+        ]
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/lookup_customer.json"
+    },
+    {
+      "name": "list_customer_transactions",
+      "target": "list-customer-transactions",
+      "use_case": "card_dispute_agent",
+      "kind": "blueprint",
+      "blueprint": "retrieval",
+      "code": "lambdas/blueprints/retrieval",
+      "table": {
+        "created": "card_dispute_agent.transactions"
+      },
+      "table_access": "read",
+      "tool_config": {
+        "filter": {
+          "index": "customer-index",
+          "key": "customer_id",
+          "from_input": true,
+          "limit": 25,
+          "newest_first": true
+        },
+        "returns": [
+          "transaction_id",
+          "posted_at",
+          "merchant",
+          "amount",
+          "card_last4",
+          "channel",
+          "merchant_history_count"
+        ],
+        "result_key": "transactions"
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/list_customer_transactions.json"
+    },
+    {
+      "name": "create_dispute",
+      "target": "create-dispute",
+      "use_case": "card_dispute_agent",
+      "kind": "blueprint",
+      "blueprint": "record_write",
+      "code": "lambdas/blueprints/record_write",
+      "table": {
+        "created": "card_dispute_agent.disputes"
+      },
+      "table_access": "write",
+      "tool_config": {
+        "inputs": {
+          "customer_id": {
+            "type": "string",
+            "required": true
+          },
+          "transaction_id": {
+            "type": "string",
+            "required": true
+          },
+          "amount": {
+            "type": "number",
+            "required": true
+          },
+          "merchant": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "required": true
+          },
+          "reason": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "field": "dispute_id",
+          "prefix": "DSP",
+          "from": [
+            "customer_id",
+            "transaction_id"
+          ]
+        },
+        "if_exists": "return_existing",
+        "rules": {
+          "amount": {
+            "min": 0,
+            "max": 1000000
+          },
+          "outcome": {
+            "one_of": [
+              "provisional_credit",
+              "block_card_and_escalate",
+              "decline_with_explanation",
+              "human_review"
+            ]
+          }
+        },
+        "defaults": {
+          "status": "open"
+        },
+        "timestamps": [
+          "created_at"
+        ]
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/create_dispute.json"
+    },
+    {
+      "name": "request_dispute_review",
+      "target": "request-dispute-review",
+      "use_case": "card_dispute_agent",
+      "kind": "blueprint",
+      "blueprint": "record_write",
+      "code": "lambdas/blueprints/record_write",
+      "table": {
+        "created": "card_dispute_agent.dispute_reviews"
+      },
+      "table_access": "write",
+      "tool_config": {
+        "inputs": {
+          "dispute_id": {
+            "type": "string",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "required": true
+          },
+          "amount": {
+            "type": "number",
+            "required": true
+          }
+        },
+        "id": {
+          "field": "review_id",
+          "prefix": "DREV"
+        },
+        "set": {
+          "status": "pending"
+        },
+        "derived": {
+          "priority": {
+            "from": "amount",
+            "gte": 1000,
+            "then": "high",
+            "else": "normal"
+          }
+        },
+        "timestamps": [
+          "submitted_at"
+        ]
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/request_dispute_review.json"
+    },
     {
       "name": "lookup_policy",
       "target": "policy-lookup",
@@ -237,9 +489,55 @@
       ],
       "permissions": [],
       "schema_file": "lambdas/claims_agent/resolve_claim/schema.json"
+    },
+    {
+      "name": "list_member_cases",
+      "target": "list-member-cases",
+      "use_case": "hesta_agent",
+      "kind": "blueprint",
+      "blueprint": "retrieval",
+      "code": "lambdas/blueprints/retrieval",
+      "table": {
+        "existing": "Claims"
+      },
+      "table_access": "read",
+      "tool_config": {
+        "filter": {
+          "index": "status-index",
+          "key": "status",
+          "value": "pending_review",
+          "where": [
+            "policy_number"
+          ]
+        },
+        "returns": [
+          "claim_id",
+          "policy_number",
+          "category",
+          "created_at"
+        ],
+        "result_key": "cases"
+      },
+      "notify": false,
+      "schema_file": "agentcore/generated/schemas/list_member_cases.json"
     }
   ],
   "ingestion": {
+    "card_dispute_agent": {
+      "footer_markers": [
+        "Harbour Bank Limited ABN"
+      ],
+      "banner_markers": [
+        "CAUTION: This email came from outside Harbour Bank"
+      ],
+      "id_patterns": [
+        {
+          "regex": "\\bCUST-\\d{6}\\b",
+          "uppercase": true
+        }
+      ],
+      "default_sender_type": "customer"
+    },
     "claims_agent": {
       "id_patterns": [
         {

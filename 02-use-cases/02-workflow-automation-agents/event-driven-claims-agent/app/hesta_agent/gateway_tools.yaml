@@ -1,16 +1,30 @@
 # Gateway tools for the HESTA use case.
 #
-# HESTA currently owns no tools of its own: it reuses the claims tools, with the
-# Policies table holding HESTA member records (scripts/seed_hesta_members.py).
-# `uses:` lists them so the build checks they exist and the dependency is visible.
-#
-# To give HESTA its own tools (e.g. member_lookup on a Members table), add
-# `tables:` and `tools:` sections here in the same format as
-# app/claims_agent/gateway_tools.yaml, then rebuild:
+# HESTA reuses three claims tools (`uses:`), with the Policies table holding HESTA
+# member records (scripts/seed_hesta_members.py), and owns one blueprint tool of
+# its own. After editing, rebuild:
 #   uv run --project app python scripts/build_tools.py
 
 uses:
-  - lookup_policy          # identity_profiler — member record
-  - list_pending_claims    # case_status_checker — existing cases
-  - create_claim           # human_handoff — case record
-  - request_human_review   # human_handoff — review record
+  - lookup_policy          # identity check — the member record
+  - create_claim           # human hand-off — case record
+  - request_human_review   # human hand-off — review record
+
+tables:
+  claims: { existing: Claims }
+
+tools:
+  # A member's own pending cases, for status / progress enquiries.
+  - name: list_member_cases
+    target: list-member-cases
+    description: List a member's cases that are pending review, by member/policy number
+    blueprint: retrieval
+    table: claims
+    filter:
+      index: status-index
+      key: status
+      value: pending_review
+      where:
+        policy_number: "The member/policy number whose cases to list"
+    result_key: cases
+    returns: [claim_id, policy_number, category, created_at]

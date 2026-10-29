@@ -1,12 +1,13 @@
-# HESTA Member-Email Pipeline (YAML-first)
+# HESTA Member-Email Pipeline (blueprints)
 
-> A nine-agent pipeline — MCP Gateway tools, AgentCore Memory, a Bedrock
-> Guardrail, structured-output contracts and a human-in-the-loop gate —
-> composed entirely in `config.yaml`.
+> Five blueprint agents, three decision tables, MCP Gateway tools, AgentCore
+> Memory, a Bedrock Guardrail and a human-in-the-loop gate — composed in YAML.
+> There is no HESTA Python: every agent is an agent blueprint filled in, every
+> rule a decision table.
 
-The orchestration is a `delegate` block in YAML. The generic wiring (agent
-factory, Gateway client, Memory session manager) is shared with every other use
-case in `../_shared/`.
+The generic wiring (agent factory, Gateway client, Memory session manager, the
+blueprints and the decision engine) is shared with every other use case in
+`../_shared/`. See [docs/FRAMEWORK.md](../../docs/FRAMEWORK.md).
 
 ## The pipeline
 
@@ -14,44 +15,41 @@ case in `../_shared/`.
 coordinator call each specialist as a tool, in order.
 
 ```
-                        coordinator  (delegate entry)
-                        tools: normalize_email, route_decision
+              coordinator  (delegate entry · the only hand-written prompt)
+              tools: normalize_email, verify_identity, check_attachments, route_case
+              Gateway: lookup_policy, list_member_cases, create_claim, request_human_review
                               │
    ┌──────────────────────────┼──────────────────────────────┐
    │ 1 UNDERSTAND             │ 2 DECIDE                     │ 3 EXECUTE
    │                          │                              │
-   ├─ intent_identifier       ├─ identity_profiler  ──▶ MCP  ├─ writer ──▶ 🛡 guardrail
-   │    AI-001  IntentResult  │    AI-003  MemberProfile     │    AI-011  DraftEmail
+   ├─ intent_identifier       ├─ lookup_policy ──▶ MCP       ├─ writer ──▶ 🛡 guardrail
+   │    AI-001  classifier    │  verify_identity   (table)   │    AI-011  writer
+   │                          │    AI-003                    │
+   ├─ context_manager ──▶ 🧠  ├─ check_attachments (table)   ├─ reviewer_editor
+   │    AI-002  extractor     │    AI-004                    │    AI-012  reviewer
    │                          │                              │
-   ├─ context_manager ──▶ 🧠  ├─ attachment_validator        ├─ reviewer_editor
-   │    AI-002  CaseSummary   │    AI-004  AttachmentAssess. │    AI-012  ReviewResult
-   │                          │                              │
-   └─ case_status_checker ▶MCP└─ empathy                     └─ human_handoff ──▶ MCP
-        CaseStatusResult           AI-005  EmpathyAssessment       create_claim +
-        (status enquiries only)                                    request_human_review
-                                   ▼
-                            route_decision  (deterministic gate)
+   └─ list_member_cases ▶ MCP ├─ empathy                     └─ hand-off ──▶ MCP
+        (status enquiries)    │    AI-005  extractor              create_claim +
+                              │                                   request_human_review
+                              └─ route_case  (table, collect: every reason)
 
    🧠 AgentCore Memory     MCP  AgentCore Gateway (streamable HTTP + Cognito M2M)
 ```
 
 The draft reply is **displayed** for HESTA staff to review and send. Nothing is
 ever emailed to the member. Escalation writes a DynamoDB record through the
-existing Gateway tools — no new AWS resources.
+existing Gateway tools.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `config.yaml` | **The whole system** — models, 9 agents + coordinator, prompts, guardrail, memory, orchestration |
-| `tools.py` | The deterministic steps, as `@tool` functions |
-| `schemas.py` | Pydantic structured-output contracts |
-| `taxonomy.py` | The 8 HESTA intents |
-| `knowledge.py` | HESTA house style + per-intent snippets |
+| `config.yaml` | Models, the 5 blueprint agents + coordinator, guardrail, memory, orchestration. The taxonomy, house style and approved knowledge live in the agents' forms |
+| `decisions.yaml` | `verify_identity` (AI-003 policy), `check_attachments` (AI-004), `route_case` (the human-in-the-loop gate) |
 | `ingestion.yaml` | How inbound emails are cleaned up (footer, banner, web form, member-number patterns) — applied by `../_shared/ingestion.py` |
-| `settings.py` | HESTA-only env vars (intent threshold, HITL flag, guardrail sentinel) |
+| `gateway_tools.yaml` | `uses:` three claims tools; owns `list_member_cases` (blueprint retrieval) |
+| `tools.py` | Bindings only: the YAML forms above as agent tools |
 | `sample_emails/*.json` | Payloads to try: contact form, hardship with attachment, personal-advice request |
-| `../_shared/` | Agent factory, Gateway MCP client, Memory session manager, generic settings |
 | `../main.py` | Shared entrypoint — `USE_CASE` selects this folder (see `SWITCHING_USE_CASES.md`) |
 
 ---
@@ -62,8 +60,8 @@ existing Gateway tools — no new AWS resources.
 sca dev --config app/hesta_agent/config.yaml
 ```
 
-With no AWS resources configured it still runs end to end: the Gateway agents
-report that the lookup was unavailable, AgentCore Memory falls back to local file
+With no AWS resources configured it still runs end to end: the Gateway calls
+report that the Gateway is unavailable, AgentCore Memory falls back to local file
 sessions, and the Writer runs without the guardrail. Unverified cases escalate to
 a human, which is the correct behaviour.
 
@@ -102,27 +100,47 @@ Deploy-time wiring the agent needs:
 - `AGENTCORE_GATEWAY_URL` (or `AGENTCORE_GATEWAY_CLAIMSGATEWAY_URL`) pointing at
   the Gateway,
 - `MEMORY_CLAIMSAGENTMEMORY_ID` for AgentCore Memory,
-- `GUARDRAIL_ID` / `GUARDRAIL_VERSION` for the no-personal-advice guardrail.
+- `GUARDRAIL_ID` / `GUARDRAIL_VERSION` for the no-personal-advice guardrail,
+- optionally `INTENT_CONFIDENCE_THRESHOLD` (default 70) and `ENABLE_HITL_RECORD`
+  (default true).
 
 ---
 
 ## How it is built
 
-### Agents → `agents:`
+### Agents → agent blueprints
 
-Each of the nine agents is one YAML block: model, description, prompt, tools,
-structured-output contract. The intent taxonomy is inlined in
-`agents.intent_identifier.system_prompt`. Regenerate it after editing `INTENTS`
-in `taxonomy.py`:
+| Agent | Blueprint | The form holds |
+|---|---|---|
+| `intent_identifier` (AI-001) | classifier | the 8 intents (signals, examples), `personal_advice_requested` flag, `sender_type` field |
+| `context_manager` (AI-002) | extractor | summary, conversation state, outstanding items; carries AgentCore Memory |
+| `empathy` (AI-005) | extractor | sentiment, vulnerability flags, complaint, priority, recommended attention |
+| `writer` (AI-011) | writer | house style, per-intent knowledge, identity-verification and advice-decline wording, legal sign-off |
+| `reviewer_editor` (AI-012) | reviewer | accuracy / tone / compliance checks, guardrail-sentinel rule |
 
-```bash
-python -c "import sys; sys.path.insert(0,'app'); from hesta_agent import taxonomy; print(taxonomy.render_for_prompt())"
-```
+The blueprint writes the system prompt and generates the structured-output
+schema; `extra_instructions` carries what is HESTA-specific (e.g. DASP vs
+withdrawal). To change the taxonomy or the approved knowledge, edit the form —
+there is no Python to keep in sync.
+
+### Deterministic steps → decision tables
+
+| Table | Replaces | What it decides |
+|---|---|---|
+| `verify_identity` | the identity agent + `classify_verification` | verified (sender email matches an active record, via `same_as`) / partial / unverified |
+| `check_attachments` | the attachment agent + `assess_attachments` | the document each intent expects vs the attachment count |
+| `route_case` | `route_decision` | `hit_policy: collect` — every reason to escalate (regulated intent, personal advice, identity, unclear or low-confidence intent, multiple intents, vulnerability, priority) |
+
+The threshold in `route_case` is `${INTENT_CONFIDENCE_THRESHOLD:-70}`, filled
+from the environment when the table loads. Agents that only wrapped a
+deterministic tool are gone: the coordinator calls the tables and the Gateway
+tools itself, so a run makes two to four fewer model calls than before.
 
 ### Cost-based model routing → `models:`
 
-Three named models: `fast` for classification, `primary` for summarising and
-reviewing, and `guarded` — the Writer's model with the Bedrock Guardrail attached:
+Three named models: `fast` for classification and signals, `primary` for
+summarising, reviewing and the coordinator, and `guarded` — the Writer's model
+with the Bedrock Guardrail attached:
 
 ```yaml
 guarded:
@@ -135,7 +153,7 @@ guarded:
 ```
 
 `GUARDRAIL_ID` unset means `BedrockModel` omits `guardrailConfig` entirely, so
-the pipeline degrades to app-layer controls (the Writer and Reviewer prompts).
+the pipeline degrades to app-layer controls (the Writer's rules and the Reviewer).
 
 ### Orchestration → `orchestrations:`
 
@@ -143,35 +161,6 @@ A `delegate` orchestration plus the coordinator's prompt, which also carries the
 exact markdown report structure. `preserve_context: false` on the stateless
 specialists means each call starts from the same baseline; `context_manager` uses
 `true` because it carries a session manager.
-
-### Deterministic steps → `@tool` functions
-
-| `tools.py` | Used by |
-|------------|---------|
-| `normalize_email` | coordinator — strips banners/footers/quoted history, extracts member number |
-| `route_decision` | coordinator — the human-in-the-loop gate |
-| `assess_attachments` | attachment_validator |
-| `classify_verification` | identity_profiler — the verification policy |
-| `filter_member_cases` | case_status_checker |
-| `hesta_knowledge`, `identity_verification_block` | writer |
-
-This keeps the decisions deterministic. `route_decision` is not a judgement call
-the model makes — it applies `INTENT_CONFIDENCE_THRESHOLD` and returns fixed
-reasons. The agents' prompts tell them to return its verdict unchanged.
-
-### Structured output → `agent_kwargs.structured_output`
-
-`Agent` needs a class and YAML can only carry a name, so the config names one as
-`package.module:ClassName` and `../_shared/factory.py` imports it:
-
-```yaml
-intent_identifier:
-  agent_kwargs:
-    structured_output: hesta_agent.schemas:IntentResult
-```
-
-strands returns structured output through `Agent.as_tool()` as a `json` content
-block, so the coordinator receives validated objects rather than prose.
 
 ### AgentCore Memory → `session_manager:`
 
@@ -199,14 +188,13 @@ YAML, and the reason is a lifecycle one:
   request thread, with the workload identity populated.
 
 So `agent_kwargs.gateway: true` asks `../_shared/factory.py` to build the client
-then, and hands it to the agent as a tool provider. The agent sees the real
+then, and hands it to the coordinator as a tool provider. It sees the real
 Gateway tool list (`policy-lookup___lookup_policy`,
-`list-pending-claims___list_pending_claims`, `create-claim___create_claim`,
-`human-review___request_human_review`) and calls it itself. The prompts name the
-bare tool and tell the agent to match on the suffix, so the `___` namespacing
-needs no static map. Determinism is preserved by keeping the *policy* in
-`classify_verification` / `filter_member_cases` — the agent fetches, the tool
-decides.
+`list-member-cases___list_member_cases`, `create-claim___create_claim`,
+`human-review___request_human_review`, …) and calls it itself. The prompt names
+the bare tool and tells it to match on the suffix, so the `___` namespacing
+needs no static map. Determinism is preserved by keeping the *policy* in the
+decision tables — the coordinator fetches, the table decides.
 
 `continue_on_error=True` on the client means a Gateway outage logs and yields no
 tools rather than failing the invocation.
@@ -217,9 +205,13 @@ block commented out at the bottom.
 
 ---
 
-## Known limitation
+## Known limitations
 
 **Memory actor is static.** A YAML-declared session manager is resolved once per
 session, so `actor_id` is fixed in `config.yaml` (`hesta-context-manager`).
 Session-scoped recall works as usual; cross-email recall is scoped to that actor
 rather than to the individual member.
+
+**`list_member_cases` filters after the index query.** It queries every pending
+case and keeps the member's; fine at pilot volume. At scale, add a
+policy-number index to the Claims table.

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "lookup_customer",
+    "description": "Look up a bank customer by customer number, or by email address when no number is known",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "customer_id": {
+          "type": "string",
+          "description": "Customer number, e.g. CUST-100001"
+        },
+        "email": {
+          "type": "string",
+          "description": "Customer email address"
+        }
+      },
+      "required": []
+    }
+  }
+]

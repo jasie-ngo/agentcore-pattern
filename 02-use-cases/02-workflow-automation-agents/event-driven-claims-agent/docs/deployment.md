@@ -351,7 +351,7 @@ No container rebuild needed during local dev — only when deploying to the clou
 | Change | Local iteration | Requires redeploy |
 |--------|----------------|-------------------|
 | Agent prompts | ✅ | — |
-| Routing logic (app/claims_agent/routing.py) | ✅ | — |
+| Routing table (app/claims_agent/decisions.yaml) | ✅ | — |
 | New Python dependency | — | ✅ (Dockerfile rebuild) |
 | New Lambda tool | — | ✅ (CDK creates Lambda) |
 | Cedar policy change | — | ✅ (agentcore.json) |

@@ -1,0 +1,6 @@
+{
+  "prompt": "Hi, I've just noticed a charge of $42.50 from STREAMFLIX PREMIUM on 22 October on my card ending 4821. I've never signed up to Streamflix. Can you please look into it? My customer number is CUST-100001.\n\nThanks, Mia",
+  "sender_email": "mia.chen@example.com",
+  "source": "sample:01_small_unrecognised_charge",
+  "_expected_outcome": "provisional_credit"
+}

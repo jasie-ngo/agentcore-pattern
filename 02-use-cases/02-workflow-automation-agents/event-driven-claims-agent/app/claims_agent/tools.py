@@ -1,9 +1,14 @@
 """Deterministic tools for the claims pipeline — referenced from ``config.yaml``.
 
-``execute_claim_decision`` is one ``@tool`` that does the REJECT / AUTO_APPROVE /
-HUMAN_REVIEW branching (``routing.py``) and calls the Gateway tools directly via
-MCP, so execution costs zero extra LLM calls: the coordinator calls it once with
-the Processor's and Validator's structured outputs and reports what it returns.
+``execute_claim_decision`` is one ``@tool`` that applies the routing decision
+table (``decisions.yaml``: REJECT / AUTO_APPROVE / HUMAN_REVIEW) and calls the
+Gateway tools directly via MCP, so execution costs zero extra LLM calls: the
+coordinator calls it once with the Processor's and Validator's structured
+outputs and reports what it returns.
+
+This is the use case's one piece of hand-written code: an ordered sequence of
+side effects with idempotency (stop after a re-delivery) is a business process,
+which neither a decision table nor an agent blueprint expresses.
 
 All Gateway calls are non-fatal — a failure is logged, reported in the summary,
 and the remaining steps still run. ``create_claim`` derives the claim id from
@@ -23,20 +28,16 @@ _ROOT = str(Path(__file__).resolve().parents[1])
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from _shared import gateway
+from _shared import decision_table, gateway
 from _shared.gateway import GATEWAY_TOOL_NAMES, build_gateway_client
+from _shared.local_tools import load_table
 from strands import tool
 from strands.tools.mcp import MCPClient
 
-from claims_agent.routing import (
-    AUTO_APPROVE,
-    REJECT,
-    decide_action,
-    resolve_decision,
-    resolve_routing,
-)
-
 log = logging.getLogger(__name__)
+
+ROUTE_CLAIM = load_table(Path(__file__).with_name("decisions.yaml"))
+REJECT, AUTO_APPROVE = "REJECT", "AUTO_APPROVE"
 
 
 async def _call_gateway_tool(mcp: MCPClient, tool_name: str, arguments: dict) -> dict:
@@ -69,7 +70,7 @@ async def execute_claim_decision(
     description: str,
     reasoning: str,
     confidence: int,
-    routing: str,
+    approved: bool = False,
     concerns: str = "None",
     claimant_email: str = "",
     source: str = "",
@@ -77,9 +78,9 @@ async def execute_claim_decision(
     """Execute the final claim action deterministically — no model call inside.
 
     Call this exactly ONCE, after the Processor's decision and the Validator's
-    confidence/routing are both known. This tool decides REJECT / AUTO_APPROVE /
-    HUMAN_REVIEW itself (REJECT always wins; AUTO_APPROVE below the confidence
-    threshold is overridden to HUMAN_REVIEW) and calls the Gateway tools
+    review are both known. This tool decides REJECT / AUTO_APPROVE / HUMAN_REVIEW
+    itself (REJECT always wins; only an approved, high-confidence ACCEPT is
+    auto-approved; anything else goes to a human) and calls the Gateway tools
     (create_claim, request_human_review, send_notification) directly. Report
     exactly what this tool says it did — do not re-derive or second-guess it.
 
@@ -91,8 +92,8 @@ async def execute_claim_decision(
         description: Brief description of the claim.
         reasoning: Why the Processor accepted or rejected.
         confidence: The Validator's 0-100 confidence score (0 if it gave none).
-        routing: The Validator's AUTO_APPROVE or HUMAN_REVIEW ("" if it gave none).
-        concerns: Validator's flagged concerns, or "None".
+        approved: The Validator's approved flag (false if it gave none).
+        concerns: The Validator's issues joined into one line, or "None".
         claimant_email: Claimant's email for notification, or "" to skip.
         source: Where the submission came from (the envelope's ``source``), or "".
             Together with the policy number it identifies the claim, so a
@@ -101,12 +102,11 @@ async def execute_claim_decision(
     Returns:
         A human-readable summary of what was executed.
     """
-    final_decision = resolve_decision({"decision": decision} if decision else None, reasoning)
-    confidence, final_routing = resolve_routing(
-        {"confidence": confidence, "routing": routing} if routing else None, concerns
+    verdict = decision_table.evaluate(
+        ROUTE_CLAIM, {"decision": (decision or "").strip().upper(), "confidence": confidence, "approved": approved}
     )
-    action = decide_action(final_decision, final_routing)
-    lines = [f"Action: {action} (confidence: {confidence}/100)"]
+    action = verdict["outcome"]
+    lines = [f"Action: {action} (confidence: {confidence}/100) — {verdict['reason']}"]
 
     mcp = build_gateway_client()
     if mcp is None:

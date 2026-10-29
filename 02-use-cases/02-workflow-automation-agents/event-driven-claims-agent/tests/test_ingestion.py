@@ -110,5 +110,32 @@ class EmptyConfigTests(unittest.TestCase):
         self.assertIsNone(env["id_for_lookup"])
 
 
+class CardDisputeTests(unittest.TestCase):
+    def setUp(self):
+        self.cfg = _CONFIGS["card_dispute_agent"]
+
+    def test_banner_footer_and_customer_number(self):
+        raw = (
+            "CAUTION: This email came from outside Harbour Bank. Do not click links.\n"
+            "Hi, there is a charge I did not make. CUST-100002.\n\n"
+            "Harbour Bank Limited ABN 12 345 678 901"
+        )
+        env = normalize(raw, self.cfg, sender_email="liam.obrien@example.com")
+        self.assertEqual(env["latest_message"], "Hi, there is a charge I did not make. CUST-100002.")
+        self.assertEqual((env["id_for_lookup"], env["sender_type"]), ("CUST-100002", "customer"))
+
+    def test_placeholder_customer_number(self):
+        self.assertIsNone(normalize("My customer number is [CUSTOMER NUMBER].", self.cfg)["id_for_lookup"])
+
+    def test_every_sample_email_normalises(self):
+        for path in sorted(glob.glob(os.path.join(_ROOT, "app", "card_dispute_agent", "sample_emails", "*.json"))):
+            with self.subTest(sample=os.path.basename(path)):
+                with open(path, encoding="utf-8") as fh:
+                    data = json.load(fh)
+                env = normalize(data["prompt"], self.cfg, sender_email=data["sender_email"])
+                self.assertTrue(env["latest_message"])
+                self.assertNotIn("Harbour Bank Limited ABN", env["latest_message"])
+
+
 if __name__ == "__main__":
     unittest.main()

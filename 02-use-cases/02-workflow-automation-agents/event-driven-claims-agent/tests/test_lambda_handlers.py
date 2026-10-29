@@ -250,5 +250,73 @@ class RetrievalIndexLookupTests(unittest.TestCase):
         self.mod.table.query.assert_not_called()
 
 
+@unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
+class ListFromInputTests(unittest.TestCase):
+    """card_dispute_agent list_customer_transactions — list mode filtered by the caller's value."""
+
+    def setUp(self):
+        cfg = _manifest_tool("list_customer_transactions")["tool_config"]
+        self.mod = _load_blueprint("retrieval", cfg, "list_txn_bp")
+
+    def test_uses_callers_value_newest_first_with_limit(self):
+        self.mod.table.query.return_value = {"Items": [{"transaction_id": "TXN-1", "amount": Decimal("42.5")}]}
+        result = _call(self.mod, {"customer_id": "CUST-100001"})
+        self.assertEqual(result["transactions"][0]["amount"], "42.5")
+        kwargs = self.mod.table.query.call_args.kwargs
+        self.assertEqual(
+            (kwargs["IndexName"], kwargs["ScanIndexForward"], kwargs["Limit"]), ("customer-index", False, 25)
+        )
+
+    def test_value_required(self):
+        result = _call(self.mod, {})
+        self.assertIn("customer_id", result["error"])
+        self.mod.table.query.assert_not_called()
+
+
+@unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
+class ListWhereTests(unittest.TestCase):
+    """hesta_agent list_member_cases — pending cases, narrowed to the caller's member number."""
+
+    def setUp(self):
+        self.mod = _load_blueprint("retrieval", _manifest_tool("list_member_cases")["tool_config"], "list_cases_bp")
+
+    def test_filters_on_callers_member_number(self):
+        self.mod.table.query.return_value = {"Items": [{"claim_id": "CLM-1", "policy_number": "POL-1"}]}
+        result = _call(self.mod, {"policy_number": "POL-1"})
+        self.assertEqual((result["count"], result["cases"][0]["claim_id"]), (1, "CLM-1"))
+        kwargs = self.mod.table.query.call_args.kwargs
+        self.assertEqual(kwargs["IndexName"], "status-index")
+        self.assertIn("FilterExpression", kwargs)
+
+    def test_where_value_required(self):
+        self.assertIn("policy_number", _call(self.mod, {})["error"])
+        self.mod.table.query.assert_not_called()
+
+
+@unittest.skipUnless(_BOTO3_AVAILABLE, "boto3 not installed")
+class CreateDisputeTests(unittest.TestCase):
+    """card_dispute_agent create_dispute — one dispute per customer + transaction."""
+
+    def setUp(self):
+        self.mod = _load_blueprint("record_write", _manifest_tool("create_dispute")["tool_config"], "create_dispute_bp")
+
+    def _event(self, **extra):
+        return {
+            "customer_id": "CUST-1",
+            "transaction_id": "TXN-1",
+            "amount": 42.5,
+            "outcome": "provisional_credit",
+            **extra,
+        }
+
+    def test_same_transaction_same_dispute(self):
+        self.assertEqual(
+            _call(self.mod, self._event())["dispute_id"], _call(self.mod, self._event(reason="x"))["dispute_id"]
+        )
+
+    def test_unknown_outcome_rejected(self):
+        self.assertIn("one of", _call(self.mod, self._event(outcome="refund_everything"))["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

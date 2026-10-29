@@ -1,0 +1,28 @@
+[
+  {
+    "name": "request_dispute_review",
+    "description": "Queue a dispute for a disputes officer to review",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "dispute_id": {
+          "type": "string",
+          "description": "The dispute to review"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why a human must review it"
+        },
+        "amount": {
+          "type": "number",
+          "description": "Disputed amount (sets priority)"
+        }
+      },
+      "required": [
+        "dispute_id",
+        "reason",
+        "amount"
+      ]
+    }
+  }
+]

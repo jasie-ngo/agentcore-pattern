@@ -61,7 +61,7 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
             "description": "Rear-ended at a stop light",
             "reasoning": "Policy active, within limits",
             "confidence": 92,
-            "routing": "AUTO_APPROVE",
+            "approved": True,
             "concerns": "None",
             "claimant_email": "john@example.com",
         }
@@ -92,16 +92,24 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
 
     def test_human_review_creates_pending_claim_and_escalates(self):
         gw = _FakeGateway()
-        summary = self._run(gw, confidence=55, routing="HUMAN_REVIEW")
+        summary = self._run(gw, confidence=55, approved=False)
         self.assertEqual(self._called(gw), ["create_claim", "request_human_review", "send_notification"])
         self.assertEqual(gw.calls[0][1]["status"], "pending_review")
         self.assertEqual(gw.calls[1][1]["claim_id"], "CLM-TEST1")
         self.assertIn("Action: HUMAN_REVIEW", summary)
 
-    def test_auto_approve_below_threshold_is_overridden(self):
+    def test_approved_below_threshold_goes_to_human_review(self):
         gw = _FakeGateway()
-        summary = self._run(gw, confidence=60, routing="AUTO_APPROVE")
+        summary = self._run(gw, confidence=60, approved=True)
         self.assertIn("Action: HUMAN_REVIEW", summary)
+
+    def test_high_confidence_but_not_approved_goes_to_human_review(self):
+        gw = _FakeGateway()
+        self.assertIn("Action: HUMAN_REVIEW", self._run(gw, confidence=95, approved=False))
+
+    def test_decision_is_case_insensitive(self):
+        gw = _FakeGateway()
+        self.assertIn("Action: REJECT", self._run(gw, decision="reject"))
 
     def test_missing_decision_defaults_to_reject(self):
         gw = _FakeGateway()
@@ -109,7 +117,7 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
 
     def test_missing_validation_defaults_to_human_review(self):
         gw = _FakeGateway()
-        self.assertIn("Action: HUMAN_REVIEW", self._run(gw, routing="", confidence=0))
+        self.assertIn("Action: HUMAN_REVIEW", self._run(gw, approved=False, confidence=0))
 
     def test_no_claimant_email_skips_notification(self):
         gw = _FakeGateway()
@@ -119,7 +127,7 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
     def test_gateway_error_is_non_fatal_and_skips_escalation(self):
         # e.g. the Cedar BlockExcessiveClaims policy denies create_claim.
         gw = _FakeGateway(failing_tools={"create-claim___create_claim"})
-        summary = self._run(gw, confidence=55, routing="HUMAN_REVIEW")
+        summary = self._run(gw, confidence=55, approved=False)
         self.assertIn("Could not call create_claim: denied by policy", summary)
         self.assertEqual(self._called(gw), ["create_claim", "send_notification"])
 
@@ -139,7 +147,7 @@ class ExecuteClaimDecisionTests(unittest.TestCase):
 
     def test_redelivered_claim_skips_review_and_notification(self):
         gw = _FakeGateway(existing_claim=True)
-        summary = self._run(gw, confidence=55, routing="HUMAN_REVIEW", source="s3://b/k")
+        summary = self._run(gw, confidence=55, approved=False, source="s3://b/k")
         self.assertEqual(self._called(gw), ["create_claim"])
         self.assertIn("duplicate delivery", summary)
 

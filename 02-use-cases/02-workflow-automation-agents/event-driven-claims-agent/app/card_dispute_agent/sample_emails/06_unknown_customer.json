@@ -1,0 +1,6 @@
+{
+  "prompt": "Hello, there's a charge on my card I don't recognise, about $75 from some online store last week. My customer number is [CUSTOMER NUMBER]. Can you help? Oliver",
+  "sender_email": "oliver.nguyen@example.com",
+  "source": "sample:06_unknown_customer",
+  "_expected_outcome": "request_information"
+}

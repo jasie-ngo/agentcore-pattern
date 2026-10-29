@@ -1,0 +1,6 @@
+{
+  "prompt": "I don't recognise a $612.00 charge from SKYHIGH AIRLINES on 19 October. My customer number is CUST-100005. Grace Kim",
+  "sender_email": "grace.kim@example.com",
+  "source": "sample:05_suspended_account",
+  "_expected_outcome": "human_review"
+}

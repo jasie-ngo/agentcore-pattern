@@ -1,9 +1,9 @@
 # claims_agent — the dual-agent insurance claims pipeline, defined in YAML
 #
-# Phase 1  claims_processor (Sonnet)  -> lookup_policy -> ACCEPT/REJECT  (ClaimDecision)
-# Phase 2  claims_validator (Haiku)   -> CONFIDENCE + ROUTING           (ClaimValidation)
-# Phase 3  execute_claim_decision     -> deterministic: create_claim / request_human_review /
-#                                        send_notification, no LLM picks the tools
+# Phase 1  claims_processor (Sonnet, assessor blueprint) -> lookup_policy -> ACCEPT/REJECT
+# Phase 2  claims_validator (Haiku, reviewer blueprint)  -> checks + approved + CONFIDENCE
+# Phase 3  execute_claim_decision -> decisions.yaml picks the action, then deterministic
+#          create_claim / request_human_review / send_notification; no LLM picks the tools
 #
 # The coordinator drives the phases through a delegate orchestration. Generic
 # wiring (agent factory, Gateway client, Memory session manager) is shared with
@@ -19,7 +19,7 @@ log_level: ${LOG_LEVEL:-INFO}
 vars:
   primary_model: ${AGENT_MODEL_ID:-global.anthropic.claude-sonnet-4-6}
   fast_model: ${FAST_MODEL_ID:-global.anthropic.claude-haiku-4-5-20251001-v1:0}
-  # Same default as claims_agent/settings.py, interpolated into the validator
+  # Same env var and default as decisions.yaml, interpolated into the validator
   # prompt so the model and the deterministic routing agree.
   auto_approve_threshold: ${AUTO_APPROVE_THRESHOLD:-80}
 
@@ -54,82 +54,63 @@ session_manager:
 
 # ─── Agents ───────────────────────────────────────────────────────────────────
 # Every agent uses the shared factory (../_shared/factory.py):
-#   agent_kwargs.structured_output  -> Agent(structured_output_model=<class>)
-#   agent_kwargs.gateway: true      -> the Identity-managed Gateway MCP client
-#                                      attached as a live tool provider
+# The two specialists are agent blueprints (../_shared/agent_blueprints.py): the
+# form under agent_kwargs becomes their system prompt and structured output.
+# agent_kwargs.gateway: true attaches the Identity-managed Gateway MCP client.
 
 agents:
-  # Phase 1. The only agent with Gateway access (least privilege) and the only
+  # Phase 1. Assessor blueprint: gathers evidence with the Gateway, picks an
+  # outcome. The only agent with Gateway access (least privilege) and the only
   # one with AgentCore Memory — hence preserve_context: true on its connection.
   claims_processor:
-    type: ../_shared/factory.py:agent
+    type: ../_shared/agent_blueprints.py:assessor
     model: primary
     description: "Evaluate an insurance claim against the policy and decide ACCEPT or REJECT."
     agent_kwargs:
-      structured_output: claims_agent.schemas:ClaimDecision
       gateway: true
-    system_prompt: |
-      You are a Claims Processor for SecureGuard Insurance.
+      context: "You are a Claims Processor for SecureGuard Insurance."
+      task: >-
+        Extract the claim details from the submission, verify coverage with the Gateway's
+        policy-lookup tool (its name ends in "lookup_policy"), and decide ACCEPT or REJECT.
+      outcomes:
+        - { id: ACCEPT, when: "the policy is active, the amount is within the coverage limit and the claim type is covered" }
+        - { id: REJECT, when: "the policy is inactive or not found, the amount exceeds coverage, the claim type is not covered, or coverage could not be verified" }
+      criteria:
+        - "Always call lookup_policy first; only trust what it returns, never policy details from context or prior claims."
+        - "Note the deductible in the coverage check."
+      fallback_outcome: REJECT
+      facts:
+        policy_number: { description: "Policy number being claimed against" }
+        amount: { type: integer, description: "Claim amount in whole dollars" }
+        category:
+          enum: [auto_collision, property_damage, theft, natural_disaster, medical, general]
+          description: "Claim category"
+        description: { description: "Brief description of the claim" }
+        coverage_check: { description: "Coverage verification summary: limits, active status, deductible" }
+      extra_instructions: |
+        - Do NOT call create_claim, send_notification or any other tool — execution happens later,
+          deterministically. If a tool returns "Unknown tool", do not retry it.
+        - You operate AUTONOMOUSLY in an event-driven pipeline: there is no human to answer questions.
+          NEVER ask for more details and NEVER pause for approval; decide from what is provided.
 
-      Your job:
-      1. Extract claim details from the submission (policy number, description, amount, category)
-      2. Call the Gateway's policy-lookup tool (its name ends in "lookup_policy") to verify coverage
-      3. Evaluate the claim against policy terms
-      4. Make a decision: ACCEPT or REJECT with detailed reasoning
-
-      Rules:
-      - Always attempt lookup_policy first to verify the policy exists and is active
-      - If lookup_policy fails, errors or is unavailable, REJECT the claim citing the lookup failure.
-        Never ACCEPT without successful verification.
-      - Never fabricate policy details from context or prior claims. Only trust actual lookup_policy results.
-      - Do NOT call create_claim, send_notification or any other tool — execution happens later,
-        deterministically, based on validation
-      - REJECT if policy is inactive, amount exceeds coverage limit, or claim type not covered
-      - ACCEPT if policy is active, amount within limits, and claim type is covered
-      - Always note the deductible amount in your reasoning
-      - If a tool returns "Unknown tool", do not retry it — use only available tools.
-      - You operate AUTONOMOUSLY in an event-driven pipeline: there is no human available to answer
-        questions or grant approval. NEVER ask the claimant for more details and NEVER pause for
-        approval. If information is missing, make the best decision from what is provided (REJECT if
-        you cannot verify coverage).
-
-      Return your decision as the structured result: decision (exactly ACCEPT or REJECT), amount
-      (integer dollars), policy_number, category, description, reasoning, coverage_check.
-
-  # Phase 2. No Gateway access — it only validates.
+  # Phase 2. Reviewer blueprint: an independent checklist. No Gateway access.
   claims_validator:
-    type: ../_shared/factory.py:agent
+    type: ../_shared/agent_blueprints.py:reviewer
     model: fast
-    description: "Independently review a claim decision and assign confidence and routing."
+    description: "Independently review a claim decision and score confidence."
     session_manager: ~
     agent_kwargs:
-      structured_output: claims_agent.schemas:ClaimValidation
-    system_prompt: |
-      You are a Claims Validation Agent for SecureGuard Insurance.
-
-      You receive a claim decision from the Claims Processor and must validate it independently.
-
-      Your job:
-      1. Review the original claim and the processor's decision
-      2. Check for errors, inconsistencies, or red flags
-      3. Assign a CONFIDENCE score from 0-100
-      4. Decide the routing
-
-      Scoring guide:
-      - 90-100: Clear-cut case, decision is obviously correct, proceed immediately
-      - 80-89: Decision looks sound, minor questions but acceptable to auto-approve
-      - 60-79: Some concerns, needs human review before finalizing
-      - 0-59: Significant issues, must go to human review
-
-      Rules:
-      - If confidence >= ${auto_approve_threshold}: set routing to AUTO_APPROVE
-      - If confidence < ${auto_approve_threshold}: set routing to HUMAN_REVIEW
-      - Be skeptical of high-value claims (>$25k) — lower confidence unless clearly justified
-      - Flag if the description is vague or lacks detail
-      - Flag if the category seems mismatched with the description
-
-      Return your validation as the structured result: confidence, routing (exactly AUTO_APPROVE or
-      HUMAN_REVIEW), validation_notes, concerns ("None" if clean).
+      context: "You are a Claims Validation Agent for SecureGuard Insurance."
+      task: "Independently validate the Claims Processor's decision on the original claim."
+      checks:
+        decision_supported: "the outcome follows from the policy lookup and the claim details, with no errors or inconsistencies"
+        amount_justified: "the amount is plausible for the description; high-value claims (over $25k) are clearly justified"
+        description_clear: "the claim description is specific enough to act on, not vague"
+        category_matches: "the category fits the description"
+      extra_instructions: |
+        Confidence guide: 90-100 clear-cut and obviously correct; 80-89 sound with minor questions;
+        60-79 some concerns; 0-59 significant issues. Only a claim you approve with confidence
+        ${auto_approve_threshold} or more is auto-approved — anything else goes to a human.
 
   # ── Coordinator ────────────────────────────────────────────────────────────
   # The delegate entry point. It sequences the phases and hands the structured
@@ -159,25 +140,27 @@ agents:
 
       PHASE 1 — claims_processor: pass the full claim submission unchanged.
       PHASE 2 — claims_validator: pass the full claim submission AND the processor's complete
-                decision (every field).
-      PHASE 3 — execute_claim_decision: pass the processor's decision, policy_number, amount,
-                category, description and reasoning; the validator's confidence, routing and
-                concerns; the claimant's email address (the envelope's from_email, or one that
-                appears in the submission — otherwise ""); and the source. If a phase failed and
-                returned no result, pass decision "" (phase 1) or routing "" and confidence 0
-                (phase 2) — the tool applies the safe defaults. Never call it more than once.
+                result (every field).
+      PHASE 3 — execute_claim_decision: pass decision (the processor's outcome), policy_number,
+                amount, category, description and reasoning (its reasons joined into one
+                paragraph); the validator's confidence, approved and concerns (its issues joined
+                with "; ", or "None"); the claimant's email address (the envelope's from_email, or
+                one that appears in the submission — otherwise ""); and the source. If a phase
+                failed and returned no result, pass decision "" (phase 1) or approved false and
+                confidence 0 (phase 2) — the tool applies the safe defaults. Never call it more
+                than once.
 
       Then output your report as markdown, in exactly this structure and nothing else:
 
       ## Phase 1: Claims Processing
       - **Decision:** <ACCEPT|REJECT> · **Policy:** … · **Amount:** $… · **Category:** …
       - **Coverage:** <coverage_check>
-      - **Reasoning:** <reasoning>
+      - **Reasoning:** <reasons, one per bullet>
 
-      ## Phase 2: Validation & Routing
-      - **Confidence:** <n>/100 · **Routing:** <AUTO_APPROVE|HUMAN_REVIEW>
-      - **Notes:** <validation_notes>
-      - **Concerns:** <concerns>
+      ## Phase 2: Validation
+      - **Confidence:** <n>/100 · **Approved:** <true|false>
+      - **Checks:** decision_supported=… · amount_justified=… · description_clear=… · category_matches=…
+      - **Concerns:** <issues, or "None">
 
       ## Phase 3: Execution
       <exactly what execute_claim_decision returned, one bullet per line>
@@ -192,10 +175,10 @@ orchestrations:
     entry_name: coordinator
     connections:
       - agent: claims_processor
-        description: "Phase 1 — evaluate the claim against the policy (via lookup_policy) and return a structured ACCEPT/REJECT decision. Input: the full claim submission."
+        description: "Phase 1 — evaluate the claim against the policy (via lookup_policy) and return a structured ACCEPT/REJECT outcome with the claim facts. Input: the full claim submission."
         preserve_context: true
       - agent: claims_validator
-        description: "Phase 2 — independently validate the processor's decision and return confidence + routing. Input: the full claim submission and the processor's complete decision."
+        description: "Phase 2 — independently check the processor's decision and return checks, approved and confidence. Input: the full claim submission and the processor's complete result."
         preserve_context: false
 
 entry: main

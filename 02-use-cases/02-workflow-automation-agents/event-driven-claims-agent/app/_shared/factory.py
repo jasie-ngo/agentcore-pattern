@@ -59,9 +59,7 @@ def _resolve_structured_output(spec: str) -> type:
     model = getattr(module, class_name, None)
     if model is None:
         available = sorted(
-            attr
-            for attr in vars(module)
-            if isinstance(getattr(module, attr), type) and not attr.startswith("_")
+            attr for attr in vars(module) if isinstance(getattr(module, attr), type) and not attr.startswith("_")
         )
         raise ValueError(
             f"agent_kwargs.structured_output: '{class_name}' is not defined in {module_path}.\n"
@@ -95,6 +93,26 @@ def agent(
     Returns:
         A configured ``strands.Agent``.
     """
+    return build_agent(
+        structured_output_model=_resolve_structured_output(structured_output) if structured_output else None,
+        gateway=gateway,
+        tools=tools,
+        **kwargs,
+    )
+
+
+def build_agent(
+    *,
+    structured_output_model: type | None = None,
+    gateway: bool = False,
+    tools: list | None = None,
+    **kwargs,
+) -> Agent:
+    """Build an agent from an already-resolved structured-output class.
+
+    Shared by :func:`agent` (class named in YAML) and the agent blueprints in
+    ``_shared/agent_blueprints.py`` (class generated from the YAML form).
+    """
     agent_tools = list(tools or [])
 
     if gateway:
@@ -110,9 +128,7 @@ def agent(
 
     return Agent(
         tools=agent_tools,
-        structured_output_model=(
-            _resolve_structured_output(structured_output) if structured_output else None
-        ),
+        structured_output_model=structured_output_model,
         load_tools_from_directory=False,
         **kwargs,
     )

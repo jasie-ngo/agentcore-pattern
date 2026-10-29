@@ -97,17 +97,14 @@ def session_manager(
         )
     except ImportError:
         raise ImportError(
-            "AgentCore Memory requires the agentcore-memory extra:\n"
-            "  pip install 'strands-compose[agentcore-memory]'"
+            "AgentCore Memory requires the agentcore-memory extra:\n  pip install 'strands-compose[agentcore-memory]'"
         ) from None
 
     # Retrieval config aligned with the agentcore.json memory namespaces:
     #   - claims/{actorId}/facts            (SEMANTIC)      — prior interactions
     #   - claims/{actorId}/{sessionId}      (SUMMARIZATION) — session summaries
     retrieval_config = {
-        f"{namespace_prefix}/{actor_id}/facts": RetrievalConfig(
-            top_k=top_k, relevance_score=relevance_score
-        ),
+        f"{namespace_prefix}/{actor_id}/facts": RetrievalConfig(top_k=top_k, relevance_score=relevance_score),
         f"{namespace_prefix}/{actor_id}/{session_id}": RetrievalConfig(
             top_k=max(top_k - 2, 1), relevance_score=relevance_score
         ),

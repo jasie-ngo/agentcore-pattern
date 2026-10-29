@@ -113,5 +113,54 @@ class TableValidationTests(unittest.TestCase):
         self.assertEqual(created[0]["partition_key"], {"name": "member_id", "type": "string"})
 
 
+@unittest.skipUnless(_YAML_AVAILABLE, "PyYAML not installed (run under the agent venv)")
+class ListFromInputValidationTests(unittest.TestCase):
+    def _tool(self, flt):
+        return {"name": "t", "description": "d", "table": "claims", "blueprint": "retrieval", "filter": flt}
+
+    def test_from_input_becomes_a_required_argument(self):
+        fields, schema = bt._blueprint_tool(
+            self._tool({"index": "i", "key": "customer_id", "from_input": True, "description": "who"}), "loc", TABLES
+        )
+        self.assertEqual(schema[0]["inputSchema"]["required"], ["customer_id"])
+        self.assertNotIn("description", fields["tool_config"]["filter"])
+
+    def test_where_fields_become_required_arguments(self):
+        fields, schema = bt._blueprint_tool(
+            self._tool({"index": "i", "key": "status", "value": "open", "where": {"owner": "whose"}}), "loc", TABLES
+        )
+        self.assertEqual(schema[0]["inputSchema"]["required"], ["owner"])
+        self.assertEqual(fields["tool_config"]["filter"]["where"], ["owner"])
+
+    def test_where_must_be_a_mapping(self):
+        with self.assertRaisesRegex(bt.BuildError, "filter.where"):
+            bt._blueprint_tool(self._tool({"index": "i", "key": "k", "value": "v", "where": ["owner"]}), "loc", TABLES)
+
+    def test_value_and_from_input_are_exclusive(self):
+        with self.assertRaisesRegex(bt.BuildError, "exactly one of value or from_input"):
+            bt._blueprint_tool(self._tool({"index": "i", "key": "k", "value": "v", "from_input": True}), "loc", TABLES)
+
+    def test_index_keys_are_normalised(self):
+        _, created = bt._resolve_tables(
+            "uc",
+            {
+                "tables": {
+                    "t": {
+                        "partition_key": {"name": "id"},
+                        "indexes": [{"name": "ix", "partition_key": {"name": "c"}, "sort_key": {"name": "d"}}],
+                    }
+                }
+            },
+            "where",
+        )
+        self.assertEqual(created[0]["indexes"][0]["sort_key"], {"name": "d", "type": "string"})
+
+    def test_index_needs_partition_key(self):
+        with self.assertRaisesRegex(bt.BuildError, "partition_key"):
+            bt._resolve_tables(
+                "uc", {"tables": {"t": {"partition_key": {"name": "id"}, "indexes": [{"name": "ix"}]}}}, "w"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
