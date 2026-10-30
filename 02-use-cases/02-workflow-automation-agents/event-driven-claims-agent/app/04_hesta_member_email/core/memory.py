@@ -37,7 +37,10 @@ from core.settings import REGION
 log = logging.getLogger(__name__)
 
 NAMESPACE_PREFIX = "claims"
-_MEMBER_NUMBER = re.compile(r"[0-9A-Za-z]{4,24}")  # strict on purpose: no sanitising, so no two inputs share an actor
+# Strict on purpose: no sanitising, so no two inputs share an actor. A letter or digit first, then letters, digits, "-" or "_", which is
+# what AgentCore accepts in an actor id and lets a number such as POL-12345 be an actor as written. Anything else (a dot, a space, a
+# slash, an address) is refused outright rather than rewritten, so "john.smith" and "john-smith" can never collide.
+_MEMBER_NUMBER = re.compile(r"[0-9A-Za-z][0-9A-Za-z_-]{3,23}")
 _MAX_TEXT = 8000
 _MAX_VERIFIED = 1000
 

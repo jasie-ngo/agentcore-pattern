@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import importlib.util
 import json
 import re
 import shutil
@@ -49,6 +50,16 @@ _IGNORE = shutil.ignore_patterns("node_modules", "dist", "cdk.out", "__pycache__
 
 class AssembleError(Exception):
     """A readable reason the project could not be assembled."""
+
+
+def _pipeline_merge():
+    """scripts/pipeline_merge.py, loaded by path so this file works from any directory (and from the tests)."""
+    path = Path(__file__).resolve().with_name("pipeline_merge.py")
+    spec = importlib.util.spec_from_file_location("pipeline_merge", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("pipeline_merge", module)
+    spec.loader.exec_module(module)
+    return module
 
 
 def parse_slug(raw: str) -> str:
@@ -136,6 +147,8 @@ def assemble(
     client_id: str | None = None,
     pack_dir: Path | None = None,
     enable_pack: bool = False,
+    guardrail_file: Path | None = None,
+    pipeline_file: Path | None = None,
     link_node_modules: bool = False,
     force: bool = False,
     root: Path = ROOT,
@@ -153,6 +166,39 @@ def assemble(
     if enable_pack:
         _verify_pack(root, pack_dir)
 
+    # The guardrail's wording is the client's own file. A file named on the command line must exist; the conventional one is optional.
+    # Only "is it a JSON object" is checked here: the CDK app is the single validator, at synth, before any AWS call.
+    named_guardrail = guardrail_file is not None
+    guardrail_file = (guardrail_file or root / "clients" / slug / "guardrail" / "topics.json").resolve()
+    has_guardrail = guardrail_file.is_file()
+    if named_guardrail and not has_guardrail:
+        raise AssembleError(f"--guardrail-file {guardrail_file} does not exist")
+    if has_guardrail:
+        try:
+            parsed = json.loads(guardrail_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise AssembleError(f"{guardrail_file} is not valid JSON: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise AssembleError(f"{guardrail_file} must hold one JSON object (see clients/_template/guardrail/README.md)")
+
+    # The client's pipeline: the neutral base plus this client's overlay, merged and checked now, before anything is copied. With
+    # no overlay the build keeps the whole app folder, which today means the first client's agents (the caller is told).
+    named_pipeline = pipeline_file is not None
+    pipeline_file = (pipeline_file or root / "clients" / slug / "pipeline" / "pipeline.yaml").resolve()
+    has_pipeline = pipeline_file.is_file()
+    if named_pipeline and not has_pipeline:
+        raise AssembleError(f"--pipeline-file {pipeline_file} does not exist")
+    package = config_text = None
+    drop_from_app: set[str] = set()
+    if has_pipeline:
+        merger = _pipeline_merge()
+        try:
+            package, config_text = merger.build_pipeline(root / APP_REL / "core" / "pipeline.base.yaml", pipeline_file, root / APP_REL)
+        except merger.PipelineError as exc:
+            raise AssembleError(str(exc)) from exc
+        # Only the chosen client's package ships: every other client's code, and the first client's sample emails, stay out.
+        drop_from_app = (set(merger.client_packages(root / APP_REL)) - {package}) | {"sample_emails"}
+
     if out.exists():
         if not force:
             raise AssembleError(f"{out} already exists. Use --force to rebuild it.")
@@ -167,7 +213,17 @@ def assemble(
     shutil.copytree(root / "agentcore" / "cdk", out / "agentcore" / "cdk", ignore=_IGNORE)
     shutil.copy2(root / "agentcore" / "aws-targets.json.template", out / "agentcore" / "aws-targets.json.template")
     shutil.copytree(root / "lambdas", out / "lambdas", ignore=_IGNORE)
-    shutil.copytree(root / APP_REL, out / APP_REL, ignore=_IGNORE)
+    app_src = root / APP_REL
+
+    def _app_ignore(directory, names):
+        skipped = set(_IGNORE(directory, names))
+        if Path(directory) == app_src:
+            skipped |= drop_from_app & set(names)
+        return skipped
+
+    shutil.copytree(app_src, out / APP_REL, ignore=_app_ignore)
+    if has_pipeline:
+        (out / APP_REL / "config.yaml").write_text(config_text, encoding="utf-8")
     (out / "agentcore" / "agentcore.json").write_text(json.dumps(spec, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
     cdk_json = out / "agentcore" / "cdk" / "cdk.json"
@@ -179,6 +235,8 @@ def assemble(
 
     if has_pack:
         shutil.copytree(pack_dir, out / APP_REL / "client_pack", ignore=_IGNORE)
+    if has_guardrail:
+        shutil.copy2(guardrail_file, out / "agentcore" / "guardrail.json")  # found by the CDK app by convention
     if link_node_modules and (root / "agentcore" / "cdk" / "node_modules").is_dir():
         (out / "agentcore" / "cdk" / "node_modules").symlink_to(root / "agentcore" / "cdk" / "node_modules")
 
@@ -190,6 +248,9 @@ def assemble(
         "credential_provider": spec["credentials"][0]["name"],
         "pack_included": has_pack,
         "pack_enabled": enable_pack,
+        "guardrail_included": has_guardrail,
+        "pipeline_overlay": has_pipeline,
+        "pipeline_package": package,
         "source_commit": _commit(root),
     }
     (out / "BUILD-INFO.json").write_text(json.dumps(info, indent=2) + "\n", encoding="utf-8")
@@ -211,12 +272,29 @@ def _readme(info: dict) -> str:
         else "The client's rule pack is in the image but OFF." if info["pack_included"]
         else "There is no rule pack for this client."
     )
+    guardrail = (
+        "The guardrail's topics and messages come from this client's own file (`agentcore/guardrail.json`)."
+        if info["guardrail_included"]
+        else "There is no guardrail file for this client, so the guardrail uses the neutral default wording. "
+        "Add `clients/<client>/guardrail/topics.json` and rebuild to supply the client's own."
+    )
+    pipeline = (
+        f"The agents, prompts and tools come from this client's pipeline overlay and its `{info['pipeline_package']}` package. "
+        "No other client's package or sample data is in the image."
+        if info["pipeline_overlay"]
+        else "**This build has no pipeline overlay, so it ships the first client's agents, prompts and tools (the whole app folder).** "
+        "Add `clients/<client>/pipeline/pipeline.yaml` and rebuild before using it for anyone else."
+    )
     return f"""# {info['client']}: assembled project (profile: {info['profile']})
 
 Made by `scripts/assemble_client.py` from the core at commit {info['source_commit']}. Do not edit by hand: rebuild with
 `--force`. Nothing here has been deployed.
 
 {pack}
+
+{guardrail}
+
+{pipeline}
 
 ## Before you deploy
 
@@ -259,6 +337,8 @@ def main() -> int:
     ap.add_argument("--out", type=Path, help="where to write the project (default: build/<client>)")
     ap.add_argument("--pack-dir", type=Path, help="the client's compiled rule pack (default: clients/<client>/pack)")
     ap.add_argument("--enable-pack", action="store_true", help="switch the pack on in the image; refused unless the pack verifies")
+    ap.add_argument("--guardrail-file", type=Path, help="the client's guardrail topics file (default: clients/<client>/guardrail/topics.json, if present)")
+    ap.add_argument("--pipeline-file", type=Path, help="the client's pipeline overlay (default: clients/<client>/pipeline/pipeline.yaml, if present)")
     ap.add_argument("--discovery-url", help="this client's Cognito OIDC discovery URL (default: a placeholder)")
     ap.add_argument("--client-id", help="this client's Cognito app client id (default: a placeholder)")
     ap.add_argument("--link-node-modules", action="store_true", help="symlink the CDK dependencies instead of running npm ci (dev and tests)")
@@ -267,14 +347,20 @@ def main() -> int:
     try:
         result = assemble(
             args.client, args.out, display_name=args.display_name, profile=args.profile, discovery_url=args.discovery_url,
-            client_id=args.client_id, pack_dir=args.pack_dir, enable_pack=args.enable_pack, link_node_modules=args.link_node_modules,
-            force=args.force,
+            client_id=args.client_id, pack_dir=args.pack_dir, enable_pack=args.enable_pack, guardrail_file=args.guardrail_file,
+            pipeline_file=args.pipeline_file, link_node_modules=args.link_node_modules, force=args.force,
         )
     except AssembleError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(f"assembled {result['client']} -> {result['out']}")
     print(f"  project {result['project']} | profile {result['profile']} | pack: {'on' if result['pack_enabled'] else 'in image, off' if result['pack_included'] else 'none'}")
+    print(f"  guardrail: {'client file' if result['guardrail_included'] else 'neutral default (no clients/<client>/guardrail/topics.json)'}")
+    if result["pipeline_overlay"]:
+        print(f"  pipeline: client overlay, package {result['pipeline_package']} (no other client's code in the image)")
+    else:
+        print("  WARNING: no pipeline overlay (clients/<client>/pipeline/pipeline.yaml). This build ships the FIRST CLIENT's agents, prompts")
+        print("           and tools. Do not use it for anyone else.")
     print(f"  next: see {result['out']}/README-BUILD.md")
     return 0
 

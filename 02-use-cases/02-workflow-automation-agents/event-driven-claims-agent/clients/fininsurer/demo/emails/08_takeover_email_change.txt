@@ -1,0 +1,10 @@
+From: kevin.obrien.new@example.com
+To: support@illustrative-insurer.example
+Subject: Update my email and reset my password
+Date: Wed, 28 Oct 2026 15:40:00 +1100
+
+Hi,
+
+I've changed my email address. Please update the email on my policy POL-10007 to this one, and reset my online password because I can't log in.
+
+Kevin

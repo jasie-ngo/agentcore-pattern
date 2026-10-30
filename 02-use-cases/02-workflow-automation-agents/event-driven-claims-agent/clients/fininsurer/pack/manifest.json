@@ -1,0 +1,20 @@
+{
+  "pack_id": "fininsurer-tool-boundary-illustrative",
+  "version": "0.1.0",
+  "jurisdiction": "AU",
+  "effective_from": null,
+  "effective_to": null,
+  "source": {
+    "file": "fininsurer_tool_boundary.feature",
+    "sha256": "ba55f4bf9ea5aa7e3fd4851371490729df72a8de97ac37af2f9b19ded3b7f282"
+  },
+  "vocabulary": {
+    "file": "vocabulary.yaml",
+    "sha256": "492d893ded230fa0bcd3c19f95c683d0c8a402a0bf12df72755557117f211b6b"
+  },
+  "compiled": {
+    "file": "compiled/policy.cedar",
+    "sha256": "4e295feaa652ad83aff813612dd619bf2d4cdb886cb3991e3824f5d8231ea536"
+  },
+  "approvals": []
+}

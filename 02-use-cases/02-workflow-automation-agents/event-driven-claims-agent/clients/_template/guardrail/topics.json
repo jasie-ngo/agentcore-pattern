@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "description": "Denies personal advice tailored to an individual’s circumstances; staff handle advice enquiries.",
+  "blockedInputMessage": "This enquiry needs {teamMember} — we can’t provide personal financial advice.",
+  "topics": [
+    {
+      "name": "PersonalFinancialAdvice",
+      "definition": "Personal financial or investment advice, or product recommendations, tailored to an individual's own circumstances (what they personally should do or choose).",
+      "examples": [
+        "Which option is best for me?",
+        "Should I switch to a different product?",
+        "What should I choose for my situation?",
+        "Is it a good idea for me to change products?",
+        "Can you recommend the best choice for me?"
+      ]
+    }
+  ]
+}

@@ -91,10 +91,22 @@ class MemoryActorTests(MemoryTestCase):
             with self.subTest(value=bad):
                 self.assertIsNone(memory.memory_actor(bad))
 
+    def test_a_number_with_a_hyphen_or_underscore_is_an_actor_exactly_as_written(self):
+        # A second client's numbers look like POL-12345. They are kept as they are, never rewritten.
+        self.assertEqual(memory.memory_actor("POL-12345"), "POL-12345")
+        self.assertEqual(memory.memory_actor("POL_12345"), "POL_12345")
+
+    def test_a_hyphen_may_not_lead_and_other_punctuation_is_still_refused(self):
+        for bad in ("-1234567", "_1234567", "POL.12345", "POL 12345", "POL/12345", "POL-1234\n..", "POL-12345@x"):
+            with self.subTest(value=bad):
+                self.assertIsNone(memory.memory_actor(bad))
+
     def test_two_different_inputs_never_share_an_actor(self):
-        # The deployed app turned every odd character into "-", so john.smith and john-smith collided.
+        # The deployed app turned every odd character into "-", so john.smith and john-smith collided. Nothing is rewritten now:
+        # john.smith is refused and john-smith is its own actor, so no two inputs can ever share one.
         self.assertIsNone(memory.memory_actor("john.smith"))
-        self.assertIsNone(memory.memory_actor("john-smith"))
+        self.assertEqual(memory.memory_actor("john-smith"), "john-smith")
+        self.assertNotEqual(memory.memory_actor("john_smith"), memory.memory_actor("john-smith"))
 
 
 class VerificationRegistersTests(MemoryTestCase):

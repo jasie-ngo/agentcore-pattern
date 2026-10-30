@@ -1,0 +1,46 @@
+# The client-neutral base of a member-email pipeline: what is the same for every client.
+#
+# A client's pipeline is this file plus that client's overlay (clients/<client>/pipeline/pipeline.yaml), merged by
+# scripts/assemble_client.py into the config.yaml that ships in the client's image. The overlay supplies the agents, their
+# prompts, the orchestration and any extra variables; it may add model aliases but may not redefine anything here.
+#
+# Keep this file free of any client's name, product or terms. tests/test_core_is_client_neutral.py enforces it.
+#
+# The models are pinned: changing a default is a deliberate act that must pass the evaluation harness (tests/test_model_pin.py).
+
+version: "1"
+log_level: ${LOG_LEVEL:-INFO}
+
+vars:
+  # One place to point every agent at a different Bedrock model.
+  primary_model: ${AGENT_MODEL_ID:-global.anthropic.claude-sonnet-4-6}
+  fast_model: ${FAST_MODEL_ID:-global.anthropic.claude-haiku-4-5-20251001-v1:0}
+  # Sentinel the Bedrock Guardrail substitutes for blocked output. It must match the CDK stack's blockedOutputsMessaging
+  # (agentcore/cdk/lib/infra-construct.ts), which is not configurable per client.
+  guardrail_sentinel: "[GUARDRAIL_BLOCKED_ADVICE]"
+  # strict (the default) or presale. Presale is an explicit switch for demos with synthetic data only; see ADR-0015.
+  profile: ${DEPLOYMENT_PROFILE:-strict}
+
+# Cost-based routing: a cheap/fast model for classification, the stronger model for summarising, writing and reviewing.
+# Agents choose a model by alias, never by id.
+models:
+  primary:
+    provider: bedrock
+    model_id: ${primary_model}
+
+  fast:
+    provider: bedrock
+    model_id: ${fast_model}
+
+  # The drafting agent's model, with the "no personal advice" Bedrock Guardrail attached. Blocked output is redacted to the
+  # sentinel so a reviewing agent can spot an intervention. GUARDRAIL_ID unset => the model omits guardrailConfig entirely, so a
+  # pilot still runs on app-layer controls alone.
+  guarded:
+    provider: bedrock
+    model_id: ${primary_model}
+    params:
+      guardrail_id: ${GUARDRAIL_ID:-}
+      guardrail_version: ${GUARDRAIL_VERSION:-DRAFT}
+      guardrail_trace: enabled
+      guardrail_redact_output: true
+      guardrail_redact_output_message: ${guardrail_sentinel}

@@ -34,6 +34,7 @@ import * as kms from 'aws-cdk-lib/aws-kms';
 import { Construct } from 'constructs';
 import * as path from 'path';
 import { ResourceNames, parseClient } from './naming';
+import { LEGACY_GUARDRAIL, NEUTRAL_GUARDRAIL, renderGuardrailText, type GuardrailConfig } from './guardrail-topics';
 
 export interface InfraConstructProps {
   /** Whether to destroy data on stack delete (default: true for dev) */
@@ -42,6 +43,8 @@ export interface InfraConstructProps {
   client?: string;
   /** How the client is named in end-user text (the guardrail's messages). Unset in client mode gives generic wording. */
   clientDisplayName?: string;
+  /** The guardrail's topics and messages, from the client's file (lib/guardrail-topics.ts). Unset uses the built-in default. */
+  guardrail?: GuardrailConfig;
 }
 
 export class InfraConstruct extends Construct {
@@ -295,38 +298,30 @@ export class InfraConstruct extends Construct {
     // Platform control (showcase): a denied-topic guardrail attached to the Writer model
     // so the agent cannot generate personal financial/product advice. Works together with
     // the app-layer detection (AI-001) + routing + Reviewer checks.
-    // The guardrail speaks to members, so it names the client. The original deployment's wording is kept exactly.
+    // The wording is data (lib/guardrail-topics.ts): the client's own file if it supplied one, otherwise the original wording with
+    // no client (so an existing deployment is unchanged) or neutral wording with a client. The blocked-output sentinel is fixed.
     const originalWording = !client && props.clientDisplayName === undefined;
     const displayName = props.clientDisplayName;
-    const staff = originalWording ? 'HESTA' : displayName ? displayName : 'the fund';
+    const staff = originalWording ? 'HESTA' : displayName ? displayName : 'the organisation';
     const teamMember = originalWording
       ? 'a HESTA team member'
       : displayName
         ? `a member of the ${displayName} team`
         : 'a member of our team';
+    const wording = props.guardrail ?? (originalWording ? LEGACY_GUARDRAIL : NEUTRAL_GUARDRAIL);
+    const vars = { staff, teamMember };
     this.adviceGuardrail = new bedrock.CfnGuardrail(this, 'AdviceGuardrail', {
       name: names.guardrail(),
-      description: `Denies personal financial/investment/product advice; ${staff} staff handle advice enquiries.`,
-      blockedInputMessaging: `This enquiry needs ${teamMember} — we can’t provide personal financial advice.`,
+      description: renderGuardrailText(wording.description, vars),
+      blockedInputMessaging: renderGuardrailText(wording.blockedInputMessage, vars),
       blockedOutputsMessaging: '[GUARDRAIL_BLOCKED_ADVICE]',
       topicPolicyConfig: {
-        topicsConfig: [
-          {
-            name: 'PersonalFinancialAdvice',
-            type: 'DENY',
-            definition:
-              'Personal financial or investment advice, or product/option recommendations, tailored to an '
-              + "individual member's own circumstances (what they personally should do with their super).",
-            // Bedrock allows at most 5 examples per topic.
-            examples: [
-              'Which super option is best for me?',
-              'Should I switch to the high growth option?',
-              'What should I invest my super in?',
-              'Is it a good idea for me to roll over my other fund for my situation?',
-              'Can you recommend the best investment choice for me?',
-            ],
-          },
-        ],
+        topicsConfig: wording.topics.map((t) => ({
+          name: t.name,
+          type: 'DENY',
+          definition: t.definition,
+          examples: t.examples,
+        })),
       },
     });
 

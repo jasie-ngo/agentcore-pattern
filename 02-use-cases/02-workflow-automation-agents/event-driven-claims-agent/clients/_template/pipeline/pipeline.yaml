@@ -1,0 +1,30 @@
+# Your client's pipeline overlay. Copy this folder to clients/<client>/pipeline/ and edit it. See README.md beside this file.
+#
+# It is merged onto the neutral base (app/04_hesta_member_email/core/pipeline.base.yaml) by scripts/assemble_client.py. The base owns
+# the models, their pinned defaults and the variables primary_model, fast_model, guardrail_sentinel and profile: use them, do not
+# redefine them.
+
+# The folder beside core/ that holds this client's tools, schemas and factory (it must contain factory.py). It does not exist for a
+# new client yet, so this placeholder stops the build until you write it.
+package: your_client_package
+
+# Variables only this client's prompts use. Optional.
+vars: {}
+
+agents:
+  # One entry per agent. Choose a model by alias: primary, fast or guarded. Never a model id.
+  # Every `type` and `tools` path must be ./<package>/... or ./core/... and nothing may name another client.
+  coordinator:
+    type: ./your_client_package/factory.py:your_agent
+    model: primary
+    description: "Run the pipeline over one inbound email."
+    system_prompt: |
+      Replace this with the client's own coordinator prompt.
+
+orchestrations:
+  main:
+    mode: delegate
+    entry_name: coordinator
+    connections: []
+
+entry: main

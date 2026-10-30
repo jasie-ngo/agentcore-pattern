@@ -1,0 +1,11 @@
+From: daniel.okoye@example.net
+To: support@illustrative-insurer.example
+Subject: Cancel my policy
+Date: Tue, 27 Oct 2026 09:30:00 +1100
+
+Hi,
+
+Please cancel my travel policy POL-10005 from the end of this month.
+
+Thanks,
+Daniel Okoye

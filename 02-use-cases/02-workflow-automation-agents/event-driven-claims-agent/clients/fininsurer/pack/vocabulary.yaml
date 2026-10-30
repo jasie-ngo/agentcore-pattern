@@ -1,0 +1,83 @@
+# ILLUSTRATIVE finance-insurer tool-boundary vocabulary: the words the feature file in this folder is allowed to use.
+#
+# STATUS:      ILLUSTRATIVE, written for a pre-sale demo. NOT any real insurer's rules and NOT approved.
+# APPROVED BY: (none)
+# WHY THIS FILE EXISTS
+#   A feature file means what its words mean. This file is the dictionary: which tools exist, what they do, which arguments a
+#   rule may mention, and which agents a rule may be scoped to. The compiler and the test runner both read it, so a rule that
+#   names a tool, argument, value or agent that is not listed here is refused when the pack is built, not silently ignored.
+#   It is approved together with the feature file: changing either one voids the approval.
+# SOURCES
+#   Tool names and arguments: lambdas/schemas/*.json (the Gateway tool schemas)
+#   The agent: clients/fininsurer/pipeline/pipeline.yaml (human_handoff is the only agent that carries a pack)
+
+pack_id: fininsurer-tool-boundary-illustrative
+jurisdiction: AU
+
+# Only agents that carry the pack are listed. In the overlay that is human_handoff alone (agent_kwargs.cedar_pack). An agent that
+# carries a pack is refused every tool the pack does not allow it, so adding another agent here means listing every tool it uses,
+# its local tools included.
+agents:
+  human_handoff: { description: "Records an escalated case for a person to pick up. It never reads records and never decides." }
+
+tools:
+  lookup_policy:
+    action: policy-lookup___lookup_policy
+    description: Looks up a policy record by policy number.
+    args:
+      policy_number: { description: The policy number to look up }
+
+  list_pending_claims:
+    action: list-pending-claims___list_pending_claims
+    description: Lists every case currently waiting for a person to review it. Takes no arguments.
+    args: {}
+
+  request_human_review:
+    action: human-review___request_human_review
+    description: Puts a case in the human review queue and notifies the reviewers.
+    args:
+      claim_id: { description: The case to send for review }
+      reason: { description: Why a person needs to look at it }
+      estimated_amount: { description: "A dollar amount, 0 when none applies" }
+
+  create_claim:
+    action: create-claim___create_claim
+    description: Writes a case record. The agent only records cases that wait for a person.
+    args:
+      policy_number: { description: The policy number the case belongs to }
+      description: { description: "The customer's message, trimmed" }
+      estimated_amount: { description: "A dollar amount, 0 when none applies" }
+      category:
+        description: The intent id the case was classified as.
+        values:
+          - hardship_premium_relief
+          - hardship_claim_support
+          - claim_lodgement
+          - claim_status
+          - cancellation_request
+          - complaint_dispute
+          - change_of_details
+          - policy_enquiry
+          - other_unknown
+      status:
+        description: Where the case is in its life.
+        values: [pending_review, approved]
+      decision:
+        description: What was decided about the case.
+        values: [escalated, approved]
+
+  send_notification:
+    action: notification___send_notification
+    description: Sends an email to the customer. The pipeline never uses it; nothing is sent automatically.
+    args:
+      recipient_email: { description: Who the email goes to }
+      subject: { description: The subject line }
+      body: { description: The email text }
+
+  resolve_claim:
+    action: resolve-claim___resolve_claim
+    description: Approves or denies a waiting case. This is a reviewer's action, never the agent's.
+    args:
+      claim_id: { description: The case to resolve }
+      action: { description: Approve or deny }
+      reviewer_notes: { description: The reviewer's notes }

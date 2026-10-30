@@ -9,6 +9,7 @@ import { CfnOutput, Stack, type StackProps } from 'aws-cdk-lib';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 import { InfraConstruct } from './infra-construct';
+import type { GuardrailConfig } from './guardrail-topics';
 
 export interface AgentCoreStackProps extends StackProps {
   /** The AgentCore project specification containing agents, memories, and credentials. */
@@ -21,6 +22,8 @@ export interface AgentCoreStackProps extends StackProps {
   client?: string;
   /** How the client is named in end-user text. */
   clientDisplayName?: string;
+  /** The guardrail's topics and messages from the client's file. Unset uses the built-in default (lib/guardrail-topics.ts). */
+  guardrail?: GuardrailConfig;
 }
 
 /**
@@ -49,6 +52,7 @@ export class AgentCoreStack extends Stack {
       destroyOnDelete: true,
       client: props.client,
       clientDisplayName: props.clientDisplayName,
+      guardrail: props.guardrail,
     });
 
     // ─── Step 2: Patch mcpSpec with real Lambda ARNs + JWT authorizer ──

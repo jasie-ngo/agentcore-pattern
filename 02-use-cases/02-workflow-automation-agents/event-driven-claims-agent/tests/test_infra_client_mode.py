@@ -5,6 +5,8 @@ What is proved, from the synthesised CloudFormation:
   * With a client, every name the stack controls carries the client, and two clients in one account and region share none.
   * In client mode the data stores use a key of the client's own; in legacy mode there is no such key.
   * The guardrail speaks in the client's name, and keeps the original wording when there is no client.
+  * A client's own guardrail file replaces the wording (topics, examples, messages); the blocked-output sentinel is never configurable;
+    a missing or invalid file stops the build with a readable message instead of falling back.
   * Every mode publishes the generic AGENTCORE_MEMORY_ID, so a memory with any name is found.
   * The client is a stack tag; a malformed slug stops the build with a readable message.
 
@@ -42,6 +44,20 @@ ORIGINAL_NAMES = {
     "ClaimsAgent-TriggerDLQ", "ClaimsAgent-FailedClaims", "ClaimsAgent-InboxTrigger", "ClaimsAgent-dev-NoPersonalAdvice",
     f"claims-inbox-{ACCOUNT}-{REGION}",
 }
+# A made-up insurer's wording, to prove a client file replaces the built-in text. Nothing here is a real client's.
+INSURER_WORDING = {
+    "version": 1,
+    "description": "Denies personal advice on cover; {staff} staff handle these enquiries.",
+    "blockedInputMessage": "This enquiry needs {teamMember}. We cannot advise on what cover you should hold.",
+    "topics": [
+        {
+            "name": "CoverAdvice",
+            "definition": "Advice on which insurance cover to buy, keep, reduce or cancel, tailored to the person asking.",
+            "examples": ["Should I cancel my policy?", "Which level of cover is best for me?", "Is my excess too high for my situation?"],
+        }
+    ],
+}
+SENTINEL = "[GUARDRAIL_BLOCKED_ADVICE]"
 PHYSICAL = [
     ("AWS::DynamoDB::Table", "TableName"), ("AWS::Lambda::Function", "FunctionName"), ("AWS::SNS::Topic", "TopicName"),
     ("AWS::SQS::Queue", "QueueName"), ("AWS::CloudWatch::Alarm", "AlarmName"), ("AWS::Events::Rule", "Name"),
@@ -76,6 +92,14 @@ class ClientModeTests(unittest.TestCase):
         cls.legacy = cls._synth("legacy")
         cls.acme = cls._synth("acme", AGENTCORE_CLIENT="acme", AGENTCORE_CLIENT_NAME="Acme Super")
         cls.globex = cls._synth("globex", AGENTCORE_CLIENT="globex")
+        cls.insurer_file = Path(cls._tmp.name) / "insurer-topics.json"
+        cls.insurer_file.write_text(json.dumps(INSURER_WORDING), encoding="utf-8")
+        cls.insurer = cls._synth(
+            "insurer", AGENTCORE_CLIENT="insurer", AGENTCORE_CLIENT_NAME="Acme Insurance", AGENTCORE_GUARDRAIL_TOPICS=str(cls.insurer_file)
+        )
+        cls.from_template = cls._synth(
+            "template", AGENTCORE_CLIENT="tmpl", AGENTCORE_GUARDRAIL_TOPICS=str(ROOT / "clients" / "_template" / "guardrail" / "topics.json")
+        )
 
     @classmethod
     def tearDownClass(cls):
@@ -156,6 +180,50 @@ class ClientModeTests(unittest.TestCase):
         self.assertIn("a member of the Acme Super team", self._guardrail(self.acme)["BlockedInputMessaging"])
         self.assertIn("a member of our team", self._guardrail(self.globex)["BlockedInputMessaging"])
         self.assertNotIn("HESTA", json.dumps(self._guardrail(self.globex)))
+
+    # ---- a client's own guardrail wording ------------------------------------------------------------------------------
+    @staticmethod
+    def _topics(template):
+        return _of_type(template, "AWS::Bedrock::Guardrail")[0]["Properties"]["TopicPolicyConfig"]["TopicsConfig"]
+
+    def test_a_client_file_replaces_the_topics_examples_and_messages(self):
+        g = self._guardrail(self.insurer)
+        topic = self._topics(self.insurer)
+        self.assertEqual([t["Name"] for t in topic], ["CoverAdvice"])
+        self.assertEqual(topic[0]["Examples"], INSURER_WORDING["topics"][0]["examples"])
+        self.assertEqual(topic[0]["Definition"], INSURER_WORDING["topics"][0]["definition"])
+        self.assertIn("a member of the Acme Insurance team", g["BlockedInputMessaging"])
+        self.assertIn("Acme Insurance staff", g["Description"])
+        # Nothing of the built-in wording, in either variant, survives next to the client's own.
+        self.assertNotRegex(json.dumps(g), r"(?i)super|HESTA|high growth|roll over")
+
+    def test_the_blocked_output_sentinel_is_the_same_in_every_mode(self):
+        # The Reviewer agent matches this string by value, so a client file must not be able to change it.
+        for label, template in (("legacy", self.legacy), ("acme", self.acme), ("globex", self.globex), ("insurer", self.insurer)):
+            with self.subTest(mode=label):
+                self.assertEqual(self._guardrail(template)["BlockedOutputsMessaging"], SENTINEL)
+
+    def test_the_template_file_gives_exactly_the_neutral_default(self):
+        # Copying clients/_template/guardrail/ unchanged must be harmless: same wording as having no file at all.
+        self.assertEqual(self._topics(self.from_template), self._topics(self.globex))
+        self.assertEqual(self._guardrail(self.from_template)["Description"], self._guardrail(self.globex)["Description"])
+
+    def test_a_client_file_changes_only_the_guardrail(self):
+        # Same client name, with and without the file: nothing but the guardrail's wording may differ.
+        def without_guardrail(template):
+            return {k: v for k, v in template["Resources"].items() if v["Type"] != "AWS::Bedrock::Guardrail"}
+        plain = self._synth("insurer-plain", AGENTCORE_CLIENT="insurer", AGENTCORE_CLIENT_NAME="Acme Insurance")
+        self.assertEqual(without_guardrail(plain), without_guardrail(self.insurer))
+
+    def test_a_missing_or_invalid_file_stops_the_build_and_never_falls_back(self):
+        bad = Path(self._tmp.name) / "bad.json"
+        bad.write_text(json.dumps({**INSURER_WORDING, "topics": [{**INSURER_WORDING["topics"][0], "examples": list("abcdef")}]}), encoding="utf-8")
+        cases = {"missing": (str(Path(self._tmp.name) / "typo.json"), "cannot be read"), "invalid": (str(bad), "topics[0].examples has 6 entries")}
+        for label, (path, expected) in cases.items():
+            with self.subTest(case=label):
+                result = self._run(Path(self._tmp.name) / f"fail-{label}", AGENTCORE_CLIENT="acme", AGENTCORE_GUARDRAIL_TOPICS=path)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected, result.stderr)
 
     def test_every_mode_publishes_the_generic_memory_id(self):
         for label, template in (("legacy", self.legacy), ("acme", self.acme), ("globex", self.globex)):

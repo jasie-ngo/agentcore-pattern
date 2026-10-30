@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "notice": "Expected outcomes for each sample email, for the DETERMINISTIC parts of the pipeline only (email normalising, identity check, routing gate). 'intent', 'flags', 'vulnerability_flags', 'priority' and 'complaint_indicator' are what the classifier and empathy agents are EXPECTED to return: they are LLM judgements and are not tested here. 'backstop_alone' is what the routing gate does from the message text alone if the classifier sets no flag at all.",
+  "scenarios": [
+    {
+      "file": "01_claim_status_routine.txt",
+      "title": "Routine claim status chase",
+      "shows": "The light path: verified, routine, nothing to escalate. A status check against the pending case.",
+      "intent": "claim_status", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10001", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": false, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "02_hardship_premium_job_loss.txt",
+      "title": "Hardship: redundancy, behind on premiums, evidence attached",
+      "shows": "A policy in arrears still verifies. Hardship escalates at high priority. The attached evidence is noted, never required.",
+      "intent": "hardship_premium_relief", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["financial_distress"], "priority": "high", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10002", "channel": "direct_email", "sender_type": "policyholder", "attachments": 1, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": true, "hardship": true}
+    },
+    {
+      "file": "03_hardship_claim_support.txt",
+      "title": "Hardship on a pending claim, no hardship wording",
+      "shows": "Claim hardship that uses none of the backstop phrases: it escalates only because the classifier sets the flag and the intent. The honest case for needing the LLM.",
+      "intent": "hardship_claim_support", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["financial_distress"], "priority": "high", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10003", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "04_hardship_lapsed_gentle.txt",
+      "title": "Gentle hardship on a lapsed policy",
+      "shows": "Understated distress ('really tight', 'missed a few payments') that no pattern catches. A lapsed policy still verifies. Relies on the classifier flag.",
+      "intent": "hardship_premium_relief", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["financial_distress"], "priority": "high", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10004", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "05_cancellation_instruction.txt",
+      "title": "Instruction to cancel",
+      "shows": "An instruction to cancel always goes to a person, and the message text catches it even without the flag.",
+      "intent": "cancellation_request", "flags": {"instructs_cancellation": true}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10005", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": true, "hardship": false}
+    },
+    {
+      "file": "06_policy_enquiry_routine.txt",
+      "title": "Routine policy enquiry",
+      "shows": "A second light-path case: general information from a verified policyholder.",
+      "intent": "policy_enquiry", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10010", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": false, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "07_complaint_claim_handling.txt",
+      "title": "Formal complaint",
+      "shows": "A complaint goes to the complaints process. No pattern catches it: it relies on the intent and the empathy agent's complaint indicator.",
+      "intent": "complaint_dispute", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": true,
+      "expect": {"policy_number": "POL-10006", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "08_takeover_email_change.txt",
+      "title": "Email change and password reset from a different address",
+      "shows": "The account-takeover route: a different sender address is never verified, and the request itself is caught by the message text.",
+      "intent": "change_of_details", "flags": {"contact_detail_change": true}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10007", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "partial", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": true, "hardship": false}
+    },
+    {
+      "file": "09_vulnerable_family_violence.txt",
+      "title": "Hardship with a safety concern",
+      "shows": "Safety and distress raise the priority to urgent. The reply must be handled by a person, with the stated contact preference respected.",
+      "intent": "hardship_premium_relief", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["family_violence", "financial_distress"], "priority": "urgent", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10008", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": true, "hardship": true}
+    },
+    {
+      "file": "10_third_party_counsellor.txt",
+      "title": "A financial counsellor writing on a customer's behalf",
+      "shows": "A third-party sender is never verified as the policyholder: authority must be confirmed by a person before anything is shared.",
+      "intent": "hardship_premium_relief", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["financial_distress"], "priority": "high", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10011", "channel": "third_party", "sender_type": "third_party", "attachments": 0, "verification_presale": "partial", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": true, "hardship": true}
+    },
+    {
+      "file": "11_claim_lodgement_storm.txt",
+      "title": "Lodging a new claim, photos attached",
+      "shows": "A claim is only ever decided by a person. Two attachments are counted; their contents are not read.",
+      "intent": "claim_lodgement", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10012", "channel": "direct_email", "sender_type": "policyholder", "attachments": 2, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "12_unverified_no_policy_number.txt",
+      "title": "No policy number, unknown sender",
+      "shows": "Nothing can be verified, so nothing is disclosed: the draft only asks for the identity details.",
+      "intent": "claim_status", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": null, "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "unverified", "verification_strict": "unverified", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "13_cancelled_policy_status.txt",
+      "title": "Status enquiry on a cancelled policy",
+      "shows": "A cancelled policy is capped at partial verification, even with a matching address, so a person confirms before anything is said.",
+      "intent": "claim_status", "flags": {}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10009", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "partial", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": false, "hardship": false}
+    },
+    {
+      "file": "14_personal_advice_request.txt",
+      "title": "Asking what to do about cover",
+      "shows": "A request for personal advice is declined and escalated. The guardrail's PersonalAdvice topic covers the same ground in the model.",
+      "intent": "policy_enquiry", "flags": {"personal_advice_requested": true}, "vulnerability_flags": [], "priority": "normal", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10013", "channel": "direct_email", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": false, "priority_floor": "normal"},
+      "backstop_alone": {"escalate": true, "hardship": false}
+    },
+    {
+      "file": "15_web_form_hardship.txt",
+      "title": "Hardship through the web form",
+      "shows": "The second input shape: a web form with no email headers. The sender comes from the form field.",
+      "intent": "hardship_premium_relief", "flags": {"hardship_indicated": true}, "vulnerability_flags": ["financial_distress"], "priority": "high", "complaint_indicator": false,
+      "expect": {"policy_number": "POL-10014", "channel": "web_form", "sender_type": "policyholder", "attachments": 0, "verification_presale": "verified", "verification_strict": "partial", "escalate": true, "hardship": true, "priority_floor": "high"},
+      "backstop_alone": {"escalate": true, "hardship": true}
+    }
+  ]
+}

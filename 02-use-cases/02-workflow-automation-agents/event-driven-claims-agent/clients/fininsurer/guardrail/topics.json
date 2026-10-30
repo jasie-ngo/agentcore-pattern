@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "description": "Illustrative insurer: denies personal advice and promised outcomes; {staff} staff handle these enquiries.",
+  "blockedInputMessage": "This enquiry needs {teamMember}. We can’t give personal advice or confirm an outcome by email, but someone will be in touch.",
+  "topics": [
+    {
+      "name": "PersonalAdvice",
+      "definition": "Personal advice tailored to the person's own circumstances: whether to keep, change, buy or cancel cover, or what to do about their money.",
+      "examples": [
+        "Should I cancel my policy?",
+        "Which level of cover is best for me?",
+        "Should I switch to another insurer?",
+        "Is it worth keeping my insurance while I'm short of money?",
+        "What should I do about my premiums?"
+      ]
+    },
+    {
+      "name": "OutcomeCommitments",
+      "definition": "Promising or implying an outcome of a claim or hardship request: approval, an amount, a payment date, relief, a waiver or a payment arrangement.",
+      "examples": [
+        "Will my claim definitely be approved?",
+        "Can you guarantee my premiums will be waived?",
+        "How much will I get paid and by when?",
+        "Will you let me pause my payments?",
+        "Can you confirm my hardship request is approved?"
+      ]
+    }
+  ]
+}

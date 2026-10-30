@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { AgentCoreStack } from '../lib/cdk-stack';
 import { parseClient } from '../lib/naming';
+import { resolveGuardrailConfig } from '../lib/guardrail-topics';
 import { ConfigIO, type AgentCoreMcpSpec, type AwsDeploymentTarget } from '@aws/agentcore-cdk';
 import { App, Aspects, type Environment } from 'aws-cdk-lib';
 import { AwsSolutionsChecks } from 'cdk-nag';
@@ -79,6 +80,14 @@ async function main() {
     (process.env.AGENTCORE_CLIENT_NAME || undefined) ??
     (fileContext.clientName as string | undefined);
 
+  // The guardrail's wording, from the client's file (see lib/guardrail-topics.ts). A named file that is missing or invalid stops the
+  // synth here with a readable message, so a typo can never quietly fall back to the default wording.
+  const guardrailFile: string | undefined =
+    app.node.tryGetContext('guardrailTopics') ??
+    (process.env.AGENTCORE_GUARDRAIL_TOPICS || undefined) ??
+    (fileContext.guardrailTopics as string | undefined);
+  const guardrail = resolveGuardrailConfig(guardrailFile, configRoot).config;
+
   for (const target of targets) {
     const env = toEnvironment(target);
     const stackName = toStackName(spec.name, target.name);
@@ -98,6 +107,7 @@ async function main() {
       credentials,
       client,
       clientDisplayName,
+      guardrail,
       env,
       description: `AgentCore stack for ${spec.name} deployed to ${target.name} (${target.region})`,
       tags: {

@@ -233,6 +233,51 @@ class AssembleTests(unittest.TestCase):
         spec = json.loads((Path(info["out"]) / "agentcore" / "agentcore.json").read_text())
         self.assertEqual({e["name"]: e["value"] for e in spec["runtimes"][0]["envVars"]}["CEDAR_PACK_DIR"], "/app/client_pack")
 
+    # ---- the client's guardrail wording -------------------------------------------------------------------------------
+    def _guardrail_file(self, body='{"version": 1}') -> Path:
+        path = self.tmp / "topics.json"
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_a_clients_guardrail_file_is_copied_where_the_cdk_app_looks(self):
+        source = self._guardrail_file('{"version": 1, "marker": "from the client"}')
+        info = self.assemble(guardrail_file=source)
+        copied = Path(info["out"]) / "agentcore" / "guardrail.json"
+        self.assertEqual(copied.read_bytes(), source.read_bytes())
+        self.assertTrue(info["guardrail_included"])
+        self.assertIn("this client's own file", (Path(info["out"]) / "README-BUILD.md").read_text())
+
+    def test_with_no_guardrail_file_nothing_is_copied_and_the_build_says_so(self):
+        info = self.assemble()
+        self.assertFalse((Path(info["out"]) / "agentcore" / "guardrail.json").exists())
+        self.assertFalse(info["guardrail_included"])
+        self.assertIn("neutral default wording", (Path(info["out"]) / "README-BUILD.md").read_text())
+
+    def test_the_conventional_location_is_found_from_the_client_name(self):
+        folder = self.tmp / "clients" / "acme" / "guardrail"
+        folder.mkdir(parents=True)
+        (folder / "topics.json").write_text('{"version": 1}', encoding="utf-8")
+        info = self.assemble(root=self._shadow_root())
+        self.assertTrue(info["guardrail_included"])
+
+    def _shadow_root(self) -> Path:
+        """A root whose clients/ folder is this test's own, with just enough of the real project beside it to assemble from."""
+        shadow = self.tmp
+        for rel in ("agentcore", "lambdas", "app"):
+            if not (shadow / rel).exists():
+                (shadow / rel).symlink_to(ROOT / rel, target_is_directory=True)
+        return shadow
+
+    def test_a_named_guardrail_file_that_is_not_there_is_refused(self):
+        with self.assertRaisesRegex(assemble_client.AssembleError, "does not exist"):
+            self.assemble(guardrail_file=self.tmp / "typo.json")
+
+    def test_a_guardrail_file_that_is_not_a_json_object_is_refused(self):
+        with self.assertRaisesRegex(assemble_client.AssembleError, "not valid JSON"):
+            self.assemble(guardrail_file=self._guardrail_file("{ nope"))
+        with self.assertRaisesRegex(assemble_client.AssembleError, "one JSON object"):
+            self.assemble(name="out2", guardrail_file=self._guardrail_file("[1, 2]"))
+
     def test_switching_on_a_pack_that_is_not_there_is_refused(self):
         with self.assertRaisesRegex(assemble_client.AssembleError, "no pack"):
             self.assemble(enable_pack=True)

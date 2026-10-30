@@ -1,0 +1,10 @@
+From: someone.else@example.com
+To: support@illustrative-insurer.example
+Subject: What is happening with my claim?
+Date: Fri, 30 Oct 2026 08:15:00 +1100
+
+Hi,
+
+I want to know what's happening with my claim. Can you tell me where it's up to?
+
+Thanks

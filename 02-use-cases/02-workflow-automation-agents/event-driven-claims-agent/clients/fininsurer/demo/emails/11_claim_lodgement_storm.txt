@@ -1,0 +1,14 @@
+From: nina.ahmed@example.org
+To: support@illustrative-insurer.example
+Subject: Storm damage, lodging a claim
+Date: Thu, 29 Oct 2026 13:00:00 +1100
+
+Hi,
+
+A storm damaged my roof on Friday and water has come through the ceiling. I'd like to lodge a claim on policy POL-10012. I've attached photos of the damage.
+
+[ATTACHMENT roof_1.jpg]
+[ATTACHMENT roof_2.jpg]
+
+Thanks,
+Nina Ahmed

@@ -1,0 +1,11 @@
+From: maria.rossi@example.com
+To: support@illustrative-insurer.example
+Subject: My home policy
+Date: Tue, 27 Oct 2026 08:45:00 +1100
+
+Hello,
+
+Things have been really tight lately and I've missed a few payments on my home policy (POL-10004). I think it might have lapsed. I'd like to understand what my options are.
+
+Thanks,
+Maria
