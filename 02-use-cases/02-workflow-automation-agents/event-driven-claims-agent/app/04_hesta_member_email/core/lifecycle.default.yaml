@@ -1,0 +1,26 @@
+# The default claim lifecycle. A client extends it (clients/<client>/lifecycle/lifecycle.yaml) but cannot weaken it:
+#   - every state can take an inbound email, and an inbound email always ends in awaiting_staff;
+#   - only a staff event leaves awaiting_staff;
+#   - no transition sends anything: every reply is a draft a person releases.
+# Enforced in core/lifecycle.py and tests/test_lifecycle.py.
+version: 1
+initial: open
+states: [open, awaiting_member, awaiting_attachment, awaiting_staff, resolved, closed]
+terminal: [closed]
+expects: [member, attachment, nothing]
+timeouts_days:
+  awaiting_member: 5
+  awaiting_attachment: 7
+transitions:
+  - {from: open, event: inbound_processed, to: awaiting_staff}
+  - {from: awaiting_member, event: inbound_processed, to: awaiting_staff}
+  - {from: awaiting_attachment, event: inbound_processed, to: awaiting_staff}
+  - {from: awaiting_staff, event: inbound_processed, to: awaiting_staff}
+  - {from: resolved, event: inbound_processed, to: awaiting_staff}
+  - {from: awaiting_staff, event: staff_released, when: {expects: member}, to: awaiting_member}
+  - {from: awaiting_staff, event: staff_released, when: {expects: attachment}, to: awaiting_attachment}
+  - {from: awaiting_staff, event: staff_released, when: {expects: nothing}, to: resolved}
+  - {from: awaiting_staff, event: staff_resolved, to: resolved}
+  - {from: awaiting_member, event: member_silent, to: awaiting_staff}
+  - {from: awaiting_attachment, event: member_silent, to: awaiting_staff}
+  - {from: resolved, event: staff_closed, to: closed}
