@@ -64,6 +64,7 @@ def default() -> Lifecycle:
 
 def _validate(lc: Lifecycle) -> None:
     states = set(lc.states)
+    seen: dict = {}
     for t in lc.transitions:
         if t.event not in EVENTS:
             raise LifecycleError(f"unknown event {t.event!r}: a client cannot add events")
@@ -79,6 +80,23 @@ def _validate(lc: Lifecycle) -> None:
             raise LifecycleError(f"only a staff event may leave {ESCALATION_STATE}; {t.event} must stay in it")
         if t.event == "inbound_processed" and t.to_state != ESCALATION_STATE:
             raise LifecycleError(f"an inbound email must always end in {ESCALATION_STATE}")
+        if t.to_state in lc.terminal:
+            if t.event != "staff_closed":
+                raise LifecycleError("a terminal state may only be entered by staff_closed")
+            if t.from_state == ESCALATION_STATE:
+                raise LifecycleError(f"{ESCALATION_STATE} may not go straight to a terminal state")
+        key = (t.from_state, t.event, t.when)
+        if key in seen:
+            if seen[key] == t.to_state:
+                raise LifecycleError(f"duplicate transition {t.from_state} --{t.event}--> {t.to_state}")
+            raise LifecycleError(f"ambiguous: {t.from_state} --{t.event}--> leads to both {seen[key]} and {t.to_state}")
+        seen[key] = t.to_state
+    groups: dict = {}
+    for t in lc.transitions:
+        groups.setdefault((t.from_state, t.event), []).append(t)
+    for (from_state, event), group in groups.items():
+        if len(group) > 1 and any(not t.when for t in group):
+            raise LifecycleError(f"ambiguous: {from_state} --{event}--> has several transitions and one has no 'when'")
     for state in lc.states:
         if state in lc.terminal:
             continue
@@ -91,9 +109,55 @@ def _validate(lc: Lifecycle) -> None:
             raise LifecycleError(f"timeout for {state} must be a whole number of days, at least 1")
 
 
-def extend(base: Lifecycle, overlay: dict) -> Lifecycle:
+_OVERLAY_KEYS = frozenset({"states", "expects", "transitions", "timeouts_days"})
+
+
+def _text(value, where: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise LifecycleError(f"{where} must be a non-blank string")
+    return value
+
+
+def _check_overlay(overlay) -> None:
+    """Refuse a malformed overlay with LifecycleError before anything indexes into it."""
+    if not isinstance(overlay, dict):
+        raise LifecycleError("overlay must be a mapping")
     if "initial" in overlay or "terminal" in overlay:
         raise LifecycleError("a client cannot change the initial or terminal states")
+    for key in overlay:
+        if key not in _OVERLAY_KEYS:
+            raise LifecycleError(f"unknown overlay key {key!r}")
+    for key in ("states", "expects"):
+        if key in overlay:
+            if not isinstance(overlay[key], list):
+                raise LifecycleError(f"{key} must be a list")
+            for item in overlay[key]:
+                _text(item, f"each item in {key}")
+    if "transitions" in overlay:
+        if not isinstance(overlay["transitions"], list):
+            raise LifecycleError("transitions must be a list")
+        for raw in overlay["transitions"]:
+            if not isinstance(raw, dict):
+                raise LifecycleError("each transition must be a mapping")
+            for field in ("from", "event", "to"):
+                _text(raw.get(field), f"transition field {field!r}")
+            when = raw.get("when")
+            if when is not None:
+                if not isinstance(when, dict):
+                    raise LifecycleError("transition 'when' must be a mapping")
+                for key, value in when.items():
+                    _text(key, "'when' key")
+                    _text(value, "'when' value")
+    if "timeouts_days" in overlay:
+        days = overlay["timeouts_days"]
+        if not isinstance(days, dict):
+            raise LifecycleError("timeouts_days must be a mapping")
+        for state in days:
+            _text(state, "timeouts_days state name")
+
+
+def extend(base: Lifecycle, overlay: dict) -> Lifecycle:
+    _check_overlay(overlay)
     keys = {(t.from_state, t.event, t.when): t for t in base.transitions}
     added = []
     for raw in overlay.get("transitions", []):
