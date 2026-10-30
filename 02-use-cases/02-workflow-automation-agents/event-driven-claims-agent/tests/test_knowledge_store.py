@@ -95,6 +95,51 @@ class StoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ks.KnowledgeError, "not found"):
             ks.parse(Path("/nonexistent/knowledge"))
 
+    def test_rejects_non_string_snippet(self):
+        for snippet in (None, 123, ["x"], {"a": 1}):
+            with self.subTest(snippet=snippet):
+                root = self.root()
+                write(root, curated={"voice": VOICE, "intents": {"other_unknown": {"snippet": snippet, "sources": ["s1"]}}})
+                with self.assertRaisesRegex(ks.KnowledgeError, "other_unknown has no snippet"):
+                    ks.parse(root)
+
+    def test_rejects_non_object_curated(self):
+        for raw in ("[]", "null", "3"):
+            with self.subTest(curated=raw):
+                root = self.root()
+                (root / "curated.json").write_text(raw, encoding="utf-8")
+                (root / "sources.json").write_text(json.dumps({"s1": {"title": "T", "uri": "u"}}), encoding="utf-8")
+                with self.assertRaisesRegex(ks.KnowledgeError, "curated.json needs"):
+                    ks.parse(root)
+
+    def test_rejects_malformed_json(self):
+        root = self.root()
+        (root / "curated.json").write_text("{", encoding="utf-8")
+        (root / "sources.json").write_text(json.dumps({"s1": {"title": "T", "uri": "u"}}), encoding="utf-8")
+        with self.assertRaisesRegex(ks.KnowledgeError, "not valid JSON"):
+            ks.parse(root)
+
+    def test_rejects_non_string_source_id(self):
+        for source_id in (["x"], {"a": 1}, 5):
+            with self.subTest(source_id=source_id):
+                root = self.root()
+                write(root, curated={"voice": VOICE, "intents": {"other_unknown": {"snippet": "x", "sources": [source_id]}}})
+                with self.assertRaisesRegex(ks.KnowledgeError, "other_unknown cites"):
+                    ks.parse(root)
+
+    def test_rejects_blank_voice_value(self):
+        root = self.root()
+        voice = dict(VOICE, greeting="   ")
+        write(root, curated={"voice": voice, "intents": {"other_unknown": {"snippet": "x", "sources": ["s1"]}}})
+        with self.assertRaisesRegex(ks.KnowledgeError, "voice.greeting"):
+            ks.parse(root)
+
+    def test_rejects_non_dict_intent(self):
+        root = self.root()
+        write(root, curated={"voice": VOICE, "intents": {"other_unknown": "just text"}})
+        with self.assertRaisesRegex(ks.KnowledgeError, "other_unknown has no snippet"):
+            ks.parse(root)
+
 
 if __name__ == "__main__":
     unittest.main()

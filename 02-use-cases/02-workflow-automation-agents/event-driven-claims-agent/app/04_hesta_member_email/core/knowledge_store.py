@@ -54,6 +54,8 @@ def parse(root: Path, *, version: str = "unapproved") -> Knowledge:
     if not Path(root).is_dir():
         raise KnowledgeError(f"knowledge folder {root} not found")
     curated, sources = _read(root, "curated.json"), _read(root, "sources.json")
+    if not isinstance(curated, dict):
+        raise KnowledgeError("curated.json needs voice and intents objects, and sources.json an object")
     voice, intents = curated.get("voice"), curated.get("intents")
     if not isinstance(voice, dict) or not isinstance(intents, dict) or not isinstance(sources, dict):
         raise KnowledgeError("curated.json needs voice and intents objects, and sources.json an object")
@@ -63,12 +65,15 @@ def parse(root: Path, *, version: str = "unapproved") -> Knowledge:
     if FALLBACK_INTENT not in intents:
         raise KnowledgeError(f"intents must include {FALLBACK_INTENT}")
     for intent_id, entry in intents.items():
-        if not isinstance(entry, dict) or not str(entry.get("snippet", "")).strip():
+        snippet = entry.get("snippet") if isinstance(entry, dict) else None
+        if not isinstance(snippet, str) or not snippet.strip():
             raise KnowledgeError(f"intent {intent_id} has no snippet")
         cited = entry.get("sources")
         if not isinstance(cited, list) or not cited:
             raise KnowledgeError(f"intent {intent_id} needs at least one source")
         for source_id in cited:
+            if not isinstance(source_id, str):
+                raise KnowledgeError(f"intent {intent_id} cites a source id that is not a string")
             if source_id not in sources:
                 raise KnowledgeError(f"intent {intent_id} cites {source_id}, which is not in sources.json")
     return Knowledge(version=version, voice=voice, intents=intents, sources=sources)
