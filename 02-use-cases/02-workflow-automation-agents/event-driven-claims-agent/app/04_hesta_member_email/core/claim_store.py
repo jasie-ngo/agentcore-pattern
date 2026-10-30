@@ -19,6 +19,25 @@ class ConflictError(Exception):
     """Another writer changed the claim first (or created it)."""
 
 
+_REQUIRED_KEYS = ("claim_id", "lifecycle_state", "version", "sender_email", "last_activity")
+_MALFORMED_REPLY = "claim_state returned a malformed reply"
+
+
+def _json_field(raw, key: str, kind: type):
+    """Decode a JSON-text attribute; empty text means 'absent' (None for a dict, [] for a list)."""
+    if not isinstance(raw, str):
+        raise ValueError(f"malformed claim item: {key} is not a string")
+    if not raw:
+        return None if kind is dict else []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"malformed claim item: {key} is not valid JSON") from exc
+    if not isinstance(value, kind):
+        raise ValueError(f"malformed claim item: {key} is not a JSON {kind.__name__}")
+    return value
+
+
 @dataclass(frozen=True)
 class ClaimRecord:
     claim_ref: str
@@ -45,15 +64,28 @@ class ClaimRecord:
 
     @classmethod
     def from_item(cls, item: dict) -> "ClaimRecord":
-        draft = item.get("pending_draft") or ""
+        if not isinstance(item, dict):
+            raise ValueError("malformed claim item: not a mapping")
+        missing = [key for key in _REQUIRED_KEYS if key not in item]
+        if missing:
+            raise ValueError(f"malformed claim item: missing {', '.join(missing)}")
+        try:
+            version = int(item["version"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError("malformed claim item: version is not an integer") from exc
+        message_ids = item.get("message_ids", ())
+        if not isinstance(message_ids, (list, tuple)) or not all(isinstance(mid, str) for mid in message_ids):
+            raise ValueError("malformed claim item: message_ids is not a list of strings")
+        draft = _json_field(item.get("pending_draft", ""), "pending_draft", dict)
+        history = _json_field(item.get("history", "") or "[]", "history", list)
         return cls(
             claim_ref=item["claim_id"],
             state=item["lifecycle_state"],
-            version=int(item["version"]),
+            version=version,
             sender_email=item["sender_email"],
-            message_ids=tuple(item.get("message_ids", ())),
-            pending_draft=json.loads(draft) if draft else None,
-            history=tuple(json.loads(item.get("history") or "[]")),
+            message_ids=tuple(message_ids),
+            pending_draft=draft,
+            history=tuple(history),
             last_activity=item["last_activity"],
         )
 
@@ -73,6 +105,10 @@ class InMemoryClaimStore:
         current = self._records.get(record.claim_ref)
         if (current.version if current else 0) != expected_version:
             raise ConflictError(f"{record.claim_ref} is at version {current.version if current else 0}, expected {expected_version}")
+        for mid in record.message_ids:
+            owner = self._alias.get(mid)
+            if owner is not None and owner != record.claim_ref:
+                raise ConflictError(f"message id {mid} already belongs to {owner}")
         stored = replace(record, version=expected_version + 1)
         self._records[record.claim_ref] = stored
         for mid in stored.message_ids:
@@ -86,6 +122,8 @@ class GatewayClaimStore:
 
     def _ask(self, args: dict) -> dict:
         out = self._call("claim_state", args)
+        if not isinstance(out, dict):
+            raise RuntimeError(_MALFORMED_REPLY)
         if "error" in out and out["error"] != "conflict":
             raise RuntimeError(f"claim_state failed: {out['error']}")
         return out
@@ -101,4 +139,10 @@ class GatewayClaimStore:
         out = self._ask({"action": "put", "item": record.to_item(), "expected_version": expected_version})
         if out.get("error") == "conflict":
             raise ConflictError(f"{record.claim_ref}: expected version {expected_version}")
-        return ClaimRecord.from_item(out["item"])
+        item = out.get("item")
+        if not isinstance(item, dict):
+            raise RuntimeError(_MALFORMED_REPLY)
+        stored = ClaimRecord.from_item(item)
+        if stored.version != expected_version + 1:
+            raise RuntimeError(f"claim_state returned version {stored.version}, expected {expected_version + 1} for {record.claim_ref}")
+        return stored

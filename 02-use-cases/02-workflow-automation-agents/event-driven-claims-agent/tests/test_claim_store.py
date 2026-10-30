@@ -42,6 +42,48 @@ class RecordTests(unittest.TestCase):
     def test_item_marks_itself_as_a_lifecycle_record(self):
         self.assertEqual(record().to_item()["kind"], "lifecycle")
 
+    def test_a_missing_required_key_is_malformed(self):
+        for key in ("claim_id", "lifecycle_state", "version", "sender_email", "last_activity"):
+            with self.subTest(key=key):
+                item = record().to_item()
+                del item[key]
+                with self.assertRaisesRegex(ValueError, "malformed claim item"):
+                    cs.ClaimRecord.from_item(item)
+
+    def test_a_non_string_pending_draft_is_malformed(self):
+        item = record().to_item()
+        item["pending_draft"] = {"subject": "x"}
+        with self.assertRaisesRegex(ValueError, "malformed claim item"):
+            cs.ClaimRecord.from_item(item)
+
+    def test_a_non_string_history_is_malformed(self):
+        item = record().to_item()
+        item["history"] = [{"event": "x"}]
+        with self.assertRaisesRegex(ValueError, "malformed claim item"):
+            cs.ClaimRecord.from_item(item)
+
+    def test_message_ids_must_be_a_list_of_strings(self):
+        for bad in ("<m1@x>", [1], [None]):
+            with self.subTest(bad=bad):
+                item = record().to_item()
+                item["message_ids"] = bad
+                with self.assertRaisesRegex(ValueError, "malformed claim item"):
+                    cs.ClaimRecord.from_item(item)
+
+    def test_json_that_does_not_parse_is_malformed(self):
+        for key, bad in (("pending_draft", "{not json"), ("history", "[")):
+            with self.subTest(key=key):
+                item = record().to_item()
+                item[key] = bad
+                with self.assertRaisesRegex(ValueError, "malformed claim item"):
+                    cs.ClaimRecord.from_item(item)
+
+    def test_a_version_that_is_not_an_integer_is_malformed(self):
+        item = record().to_item()
+        item["version"] = "abc"
+        with self.assertRaisesRegex(ValueError, "malformed claim item"):
+            cs.ClaimRecord.from_item(item)
+
 
 class StoreContract:
     """Behaviour every store must have."""
@@ -83,6 +125,28 @@ class StoreContract:
         store.save(replace(first, message_ids=first.message_ids + ("<m2@x>",)), first.version)
         self.assertEqual(store.ref_of_message_id("<m2@x>"), "CLR-1A2B3C4D")
 
+    def test_a_message_id_owned_by_another_claim_cannot_be_stolen(self):
+        store = self.make()
+        store.save(record("CLR-AAAAAAAA", message_ids=("<shared@x>",)), 0)
+        with self.assertRaises(cs.ConflictError):
+            store.save(record("CLR-BBBBBBBB", message_ids=("<shared@x>",)), 0)
+        self.assertEqual(store.ref_of_message_id("<shared@x>"), "CLR-AAAAAAAA")
+        self.assertIsNone(store.get("CLR-BBBBBBBB"))
+
+    def test_a_claim_can_update_itself_with_the_same_message_ids(self):
+        store = self.make()
+        first = store.save(record(), 0)
+        second = store.save(replace(first, state="resolved"), first.version)
+        self.assertEqual(second.version, 2)
+        self.assertEqual(store.ref_of_message_id("<m1@x>"), "CLR-1A2B3C4D")
+
+    def test_two_different_new_claims_with_different_ids_both_work(self):
+        store = self.make()
+        store.save(record("CLR-AAAAAAAA", message_ids=("<a@x>",)), 0)
+        store.save(record("CLR-BBBBBBBB", message_ids=("<b@x>",)), 0)
+        self.assertEqual(store.ref_of_message_id("<a@x>"), "CLR-AAAAAAAA")
+        self.assertEqual(store.ref_of_message_id("<b@x>"), "CLR-BBBBBBBB")
+
 
 class InMemoryTests(StoreContract, unittest.TestCase):
     def make(self):
@@ -105,6 +169,9 @@ class FakeTool:
         if action == "put":
             item, expected = args["item"], args["expected_version"]
             current = self.items.get(item["claim_id"])
+            owners = [self.alias.get(mid) for mid in item["message_ids"]]
+            if any(owner is not None and owner != item["claim_id"] for owner in owners):
+                return {"error": "conflict"}
             if (current["version"] if current else 0) != expected:
                 return {"error": "conflict"}
             item = {**item, "version": expected + 1}
@@ -122,6 +189,36 @@ class GatewayStoreTests(StoreContract, unittest.TestCase):
     def test_an_error_from_the_tool_that_is_not_a_conflict_raises(self):
         store = cs.GatewayClaimStore(lambda name, args: {"error": "table unavailable"})
         with self.assertRaisesRegex(RuntimeError, "table unavailable"):
+            store.get("CLR-1A2B3C4D")
+
+    def test_a_reply_that_is_not_a_dict_is_malformed_for_every_action(self):
+        store = cs.GatewayClaimStore(lambda name, args: None)
+        with self.assertRaisesRegex(RuntimeError, "claim_state returned a malformed reply"):
+            store.get("CLR-1A2B3C4D")
+        with self.assertRaisesRegex(RuntimeError, "claim_state returned a malformed reply"):
+            store.ref_of_message_id("<m1@x>")
+        with self.assertRaisesRegex(RuntimeError, "claim_state returned a malformed reply"):
+            store.save(record(), 0)
+
+    def test_a_put_reply_without_an_item_is_malformed(self):
+        store = cs.GatewayClaimStore(lambda name, args: {})
+        with self.assertRaisesRegex(RuntimeError, "claim_state returned a malformed reply"):
+            store.save(record(), 0)
+
+    def test_a_put_reply_whose_item_is_not_a_dict_is_malformed(self):
+        store = cs.GatewayClaimStore(lambda name, args: {"item": "x"})
+        with self.assertRaisesRegex(RuntimeError, "claim_state returned a malformed reply"):
+            store.save(record(), 0)
+
+    def test_a_put_reply_with_the_wrong_version_is_refused(self):
+        item = {**record().to_item(), "version": 5}
+        store = cs.GatewayClaimStore(lambda name, args: {"item": item})
+        with self.assertRaisesRegex(RuntimeError, "version 5, expected 1"):
+            store.save(record(), 0)
+
+    def test_a_get_item_missing_a_key_propagates_as_malformed(self):
+        store = cs.GatewayClaimStore(lambda name, args: {"item": {"claim_id": "CLR-1A2B3C4D"}})
+        with self.assertRaisesRegex(ValueError, "malformed claim item"):
             store.get("CLR-1A2B3C4D")
 
 
