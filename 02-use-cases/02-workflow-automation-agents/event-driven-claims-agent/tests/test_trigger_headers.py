@@ -141,6 +141,32 @@ class ParseEmailBoundaryTests(unittest.TestCase):
         headers, _ = self.mod.parse_email("From: a@b.c\nMessage-ID:\nMessage-ID: <real@x>\n\nbody")
         self.assertNotIn("message-id", headers)
 
+    def test_a_whitespace_only_separator_ends_the_headers_before_any_fold(self):
+        # The blank-line test must run before the fold test: a line of only a space or
+        # tab starts with whitespace, so a fold-first parser would fold it onto
+        # References and go on reading the body as headers (reading the injected id).
+        for separator in (" \n", "\t\n"):
+            with self.subTest(separator=repr(separator)):
+                headers, body = self.mod.parse_email(
+                    "From: a@b.c\nReferences: <a>\n" + separator + "<x@x> body line\nMessage-ID: <inj@x>\n"
+                )
+                self.assertEqual(set(headers), {"from", "references"})
+                self.assertEqual(headers["references"], "<a>")
+                self.assertNotIn("message-id", headers)
+                self.assertIn("<x@x> body line", body)
+                self.assertIn("Message-ID: <inj@x>", body)
+
+    def test_header_names_match_in_any_case(self):
+        text = "From: a@b.c\nmEsSaGe-Id: <m@x>\nIN-REPLY-TO: <r@x>\nrefERENCES: <a> <b>\n\nbody"
+        headers, _ = self.mod.parse_email(text)
+        self.assertEqual(headers["message-id"], "<m@x>")
+        self.assertEqual(headers["in-reply-to"], "<r@x>")
+        self.assertEqual(headers["references"], "<a> <b>")
+        sent = run_handler(self.mod, text.encode())
+        self.assertEqual(sent["headers"]["message_id"], "<m@x>")
+        self.assertEqual(sent["headers"]["in_reply_to"], "<r@x>")
+        self.assertEqual(sent["headers"]["references"], ["<a>", "<b>"])
+
     def test_references_in_the_payload_has_no_empty_strings(self):
         sent = run_handler(self.mod, b"From: a@b.c\nReferences: <a>   <b>\n\nbody")
         self.assertEqual(sent["headers"]["references"], ["<a>", "<b>"])
