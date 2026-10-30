@@ -15,6 +15,7 @@ Uses AWS credentials for Bedrock only when run for real. Tests use a fake drafte
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import shutil
@@ -85,6 +86,7 @@ def _html_to_text(raw: str) -> tuple[str, str]:
 def read_sources(folder: Path, *, repo_root: Path) -> tuple[dict[str, SourceDoc], list[str]]:
     docs: dict[str, SourceDoc] = {}
     skipped: list[str] = []
+    owner: dict[str, str] = {}  # source id -> the file (relative to the sources folder) that claimed it
     for path in sorted(Path(folder).rglob("*")):
         if not path.is_file() or path.name.startswith("."):
             continue
@@ -96,7 +98,15 @@ def read_sources(folder: Path, *, repo_root: Path) -> tuple[dict[str, SourceDoc]
         if not text.strip():
             skipped.append(path.name)
             continue
+        rel = path.relative_to(Path(folder)).as_posix()
         source_id = re.sub(r"[^a-z0-9-]+", "-", path.stem.lower()).strip("-")
+        if not source_id:
+            raise IngestError(f"{rel} has no letters or digits to build a source id from; rename it")
+        if source_id in owner:
+            raise IngestError(
+                f"{owner[source_id]} and {rel} both give the source id '{source_id}'; rename one of them"
+            )
+        owner[source_id] = rel
         try:
             uri = path.resolve().relative_to(Path(repo_root).resolve()).as_posix()
         except ValueError:
@@ -112,7 +122,12 @@ class Drafter(Protocol):
 
 
 def build_prompt(intent_ids: list[str], sources: dict[str, SourceDoc]) -> str:
-    blocks = "\n".join(f'<source id="{d.id}" title="{d.title}">\n{d.text}\n</source>' for d in sources.values())
+    # Escape everything interpolated, so source text cannot close its block, open a fake one, or break an attribute.
+    blocks = "\n".join(
+        f'<source id="{html.escape(d.id, quote=True)}" title="{html.escape(d.title, quote=True)}">\n'
+        f"{html.escape(d.text, quote=False)}\n</source>"
+        for d in sources.values()
+    )
     voice_keys = ", ".join(knowledge_store.VOICE_KEYS)
     return (
         "You are drafting reply guidance for an email-reply writer at an insurer or fund. A person will review your draft.\n\n"
@@ -161,7 +176,31 @@ def _review_sheet(draft: dict, sources: dict[str, SourceDoc], version: str) -> s
     return "\n".join(lines)
 
 
-def write_draft(client_dir: Path, draft: dict, sources: dict[str, SourceDoc], *, version: str) -> Path:
+def validate_intent_ids(value: object) -> list[str]:
+    """The intents file must be a non-empty JSON list of non-empty strings; anything else is refused."""
+    if not isinstance(value, list) or not value or not all(isinstance(i, str) and i.strip() for i in value):
+        raise IngestError("the intents file must be a JSON list of intent ids")
+    return value
+
+
+def write_draft(
+    client_dir: Path,
+    draft: dict,
+    sources: dict[str, SourceDoc],
+    *,
+    version: str,
+    intent_ids: list[str] | None = None,
+) -> Path:
+    if intent_ids is not None:
+        drafted = draft.get("intents")
+        drafted = drafted if isinstance(drafted, dict) else {}
+        missing = sorted(set(intent_ids) - set(drafted))
+        extra = sorted(set(drafted) - set(intent_ids))
+        if missing or extra:
+            raise IngestError(
+                f"the draft does not match the requested intents; missing: {', '.join(missing) or 'none'}; "
+                f"extra: {', '.join(extra) or 'none'}"
+            )
     folder = Path(client_dir) / "knowledge" / "drafts" / version
     if folder.exists():
         raise IngestError(f"{folder} already exists; drafts are never overwritten")
@@ -190,13 +229,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--model-id", default=DEFAULT_MODEL_ID)
     args = ap.parse_args(argv)
     try:
-        intent_ids = json.loads(args.intents.read_text(encoding="utf-8"))
+        intent_ids = validate_intent_ids(json.loads(args.intents.read_text(encoding="utf-8")))
         docs, skipped = read_sources(args.sources, repo_root=ROOT)
         if skipped:
             print("SKIPPED (not readable as text; convert them to .txt/.md/.html if they matter): " + ", ".join(skipped), file=sys.stderr)
         draft = BedrockDrafter(args.model_id).draft(intent_ids, docs)
         version = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        folder = write_draft(ROOT / "clients" / args.client, draft, docs, version=version)
+        folder = write_draft(ROOT / "clients" / args.client, draft, docs, version=version, intent_ids=intent_ids)
     except (IngestError, knowledge_store.KnowledgeError, OSError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
