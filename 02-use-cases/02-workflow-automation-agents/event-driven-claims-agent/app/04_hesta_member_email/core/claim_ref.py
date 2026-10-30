@@ -13,12 +13,12 @@ from __future__ import annotations
 import re
 import secrets
 from dataclasses import dataclass
+from email.utils import getaddresses
 from typing import Callable
 
 PREFIX = "CLR"
 _REF = re.compile(r"\bCLR-[0-9A-F]{8}\b", re.IGNORECASE)
 _REPLY = re.compile(r"^\s*(re|fw|fwd)\s*:", re.IGNORECASE)
-_ADDRESS = re.compile(r"<([^<>]+)>")
 
 
 def mint_claim_ref(rand: Callable[[], str] = lambda: secrets.token_hex(4)) -> str:
@@ -35,8 +35,21 @@ def refs_in_subject(subject: str) -> list[str]:
 
 
 def normalise_address(raw: str) -> str:
-    match = _ADDRESS.search(raw or "")
-    return (match.group(1) if match else (raw or "")).strip().lower()
+    """Return the one bare address in ``raw``, lower-cased, or "" if it is missing or ambiguous.
+
+    Ambiguous means more than one address, or more than one pair of angle brackets (a display name can hide a second address).
+    """
+    text = raw or ""
+    if text.count("<") > 1 or text.count(">") > 1:
+        return ""
+    parsed = getaddresses([text])
+    if len(parsed) != 1:
+        return ""
+    _, addr = parsed[0]
+    addr = addr.strip()
+    if addr.count("@") != 1 or any(ch.isspace() for ch in addr) or "<" in addr or ">" in addr:
+        return ""
+    return addr.lower()
 
 
 @dataclass(frozen=True)
@@ -55,8 +68,12 @@ class Resolution:
     reason: str
 
 
+def _header_ids(mail: InboundMail) -> list[str]:
+    return [mid.strip() for mid in (mail.in_reply_to, *mail.references) if mid and mid.strip()]
+
+
 def looks_like_reply(mail: InboundMail) -> bool:
-    return bool(_REPLY.match(mail.subject or "") or mail.in_reply_to or mail.references)
+    return bool(_REPLY.match(mail.subject or "") or _header_ids(mail))
 
 
 def resolve(
@@ -68,11 +85,7 @@ def resolve(
     subject_refs = refs_in_subject(mail.subject)
     if len(subject_refs) > 1:
         return Resolution("needs_person", None, "more than one claim reference in the subject")
-    header_refs = {
-        ref
-        for ref in (ref_of_message_id(mid) for mid in (mail.in_reply_to, *mail.references) if mid)
-        if ref
-    }
+    header_refs = {ref for ref in (ref_of_message_id(mid) for mid in _header_ids(mail)) if ref}
     candidates = set(subject_refs) | header_refs
     if len(candidates) > 1:
         return Resolution("needs_person", None, "the subject and the mail headers disagree about the claim")
@@ -81,6 +94,8 @@ def resolve(
         owner = sender_of_ref(ref)
         if owner is None:
             return Resolution("needs_person", None, f"reference {ref} matches no claim")
+        if not normalise_address(owner) or not normalise_address(mail.sender):
+            return Resolution("needs_person", None, "the sender address is missing or could not be read")
         if normalise_address(owner) != normalise_address(mail.sender):
             return Resolution("needs_person", None, f"the sender does not match the sender of claim {ref}")
         return Resolution("existing", ref, "matched")

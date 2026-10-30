@@ -48,6 +48,32 @@ class SubjectTests(unittest.TestCase):
         self.assertEqual(cr.normalise_address("ann.a@example.com"), "ann.a@example.com")
 
 
+class AddressTests(unittest.TestCase):
+    def test_display_name_cannot_smuggle_a_second_address(self):
+        raw = '"a <victim@x>" <attacker@x>'
+        self.assertNotEqual(cr.normalise_address(raw), "victim@x")
+        self.assertEqual(cr.normalise_address(raw), "")
+
+    def test_two_bracketed_addresses_are_ambiguous(self):
+        self.assertEqual(cr.normalise_address("<a@x> <b@x>"), "")
+
+    def test_two_bare_addresses_are_ambiguous(self):
+        self.assertEqual(cr.normalise_address("a@x, b@x"), "")
+
+    def test_name_and_bracketed_address(self):
+        self.assertEqual(cr.normalise_address("Ann <ann@example.com>"), "ann@example.com")
+
+    def test_mixed_case_and_surrounding_whitespace(self):
+        self.assertEqual(cr.normalise_address("   Ann.A@Example.COM  "), "ann.a@example.com")
+
+    def test_plus_tag_is_kept_exactly(self):
+        self.assertEqual(cr.normalise_address("ann+tag@example.com"), "ann+tag@example.com")
+
+    def test_empty_and_blank_give_empty(self):
+        self.assertEqual(cr.normalise_address(""), "")
+        self.assertEqual(cr.normalise_address("   "), "")
+
+
 class ResolveTests(unittest.TestCase):
     def test_first_contact_is_a_new_claim(self):
         self.assertEqual(resolve(mail("Question about my claim")).kind, "new")
@@ -97,9 +123,30 @@ class ResolveTests(unittest.TestCase):
         self.assertEqual(r.kind, "existing")
 
     def test_two_open_claims_pick_the_one_named(self):
-        claims = {"CLR-0000OLD1": A, "CLR-1111NEW2": A}
-        self.assertEqual(resolve(mail("Re: [CLR-0000AAAA] x"), claims={"CLR-0000AAAA": A, "CLR-1111BBBB": A}).claim_ref, "CLR-0000AAAA")
-        self.assertEqual(len(claims), 2)
+        claims = {"CLR-0000AAAA": A, "CLR-1111BBBB": A}
+        self.assertEqual(resolve(mail("Re: [CLR-0000AAAA] x"), claims=claims).claim_ref, "CLR-0000AAAA")
+        self.assertEqual(resolve(mail("Re: [CLR-1111BBBB] x"), claims=claims).claim_ref, "CLR-1111BBBB")
+
+    def test_named_claim_owned_by_a_different_sender_goes_to_a_person(self):
+        claims = {"CLR-0000AAAA": A, "CLR-1111BBBB": "other.person@example.com"}
+        self.assertEqual(resolve(mail("Re: [CLR-1111BBBB] x"), claims=claims).kind, "needs_person")
+
+    def test_empty_sender_never_matches_empty_owner(self):
+        for owner, sender in (("", ""), ("   ", "   "), ("a@x", ""), ("", "a@x"), ("a@x", "   "), ("   ", "a@x")):
+            r = resolve(mail("Re: [CLR-1A2B3C4D] x", sender=sender), claims={"CLR-1A2B3C4D": owner})
+            self.assertEqual(r.kind, "needs_person", (owner, sender))
+
+    def test_display_name_spoof_does_not_attach_to_the_victim(self):
+        r = resolve(mail("Re: [CLR-1A2B3C4D] x", sender='"a <victim@x>" <attacker@x>'), claims={"CLR-1A2B3C4D": "victim@x"})
+        self.assertEqual(r.kind, "needs_person")
+
+    def test_blank_header_ids_are_ignored(self):
+        r = resolve(mail("Re: x", in_reply_to="   ", references=("", "  <d1@x>  ")),
+                    messages={"<d1@x>": "CLR-1A2B3C4D"}, claims={"CLR-1A2B3C4D": A})
+        self.assertEqual((r.kind, r.claim_ref), ("existing", "CLR-1A2B3C4D"))
+
+    def test_blank_in_reply_to_alone_is_not_a_reply(self):
+        self.assertEqual(resolve(mail("Question", in_reply_to="   ")).kind, "new")
 
 
 if __name__ == "__main__":
