@@ -45,8 +45,33 @@ class ApprovalTests(unittest.TestCase):
         root = self.make()
         approval.write_approval(root, client="acme", version="v1", **WHO)
         (root / "extra.json").write_text("{}", encoding="utf-8")
-        with self.assertRaises(approval.ApprovalError):
+        with self.assertRaisesRegex(approval.ApprovalError, "changed since approval"):
             approval.verify_approval(root, client="acme")
+
+    def test_added_nested_approval_file_fails(self):
+        root = self.make()
+        approval.write_approval(root, client="acme", version="v1", **WHO)
+        (root / "sub").mkdir()
+        (root / "sub" / "approval.json").write_text("{}", encoding="utf-8")
+        with self.assertRaisesRegex(approval.ApprovalError, "changed since approval"):
+            approval.verify_approval(root, client="acme")
+
+    def test_changed_nested_approval_file_fails(self):
+        root = self.make()
+        (root / "sub").mkdir()
+        (root / "sub" / "approval.json").write_text('{"x": 1}', encoding="utf-8")
+        approval.write_approval(root, client="acme", version="v1", **WHO)
+        (root / "sub" / "approval.json").write_text('{"x": 2}', encoding="utf-8")
+        with self.assertRaisesRegex(approval.ApprovalError, "changed since approval"):
+            approval.verify_approval(root, client="acme")
+
+    def test_non_object_record_fails(self):
+        for body in ("[]", "null", '"x"'):
+            with self.subTest(body=body):
+                root = self.make()
+                (root / "approval.json").write_text(body, encoding="utf-8")
+                with self.assertRaisesRegex(approval.ApprovalError, "must hold a JSON object"):
+                    approval.verify_approval(root, client="acme")
 
     def test_wrong_client_fails(self):
         root = self.make()

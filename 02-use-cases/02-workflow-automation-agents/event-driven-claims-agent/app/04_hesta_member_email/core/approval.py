@@ -22,9 +22,10 @@ class ApprovalError(Exception):
 
 
 def digest_dir(root: Path) -> str:
-    """sha256 over each file's relative path and bytes, in sorted order, excluding the approval record itself."""
+    """sha256 over each file's relative path and bytes, in sorted order, excluding only the top-level approval record."""
     digest = hashlib.sha256()
-    files = sorted(p for p in Path(root).rglob("*") if p.is_file() and p.name != APPROVAL_FILE)
+    record = Path(root) / APPROVAL_FILE
+    files = sorted(p for p in Path(root).rglob("*") if p.is_file() and p != record)
     for path in files:
         digest.update(path.relative_to(root).as_posix().encode("utf-8"))
         digest.update(b"\0")
@@ -60,6 +61,8 @@ def verify_approval(root: Path, *, client: str) -> dict:
         record = json.loads(path.read_text(encoding="utf-8"))
     except ValueError as exc:
         raise ApprovalError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(record, dict):
+        raise ApprovalError(f"{path} must hold a JSON object")
     for field in _FIELDS:
         if not isinstance(record.get(field), str) or not record[field].strip():
             raise ApprovalError(f"{path} is missing {field}")
