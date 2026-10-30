@@ -1,0 +1,869 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Use-Case Framework Guide</title>
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface-2: #f0efeb;
+    --text: #1d1d1b;
+    --muted: #5f5e58;
+    --border: #e1dfd8;
+    --code-bg: #f4f3ef;
+    --framework: #2f6fb3;
+    --framework-bg: #e8f0fa;
+    --form: #2f8a57;
+    --form-bg: #e6f4ec;
+    --custom: #b0571f;
+    --custom-bg: #fbeee4;
+    --generated: #7a5ab8;
+    --generated-bg: #f0eafa;
+    --mark: #fff2b3;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #161614;
+      --surface: #1f1f1c;
+      --surface-2: #272723;
+      --text: #ecebe6;
+      --muted: #a7a59c;
+      --border: #34332e;
+      --code-bg: #1a1a18;
+      --framework: #7fb0e8;
+      --framework-bg: #1c2a3a;
+      --form: #78c79a;
+      --form-bg: #1b2e23;
+      --custom: #eb9a63;
+      --custom-bg: #35241a;
+      --generated: #b79ce8;
+      --generated-bg: #2a2238;
+      --mark: #4a4220;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #161614;
+    --surface: #1f1f1c;
+    --surface-2: #272723;
+    --text: #ecebe6;
+    --muted: #a7a59c;
+    --border: #34332e;
+    --code-bg: #1a1a18;
+    --framework: #7fb0e8;
+    --framework-bg: #1c2a3a;
+    --form: #78c79a;
+    --form-bg: #1b2e23;
+    --custom: #eb9a63;
+    --custom-bg: #35241a;
+    --generated: #b79ce8;
+    --generated-bg: #2a2238;
+    --mark: #4a4220;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
+  header h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  header p { color: var(--muted); margin: 0; max-width: 760px; }
+  nav.toc {
+    display: flex; flex-wrap: wrap; gap: 8px; margin: 20px 0 8px;
+  }
+  nav.toc a {
+    font-size: 13px; text-decoration: none; color: var(--text);
+    border: 1px solid var(--border); background: var(--surface);
+    padding: 4px 10px; border-radius: 999px;
+  }
+  nav.toc a:hover { border-color: var(--muted); }
+  h2 { font-size: 22px; margin: 48px 0 6px; padding-top: 8px; }
+  h2 .num { color: var(--muted); font-weight: 500; margin-right: 6px; }
+  h3 { font-size: 17px; margin: 28px 0 8px; }
+  p.lead { color: var(--muted); margin: 0 0 16px; max-width: 820px; }
+  code { font: 13px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace; }
+  p code, li code, td code {
+    background: var(--code-bg); border: 1px solid var(--border);
+    padding: 0 4px; border-radius: 4px;
+  }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 0; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12.5px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+  }
+  .chip.framework { background: var(--framework-bg); color: var(--framework); }
+  .chip.form { background: var(--form-bg); color: var(--form); }
+  .chip.custom { background: var(--custom-bg); color: var(--custom); }
+  .chip.generated { background: var(--generated-bg); color: var(--generated); }
+
+  /* folder tree */
+  .tree {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; overflow-x: auto;
+  }
+  .tree pre { margin: 0; font: 13px/1.65 ui-monospace, "Cascadia Code", Consolas, monospace; }
+  .t-fw { color: var(--framework); font-weight: 600; }
+  .t-form { color: var(--form); font-weight: 600; }
+  .t-custom { color: var(--custom); font-weight: 600; }
+  .t-gen { color: var(--generated); font-weight: 600; }
+  .t-note { color: var(--muted); }
+
+  /* flow */
+  .flow {
+    display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; gap: 12px; align-items: stretch;
+  }
+  .flow .col { display: flex; flex-direction: column; gap: 8px; }
+  .flow .col h4 { margin: 0 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .flow .box {
+    border-radius: 8px; padding: 9px 12px; font-size: 13.5px; border: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .flow .box b { display: block; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  .flow .box span { color: var(--muted); font-size: 12.5px; }
+  .flow .box.form { border-left: 4px solid var(--form); }
+  .flow .box.fw { border-left: 4px solid var(--framework); }
+  .flow .box.out { border-left: 4px solid var(--generated); }
+  .flow .arrow { align-self: center; color: var(--muted); font-size: 22px; }
+
+  /* triptych: framework code | your form | result */
+  .trip {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 10px 0 6px;
+  }
+  .trip.three { grid-template-columns: 1.1fr 1fr 0.9fr; }
+  .pane {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    display: flex; flex-direction: column; min-width: 0;
+  }
+  .pane > .head {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .pane > .head .path { font: 12px ui-monospace, Consolas, monospace; color: var(--muted); }
+  .pane pre {
+    margin: 0; padding: 12px; overflow-x: auto; background: var(--code-bg);
+    font: 12.5px/1.55 ui-monospace, "Cascadia Code", Consolas, monospace; flex: 1;
+    border-radius: 0 0 10px 10px;
+  }
+  .pane .note { padding: 10px 12px; font-size: 13px; color: var(--muted); border-top: 1px solid var(--border); }
+  mark { background: var(--mark); color: inherit; padding: 0 1px; border-radius: 2px; }
+  .c { color: var(--muted); }
+
+  .callout {
+    border-radius: 10px; padding: 14px 16px; margin: 14px 0; font-size: 14px;
+    border: 1px solid var(--border); background: var(--surface);
+  }
+  .callout.custom { border-left: 4px solid var(--custom); }
+  .callout.form { border-left: 4px solid var(--form); }
+  .callout strong { display: block; margin-bottom: 4px; }
+
+  table.grid {
+    width: 100%; border-collapse: collapse; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 10px; overflow: hidden; font-size: 14px;
+  }
+  table.grid th, table.grid td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  table.grid th { background: var(--surface-2); font-size: 12.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+  table.grid tr:last-child td { border-bottom: 0; }
+  .tablewrap { overflow-x: auto; }
+
+  ol.steps { counter-reset: s; list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+  ol.steps li {
+    counter-increment: s; position: relative; padding: 12px 14px 12px 52px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  }
+  ol.steps li::before {
+    content: counter(s); position: absolute; left: 14px; top: 12px;
+    width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 700; font-size: 13px; background: var(--surface-2);
+  }
+  ol.steps li b { font-family: ui-monospace, Consolas, monospace; font-size: 13.5px; }
+  ol.steps li p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 900px) {
+    .trip, .trip.three { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; }
+    .flow .arrow { transform: rotate(90deg); justify-self: center; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Use-Case Framework Guide</h1>
+  <p>How the event-driven agent platform is laid out, how a use case's YAML forms drive
+  everything that gets built, and the few places where you write your own code. Every snippet
+  below is taken from this repository.</p>
+  <div class="legend">
+    <span class="chip framework">Framework code — shared, never edited per use case</span>
+    <span class="chip form">Your form — YAML you fill in</span>
+    <span class="chip custom">Custom — code you write</span>
+    <span class="chip generated">Generated — never edit</span>
+  </div>
+  <nav class="toc">
+    <a href="#tree">1 · Folder structure</a>
+    <a href="#flow">2 · Config drives the design</a>
+    <a href="#retrieval">3 · Retrieval tool</a>
+    <a href="#record-write">4 · Record-write tool</a>
+    <a href="#agents">5 · Agent blueprints</a>
+    <a href="#decisions">6 · Decision tables</a>
+    <a href="#ingestion">7 · Ingestion</a>
+    <a href="#custom">8 · Where custom comes in</a>
+    <a href="#order">9 · Order of work</a>
+  </nav>
+</header>
+
+<!-- ───────────────────────── 1. Tree ───────────────────────── -->
+<h2 id="tree"><span class="num">1</span>Folder structure</h2>
+<p class="lead">One Runtime serves one use case at a time. Each use case is a folder of forms;
+the engines that read those forms are shared.</p>
+
+<div class="tree"><pre>
+event-driven-claims-agent/
+├── app/                                    <span class="t-note"># the Runtime container (whole folder is deployed)</span>
+│   ├── main.py                             <span class="t-note"># USE_CASE = "hesta_agent"  ← the one-line switch</span>
+│   ├── <span class="t-fw">_shared/</span>                            <span class="t-note"># engines — no domain names, prompts or thresholds</span>
+│   │   ├── <span class="t-fw">agent_blueprints.py</span>             <span class="t-note"># classifier · extractor · assessor · reviewer · writer</span>
+│   │   ├── <span class="t-fw">decision_table.py</span>               <span class="t-note"># rules engine (stdlib only)</span>
+│   │   ├── <span class="t-fw">ingestion.py</span>                    <span class="t-note"># raw message → envelope (stdlib only, also in Trigger)</span>
+│   │   ├── <span class="t-fw">local_tools.py</span>                  <span class="t-note"># turns decisions.yaml / ingestion.yaml into agent tools</span>
+│   │   ├── <span class="t-fw">factory.py</span>                      <span class="t-note"># builds agents; attaches Gateway when gateway: true</span>
+│   │   ├── <span class="t-fw">gateway.py</span>                      <span class="t-note"># MCP client with Cognito M2M token (AgentCore Identity)</span>
+│   │   └── <span class="t-fw">memory.py</span>, <span class="t-fw">settings.py</span>
+│   │
+│   ├── card_dispute_agent/                 <span class="t-note"># one use case = one folder of forms</span>
+│   │   ├── <span class="t-form">config.yaml</span>                     <span class="t-note"># agents (blueprint forms) + coordinator + orchestration</span>
+│   │   ├── <span class="t-form">gateway_tools.yaml</span>              <span class="t-note"># tables + Gateway tools (blueprint or custom)</span>
+│   │   ├── <span class="t-form">decisions.yaml</span>                  <span class="t-note"># deterministic business rules</span>
+│   │   ├── <span class="t-form">ingestion.yaml</span>                  <span class="t-note"># email footer / banner / customer-id patterns</span>
+│   │   ├── <span class="t-form">seed_data.yaml</span>                  <span class="t-note"># synthetic test records</span>
+│   │   ├── tools.py                        <span class="t-note"># bindings only (2 lines) — or @tool code when needed</span>
+│   │   └── sample_emails/*.json
+│   ├── hesta_agent/                        <span class="t-note"># same shape; reuses claims tools via `uses:`</span>
+│   └── claims_agent/                       <span class="t-note"># same shape + <span class="t-custom">tools.py: execute_claim_decision</span></span>
+│
+├── lambdas/
+│   ├── <span class="t-fw">blueprints/retrieval/handler.py</span>     <span class="t-note"># ONE copy of code behind every `blueprint: retrieval`</span>
+│   ├── <span class="t-fw">blueprints/record_write/handler.py</span>  <span class="t-note"># ONE copy of code behind every `blueprint: record_write`</span>
+│   ├── <span class="t-custom">claims_agent/notification/</span>          <span class="t-note"># custom tool: handler.py + schema.json (SES email)</span>
+│   ├── <span class="t-custom">claims_agent/resolve_claim/</span>         <span class="t-note"># custom tool: multi-table update</span>
+│   └── <span class="t-fw">trigger/handler.py</span>                  <span class="t-note"># S3 claims-inbox/&lt;use_case&gt;/ → envelope → Runtime</span>
+│
+├── scripts/
+│   ├── <span class="t-fw">build_tools.py</span>                      <span class="t-note"># reads gateway_tools.yaml → writes generated/ + targets</span>
+│   └── <span class="t-fw">seed_tables.py</span>                      <span class="t-note"># loads seed_data.yaml into that use case's tables</span>
+│
+└── agentcore/
+    ├── agentcore.json                      <span class="t-note"># Runtime, Gateway, Memory, Cedar; <span class="t-gen">Gateway targets are generated</span></span>
+    ├── <span class="t-gen">generated/manifest.json</span>             <span class="t-note"># every tool: code, table, TOOL_CONFIG</span>
+    ├── <span class="t-gen">generated/schemas/*.json</span>            <span class="t-note"># the input schema each agent sees per tool</span>
+    └── cdk/lib/infra-construct.ts          <span class="t-note"># creates Lambdas + tables from the manifest; <span class="t-custom">extra infra here</span></span>
+</pre></div>
+
+<!-- ───────────────────────── 2. Flow ───────────────────────── -->
+<h2 id="flow"><span class="num">2</span>Config drives the design</h2>
+<p class="lead">You describe the use case in forms. Shared engines turn each form into a running
+piece — a prompt and output schema, a Lambda and its tool schema, a deterministic tool. You
+never write those pieces yourself unless no form fits.</p>
+
+<div class="flow">
+  <div class="col">
+    <h4>You write (forms)</h4>
+    <div class="box form"><b>config.yaml</b><span>agent roles + their content, coordinator flow</span></div>
+    <div class="box form"><b>gateway_tools.yaml</b><span>tables + tools: blueprint or custom</span></div>
+    <div class="box form"><b>decisions.yaml</b><span>rules: when → then</span></div>
+    <div class="box form"><b>ingestion.yaml</b><span>how raw email is cleaned</span></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <h4>Framework reads them</h4>
+    <div class="box fw"><b>agent_blueprints.py</b><span>writes system prompt + Pydantic output model</span></div>
+    <div class="box fw"><b>build_tools.py → CDK</b><span>one blueprint Lambda per tool, configured by TOOL_CONFIG</span></div>
+    <div class="box fw"><b>decision_table.py + local_tools.py</b><span>evaluates rules; exposes them as a tool</span></div>
+    <div class="box fw"><b>ingestion.py</b><span>raw text → envelope (Trigger + tool)</span></div>
+  </div>
+  <div class="arrow">→</div>
+  <div class="col">
+    <h4>You get</h4>
+    <div class="box out"><b>Specialist agents</b><span>structured output, no schemas.py</span></div>
+    <div class="box out"><b>MCP Gateway tools</b><span>schemas, targets, IAM, tables</span></div>
+    <div class="box out"><b>Deterministic tool</b><span>same input → same decision, no LLM</span></div>
+    <div class="box out"><b>Envelope</b><span>sender, id_for_lookup, latest_message…</span></div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 3. Retrieval ───────────────────────── -->
+<h2 id="retrieval"><span class="num">3</span>Blueprint tool: <code>retrieval</code></h2>
+<p class="lead">One handler reads DynamoDB for every retrieval tool in every use case. It has no
+table or field names in it — it reads them from <code>TOOL_CONFIG</code>, which is your YAML entry.</p>
+
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip framework">Framework code</span><span class="path">lambdas/blueprints/retrieval/handler.py</span></div>
+<pre><span class="c"># Settings come from the generated manifest via CDK</span>
+CONFIG = json.loads(os.environ.get(<mark>"TOOL_CONFIG"</mark>, "{}"))
+table = boto3.resource("dynamodb").Table(os.environ.get(<mark>"TABLE_NAME"</mark>, ""))
+
+def _list(event: dict) -&gt; str:
+    flt = CONFIG[<mark>"filter"</mark>]
+    value = event.get(flt["key"]) if flt.get("from_input") else flt.get(<mark>"value"</mark>)
+    query = {
+        "IndexName": flt[<mark>"index"</mark>],
+        "KeyConditionExpression": Key(flt[<mark>"key"</mark>]).eq(value),
+        "ScanIndexForward": not flt.get("newest_first", False),
+    }
+    where = None
+    for field in flt.get(<mark>"where"</mark>, []):
+        if event.get(field) in (None, ""):
+            return _dump({"found": False, "error": f"{field} is required"})
+        condition = Attr(field).eq(event[field])
+        where = condition if where is None else where &amp; condition
+    if where is not None:
+        query["FilterExpression"] = where
+    items = [_project(i) for i in table.query(**query).get("Items", [])]
+    return _dump({"found": bool(items), "count": len(items),
+                  CONFIG.get(<mark>"result_key"</mark>, "items"): items})
+
+def _project(item):          <span class="c"># only hand back `returns` fields</span>
+    fields = CONFIG.get(<mark>"returns"</mark>)
+    return {f: item.get(f) for f in fields} if fields else dict(item)</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/hesta_agent/gateway_tools.yaml</span></div>
+<pre>tables:
+  claims: { existing: Claims }
+
+tools:
+  <span class="c"># A member's own pending cases, for status enquiries.</span>
+  - name: list_member_cases
+    target: list-member-cases
+    description: List a member's cases that are pending review
+    blueprint: <mark>retrieval</mark>
+    table: claims                      <span class="c"># → TABLE_NAME</span>
+    filter:
+      <mark>index</mark>: status-index
+      <mark>key</mark>: status
+      <mark>value</mark>: pending_review
+      <mark>where</mark>:
+        policy_number: "The member/policy number whose cases to list"
+    <mark>result_key</mark>: cases
+    <mark>returns</mark>: [claim_id, policy_number, category, created_at]</pre>
+    <div class="note">The other mode is <code>lookup:</code> — fetch one record by key, or by an
+    index (e.g. <code>lookup_customer</code> tries <code>customer_id</code>, then
+    <code>email</code> via <code>email-index</code>).</div>
+  </div>
+</div>
+
+<h3>…and what <code>build_tools.py</code> generates from it</h3>
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip generated">Generated</span><span class="path">agentcore/generated/schemas/list_member_cases.json</span></div>
+<pre>[{
+  "name": "list_member_cases",
+  "description": "List a member's cases that are pending review, ...",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "<mark>policy_number</mark>": {
+        "type": "string",
+        "description": "The member/policy number whose cases to list"
+      }
+    },
+    "required": ["<mark>policy_number</mark>"]       <span class="c">← each `where` field</span>
+  }
+}]</pre>
+    <div class="note">This is exactly what the agent sees as the tool's arguments.</div>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip generated">Generated</span><span class="path">manifest.json + agentcore.json target</span></div>
+<pre><span class="c">// manifest.json — CDK builds the Lambda from this</span>
+{
+  "name": "list_member_cases",
+  "kind": "blueprint",
+  "code": "<mark>lambdas/blueprints/retrieval</mark>",
+  "table": { "existing": "Claims" },
+  "table_access": "read",            <span class="c">← IAM: read-only</span>
+  "tool_config": { "filter": {...}, "returns": [...],
+                   "result_key": "cases" }   <span class="c">← TOOL_CONFIG</span>
+}
+
+<span class="c">// agentcore.json → gateways[].targets[]</span>
+{ "name": "list-member-cases",
+  "targetType": "lambdaFunctionArn",
+  "lambdaFunctionArn": {
+    "lambdaArn": "PLACEHOLDER_LIST_MEMBER_CASES",  <span class="c">← CDK patches</span>
+    "toolSchemaFile": "agentcore/generated/schemas/list_member_cases.json" } }</pre>
+  </div>
+</div>
+<div class="callout form"><strong>The agent then calls it as a Gateway tool</strong>
+The coordinator sees <code>list-member-cases___list_member_cases</code> on the MCP Gateway. Its
+prompt names the bare tool ("the tool ending in list_member_cases"), so the
+<code>target___</code> prefix needs no mapping.</div>
+
+<!-- ───────────────────────── 4. Record write ───────────────────────── -->
+<h2 id="record-write"><span class="num">4</span>Blueprint tool: <code>record_write</code></h2>
+<p class="lead">Creates records with input checks, defaults, derived fields, timestamps and
+optional SNS notification. Deterministic ids make re-deliveries idempotent.</p>
+
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip framework">Framework code</span><span class="path">lambdas/blueprints/record_write/handler.py</span></div>
+<pre>def _make_id(item: dict) -&gt; str:
+    spec = CONFIG.get(<mark>"id"</mark>) or {}
+    sources = spec.get(<mark>"from"</mark>) or []
+    values = [item.get(f) for f in sources]
+    if sources and all(v not in (None, "") for v in values):
+        <span class="c"># same inputs → same id → no duplicate records</span>
+        digest = hashlib.sha256("\n".join(map(str, values)).encode()).hexdigest()
+        body = digest[: spec.get("length", 16)].upper()
+    else:
+        body = uuid.uuid4().hex[: spec.get("length", 8)].upper()
+    return f"{spec.get('prefix')}-{body}"
+
+def _build_item(event):
+    ...                     <span class="c"># inputs → coerce → required check</span>
+    for field, value in (CONFIG.get(<mark>"defaults"</mark>) or {}).items():
+        item.setdefault(field, value)
+    item.update(CONFIG.get(<mark>"set"</mark>) or {})
+    _validate(item)         <span class="c"># rules: min / max / one_of / max_length</span>
+    for field, rule in (CONFIG.get(<mark>"derived"</mark>) or {}).items():
+        source = item.get(rule["from"], Decimal(0))
+        item[field] = rule["then"] if source &gt;= Decimal(str(rule["gte"])) else rule["else"]
+
+def handler(event, context):
+    mode = CONFIG.get(<mark>"if_exists"</mark>, "new_record")
+    ...  <span class="c"># put_item with attribute_not_exists → "created" | "existing"</span></pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/card_dispute_agent/gateway_tools.yaml</span></div>
+<pre>tables:
+  disputes:                     <span class="c"># no `existing` → table created for you</span>
+    partition_key: { name: dispute_id, type: string }
+
+tools:
+  - name: create_dispute
+    blueprint: <mark>record_write</mark>
+    table: disputes
+    <mark>id</mark>: { field: dispute_id, prefix: DSP,
+          <mark>from</mark>: [customer_id, transaction_id] }
+    <mark>if_exists</mark>: return_existing
+    <mark>inputs</mark>:
+      customer_id:    { type: string, required: true }
+      transaction_id: { type: string, required: true }
+      amount:         { type: number, required: true }
+      outcome:        { type: string, required: true }
+    <mark>rules</mark>:
+      amount: { min: 0, max: 1000000 }
+      outcome:
+        one_of: [provisional_credit, block_card_and_escalate,
+                 decline_with_explanation, human_review]
+    <mark>defaults</mark>: { status: open }
+    <mark>timestamps</mark>: [created_at]
+
+  - name: request_dispute_review
+    blueprint: record_write
+    table: dispute_reviews
+    id: { field: review_id, prefix: DREV }
+    <mark>set</mark>: { status: pending }
+    <mark>derived</mark>:
+      priority: { from: amount, gte: 1000, then: high, else: normal }</pre>
+  </div>
+</div>
+
+<!-- ───────────────────────── 5. Agents ───────────────────────── -->
+<h2 id="agents"><span class="num">5</span>Agent blueprints</h2>
+<p class="lead">Five roles cover most pipelines. You fill in the content; the blueprint writes the
+system prompt and builds the structured-output model, so the prompt and the schema can never
+disagree.</p>
+
+<div class="tablewrap"><table class="grid">
+  <tr><th>Blueprint</th><th>Question it answers</th><th>You fill in</th><th>It returns</th></tr>
+  <tr><td><code>classifier</code></td><td>What is this about?</td><td>labels, flags, fields, fallback</td><td>labels + confidence, primary_id, needs_triage, each flag</td></tr>
+  <tr><td><code>extractor</code></td><td>What facts are in it?</td><td>fields</td><td>each field (typed, nullable)</td></tr>
+  <tr><td><code>assessor</code></td><td>Gather evidence, pick an outcome</td><td>outcomes, criteria, facts, fallback_outcome, gateway</td><td>outcome, confidence, reasons, each fact</td></tr>
+  <tr><td><code>reviewer</code></td><td>Is someone else's work right?</td><td>checks</td><td>each check, approved, confidence, issues</td></tr>
+  <tr><td><code>writer</code></td><td>Draft the reply</td><td>style, rules, knowledge, signoff</td><td>subject, body</td></tr>
+</table></div>
+
+<div class="trip three" style="margin-top:14px">
+  <div class="pane">
+    <div class="head"><span class="chip framework">Framework code</span><span class="path">app/_shared/agent_blueprints.py</span></div>
+<pre>def classifier_spec(name, *, <mark>labels</mark>, <mark>flags</mark>=None, <mark>fields</mark>=None,
+                    multi_label=True, <mark>fallback</mark>="other", **kwargs):
+    ids = [str(l["id"]) for l in labels] + [fallback]
+    label_type = _literal(ids, ...)     <span class="c"># Literal["card_dispute", ...]</span>
+
+    <span class="c"># 1. output schema, generated from the form</span>
+    model_fields = {
+        "labels": (list[LabelModel], ...),
+        "primary_id": (label_type, ...),
+        "needs_triage": (bool, ...),
+    }
+    for flag, description in (flags or {}).items():
+        model_fields[flag] = (bool, Field(description=description))
+    model = create_model(f"{_pascal(name)}Result", **model_fields)
+
+    <span class="c"># 2. system prompt, generated from the same form</span>
+    prompt = _prompt(
+        _header(kwargs, "Classify the message."),    <span class="c"># context + task</span>
+        "Choose from this fixed set of labels:\n" + taxonomy,
+        "Rules:\n" + _bullets(rules),
+        "Also set these flags ...:\n" + _bullets(flag_rules),
+        _footer(kwargs),   <span class="c"># extra_instructions, "never invent facts"</span>
+    )
+    return model, prompt, kwargs
+
+def classifier(**kwargs):
+    return _from_spec(classifier_spec, kwargs)
+    <span class="c"># → factory.build_agent(structured_output_model=model,</span>
+    <span class="c">#                       system_prompt=prompt, gateway=...)</span></pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/card_dispute_agent/config.yaml</span></div>
+<pre>agents:
+  intent_classifier:
+    type: <mark>../_shared/agent_blueprints.py:classifier</mark>
+    model: fast
+    agent_kwargs:
+      context: ${context}
+      task: "Classify why the customer is contacting the bank."
+      <mark>labels</mark>:
+        - id: card_dispute
+          description: "disputes a card transaction ..."
+          signals: ["don't recognise",
+                    "didn't make this purchase"]
+          examples: ["There's a $42.50 charge from
+                      STREAMFLIX I don't recognise."]
+        - id: lost_or_stolen_card
+          description: "the card is lost, stolen ..."
+        - id: fee_query
+          description: "a question about a bank fee"
+      <mark>fallback</mark>: other
+      <mark>flags</mark>:
+        fraud_suspected: "several unknown charges or
+                          card details compromised"
+        complaint: "the tone reads as a complaint"</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip generated">What the agent returns</span></div>
+<pre>{
+  "labels": [
+    { "id": "card_dispute",
+      "confidence": 94,
+      "rationale": "Customer does not
+                    recognise a charge" }
+  ],
+  "primary_id": "card_dispute",
+  "needs_triage": false,
+  "fraud_suspected": false,
+  "complaint": false
+}</pre>
+    <div class="note">Change the taxonomy = edit <code>labels:</code>. No prompt, no
+    <code>schemas.py</code>, no Python to keep in sync.</div>
+  </div>
+</div>
+
+<h3>An assessor that uses the Gateway tools</h3>
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/card_dispute_agent/config.yaml</span></div>
+<pre>  dispute_assessor:
+    type: ../_shared/agent_blueprints.py:<mark>assessor</mark>
+    model: primary
+    agent_kwargs:
+      <mark>gateway: true</mark>          <span class="c"># attach MCP Gateway tools (sec. 3–4)</span>
+      task: "Identify the customer, find the disputed
+             transaction, and assess the dispute."
+      <mark>outcomes</mark>:
+        - { id: valid_dispute, when: "the transaction exists and ..." }
+        - { id: likely_genuine_purchase, when: "merchant_history_count &gt;= 3" }
+        - { id: customer_not_found, when: "no customer matches" }
+      <mark>fallback_outcome</mark>: needs_information
+      <mark>criteria</mark>:
+        - "Identify the customer with the tool ending in lookup_customer ..."
+        - "List transactions with the tool ending in list_customer_transactions ..."
+      <mark>facts</mark>:
+        customer_status: { type: string }
+        amount:          { type: number }
+        fraud_signals:   { type: boolean }</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip framework">How it connects</span></div>
+<pre><span class="c"># factory.py — build_agent()</span>
+if gateway:
+    client = build_gateway_client()   <span class="c"># Cognito M2M via</span>
+    tools.append(client)              <span class="c"># AgentCore Identity</span>
+
+<span class="c"># The facts you declared become output fields.</span>
+<span class="c"># Name them to match decisions.yaml inputs:</span>
+<span class="c">#   customer_status, amount, fraud_signals ...</span>
+<span class="c"># → the coordinator passes them straight</span>
+<span class="c">#   into the decision table (section 6).</span></pre>
+    <div class="note"><strong>Design tip:</strong> write <code>decisions.yaml</code> inputs first,
+    then make the assessor's <code>facts</code> produce exactly those names.</div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 6. Decisions ───────────────────────── -->
+<h2 id="decisions"><span class="num">6</span>Decision tables</h2>
+<p class="lead">Business rules as data: no model involved, so the same inputs always give the same
+decision, and the business can review the rules without reading code.</p>
+
+<div class="trip three">
+  <div class="pane">
+    <div class="head"><span class="chip framework">Framework code</span><span class="path">app/_shared/decision_table.py</span></div>
+<pre>def evaluate(table: dict, inputs: dict) -&gt; dict:
+    values = _coerce(inputs, table.get(<mark>"inputs"</mark>) or {})
+    matches = []
+    for i, rule in enumerate(table.get(<mark>"rules"</mark>) or []):
+        if all(_holds(values.get(f), cond, values)
+               for f, cond in (rule.get(<mark>"when"</mark>) or {}).items()):
+            match = {**rule[<mark>"then"</mark>], "rule_id": rule.get("id")}
+            if table.get(<mark>"hit_policy"</mark>, "first") == "first":
+                return {**match, "inputs": values}
+            matches.append(match)        <span class="c"># collect</span>
+    if not matches:
+        return {**table[<mark>"default"</mark>], "rule_id": "default", ...}
+    return {**matches[0], "matches": matches,
+            "rule_ids": [m["rule_id"] for m in matches], ...}
+
+<span class="c"># operators: eq ne lt lte gt gte in not_in is_empty same_as</span></pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/claims_agent/decisions.yaml</span></div>
+<pre>name: route_claim
+description: Decide the final action for a claim.
+<mark>inputs</mark>:
+  decision:   { type: string }
+  confidence: { type: integer }
+  approved:   { type: boolean }
+<mark>rules</mark>:
+  - id: no_decision
+    when: { decision: { is_empty: true } }
+    then: { outcome: REJECT, reason: "No decision" }
+  - id: rejected
+    when: { decision: REJECT }
+    then: { outcome: REJECT, reason: "Rejected" }
+  - id: auto_approve
+    when: { decision: ACCEPT, approved: true,
+            confidence: { gte: <mark>${AUTO_APPROVE_THRESHOLD:-80}</mark> } }
+    then: { outcome: AUTO_APPROVE, reason: "..." }
+<mark>default</mark>: { outcome: HUMAN_REVIEW, reason: "..." }</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Binding</span><span class="path">app/card_dispute_agent/tools.py</span></div>
+<pre>from _shared.local_tools import (
+    decision_table_tool, ingestion_tool)
+
+HERE = Path(__file__).parent
+
+normalize_email = ingestion_tool(
+    HERE / "ingestion.yaml",
+    use_case="card_dispute_agent")
+decide_dispute = <mark>decision_table_tool</mark>(
+    HERE / "decisions.yaml")</pre>
+    <div class="note">The table's <code>inputs</code> become the tool's argument schema. Add it to
+    the coordinator's <code>tools:</code> list in <code>config.yaml</code>.
+    <code>${VAR:-default}</code> is filled from the environment when loaded.</div>
+  </div>
+</div>
+<div class="callout form"><strong><code>hit_policy: collect</code> for checklists</strong>
+HESTA's <code>route_case</code> returns <em>every</em> reason to escalate (regulated intent,
+personal advice, identity not verified, low confidence…) in <code>rule_ids</code>, instead of
+stopping at the first.</div>
+
+<!-- ───────────────────────── 7. Ingestion ───────────────────────── -->
+<h2 id="ingestion"><span class="num">7</span>Ingestion</h2>
+<p class="lead">Before any agent runs, the Trigger Lambda normalises the S3 upload into an
+envelope using the same engine and your <code>ingestion.yaml</code>.</p>
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/card_dispute_agent/ingestion.yaml</span></div>
+<pre><span class="c"># Everything from this text onwards is the footer — dropped.</span>
+<mark>footer_markers</mark>:
+  - "Harbour Bank Limited ABN"
+
+<span class="c"># Lines starting with these are the security banner — dropped.</span>
+<mark>banner_markers</mark>:
+  - "CAUTION: This email came from outside Harbour Bank"
+
+<span class="c"># The customer number → envelope.id_for_lookup</span>
+<mark>id_patterns</mark>:
+  - { regex: '\bCUST-\d{6}\b', uppercase: true }
+
+default_sender_type: customer</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip generated">The envelope the coordinator receives</span></div>
+<pre>{
+  "envelope_version": 1,
+  "use_case": "card_dispute_agent",
+  "sender_type": "customer",
+  "from_email": "mia.chen@example.com",
+  "subject": "Charge I don't recognise",
+  "id_for_lookup": "CUST-100001",
+  "latest_message": "Hi, there's a $42.50 charge ...",
+  "attachment_count": 0,
+  "source": "s3://.../claims-inbox/card_dispute_agent/..."
+}</pre>
+    <div class="note">Upload path picks the use case: <code>claims-inbox/&lt;use_case&gt;/&lt;file&gt;</code>.</div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 8. Custom ───────────────────────── -->
+<h2 id="custom"><span class="num">8</span>Where custom code comes in</h2>
+<p class="lead">Only where no form can express what you need. Each of these is a deliberate,
+small escape hatch.</p>
+
+<div class="tablewrap"><table class="grid">
+  <tr><th>Need</th><th>Escape hatch</th><th>Example in this repo</th></tr>
+  <tr><td>The pipeline's flow — which step, with what, in what order</td><td><span class="chip custom">Coordinator prompt</span> — the one hand-written prompt per use case</td><td><code>coordinator:</code> in every <code>config.yaml</code></td></tr>
+  <tr><td>A Gateway tool that is not "read records" or "write a record" (email, external API, multi-table update)</td><td><span class="chip custom">Custom Lambda</span> — <code>lambdas/&lt;use_case&gt;/&lt;tool&gt;/</code></td><td><code>send_notification</code> (SES), <code>resolve_claim</code></td></tr>
+  <tr><td>An ordered sequence of side effects (create → escalate → notify; stop on re-delivery)</td><td><span class="chip custom"><code>@tool</code> in tools.py</span> that applies a table, then calls the Gateway</td><td><code>claims_agent/tools.py: execute_claim_decision</code></td></tr>
+  <tr><td>An agent role none of the five blueprints fit</td><td><span class="chip custom">Hand-written agent</span> — <code>type: ../_shared/factory.py:agent</code> + <code>system_prompt:</code></td><td>the coordinators</td></tr>
+  <tr><td>Extra AWS permissions or infra a tool needs</td><td><span class="chip custom">CDK</span> — <code>agentcore/cdk/lib/infra-construct.ts</code></td><td>SES, SNS topic</td></tr>
+  <tr><td>Gateway-level authorisation limits</td><td><span class="chip custom">Cedar policy</span> in <code>agentcore.json</code> → <code>policyEngines</code></td><td><code>BlockExcessiveClaims</code></td></tr>
+</table></div>
+
+<h3>Custom Gateway tool</h3>
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip form">Your form</span><span class="path">app/claims_agent/gateway_tools.yaml</span></div>
+<pre>  - name: send_notification
+    target: notification
+    description: Send email notification to claimant
+    <mark>custom</mark>:                                 <span class="c"># instead of blueprint:</span>
+      code: lambdas/claims_agent/notification
+      schema: lambdas/claims_agent/notification/schema.json
+      environment:
+        SENDER_EMAIL: { env: SENDER_EMAIL,
+                        default: noreply@example.com }
+      permissions: [ses_send]           <span class="c"># → IAM in CDK</span>
+
+  - name: resolve_claim
+    <mark>custom</mark>:
+      code: lambdas/claims_agent/resolve_claim
+      schema: lambdas/claims_agent/resolve_claim/schema.json
+      environment:
+        CLAIMS_TABLE:  { table: claims }   <span class="c"># → real table name</span>
+        REVIEWS_TABLE: { table: reviews }
+      tables: { claims: write, reviews: write }</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip custom">Custom code</span><span class="path">lambdas/claims_agent/notification/handler.py</span></div>
+<pre>ses = boto3.client("ses")
+SENDER = os.environ.get("SENDER_EMAIL", "")
+
+def handler(event, context):
+    recipient_email = event.get("recipient_email", "")
+    subject = event.get("subject", "")
+    body = event.get("body", "")
+    if not recipient_email or not subject:
+        return json.dumps({"error": "recipient_email and subject are required"})
+
+    ses.send_email(Source=SENDER, Destination={...},
+                   Message={...})
+
+    <span class="c"># Gateway convention: plain json.dumps,</span>
+    <span class="c"># NO {statusCode, body} envelope</span>
+    return json.dumps({"message_id": message_id, "status": status, ...})</pre>
+    <div class="note">You write <code>handler.py</code> + <code>schema.json</code>.
+    <code>build_tools.py</code> still generates the target and manifest entry; CDK still builds
+    the Lambda and its IAM from <code>permissions</code> / <code>tables</code>.</div>
+  </div>
+</div>
+
+<h3>Custom <code>@tool</code>: a table plus ordered side effects</h3>
+<div class="trip">
+  <div class="pane">
+    <div class="head"><span class="chip custom">Custom code</span><span class="path">app/claims_agent/tools.py</span></div>
+<pre>ROUTE_CLAIM = <mark>load_table</mark>(Path(__file__).with_name("decisions.yaml"))
+
+@tool
+async def execute_claim_decision(decision, policy_number, amount, ...,
+                                 confidence, approved=False, ...):
+    <span class="c"># the RULE is still a form ...</span>
+    verdict = <mark>decision_table.evaluate</mark>(ROUTE_CLAIM, {
+        "decision": (decision or "").strip().upper(),
+        "confidence": confidence, "approved": approved})
+    action = verdict["outcome"]
+
+    <span class="c"># ... only the SEQUENCE of Gateway calls is code</span>
+    mcp = build_gateway_client()
+    with mcp:
+        if action == REJECT:
+            await _safe_call("send_notification", {...})
+        elif action == AUTO_APPROVE:
+            result = await _safe_call("create_claim", {..., "status": "approved"})
+            if _is_duplicate(result): return ...   <span class="c"># re-delivery</span>
+            await _safe_call("send_notification", {...})
+        else:  <span class="c"># HUMAN_REVIEW</span>
+            ...create_claim → request_human_review → send_notification</pre>
+  </div>
+  <div class="pane">
+    <div class="head"><span class="chip form">Wired in config</span><span class="path">app/claims_agent/config.yaml</span></div>
+<pre>  coordinator:
+    type: ../_shared/factory.py:agent     <span class="c"># hand-written agent</span>
+    model: fast
+    tools:
+      - <mark>./tools.py:execute_claim_decision</mark>
+    system_prompt: |
+      You run SecureGuard Insurance's claims pipeline
+      over ONE claim submission. You do not judge the
+      claim yourself — you delegate, then execute ...
+
+orchestrations:
+  main:
+    mode: delegate
+    entry_name: coordinator
+    connections:
+      - agent: claims_processor     <span class="c"># assessor blueprint</span>
+      - agent: claims_validator     <span class="c"># reviewer blueprint</span></pre>
+    <div class="note">Rule of thumb: keep the <em>decision</em> in YAML even when the
+    <em>execution</em> needs code.</div>
+  </div>
+</div>
+
+<!-- ───────────────────────── 9. Order ───────────────────────── -->
+<h2 id="order"><span class="num">9</span>Order of work for a new use case</h2>
+<p class="lead">Start from the agents, work out to the tools and the Gateway, then the rules and
+deployment.</p>
+<ol class="steps">
+  <li><b>config.yaml — agent logic</b><p>Models, blueprint specialists (fill in each form), the
+  coordinator's step-by-step prompt, the delegate orchestration. While writing the coordinator,
+  list every tool the flow needs.</p></li>
+  <li><b>Check the blueprint tools</b><p>For each needed tool: reading records → <code>retrieval</code>;
+  creating a record → <code>record_write</code>; already exists in another use case →
+  <code>uses:</code>. Whatever is left becomes custom.</p></li>
+  <li><b>gateway_tools.yaml — reference them</b><p><code>tables:</code> (created for you, or
+  <code>existing:</code>), <code>uses:</code>, and one <code>tools:</code> entry per blueprint or
+  custom tool.</p></li>
+  <li><b>lambdas/&lt;use_case&gt;/&lt;tool&gt;/ — custom tools only</b><p><code>handler.py</code>
+  returning <code>json.dumps({...})</code> + <code>schema.json</code>; declare
+  <code>environment</code>, <code>tables</code>, <code>permissions</code> in the form.</p></li>
+  <li><b>uv run --project app python scripts/build_tools.py</b><p>Generates schemas, manifest
+  and the Gateway targets in <code>agentcore.json</code>. Extra infra → <code>infra-construct.ts</code>;
+  Gateway limits → Cedar in <code>agentcore.json</code>.</p></li>
+  <li><b>decisions.yaml + tools.py</b><p>The deterministic rules, bound as a tool (two lines).
+  Match the table's <code>inputs</code> to the agents' output fields. <code>@tool</code> code only
+  for ordered side effects.</p></li>
+  <li><b>ingestion.yaml + seed_data.yaml + sample_emails/</b><p>Email clean-up and the ID
+  regex; one seed record and one sample per scenario.</p></li>
+  <li><b>Test locally</b><p><code>sca dev --config app/&lt;use_case&gt;/config.yaml</code>;
+  add decision-table and config tests; <code>python -m pytest tests/</code>.</p></li>
+  <li><b>Switch on and deploy</b><p><code>USE_CASE = "&lt;use_case&gt;"</code> in
+  <code>app/main.py</code> → <code>./deploy.sh &lt;region&gt;</code> →
+  <code>scripts/seed_tables.py &lt;use_case&gt;</code> → upload to
+  <code>claims-inbox/&lt;use_case&gt;/</code>.</p></li>
+</ol>
+
+<div class="callout form" style="margin-top:20px"><strong>The rule of thumb</strong>
+Describe it in a form if you can; write code only for real business logic that no form expresses.</div>
+
+</div>
+</body>
+</html>
