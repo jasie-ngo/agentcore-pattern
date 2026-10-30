@@ -1,0 +1,67 @@
+{
+  "voice": {
+    "greeting": "Thank you for contacting Illustrative Insurer.",
+    "signoff": "We're here to help,\nThe team at Illustrative Insurer",
+    "legal_footer": "Illustrative Insurer Pty Ltd (a fictitious company used for demonstration). This information is general only and does not take your personal objectives, financial situation or needs into account.",
+    "identity_verification_request": "So that we can look into this, please reply to this email with:\n- Your policy number\n- Your full name\n- Your date of birth\n- The address we have on our records",
+    "personal_advice_decline": "Thanks for reaching out. We want to help, but we're not able to give you personal advice by email, such as whether you should keep, change or cancel your policy for your own circumstances.\n\nWhat we can do is give you general information about how your policy works and what options exist, and a team member can talk through the support available. You may also wish to speak with a licensed financial adviser or a free financial counselling service.\n\nIf you'd like, tell us what general information would be useful and we'll be glad to help.",
+    "style_guide": "Voice: warm, plain-English, calm and never pressuring. Open with 'Thank you for contacting Illustrative Insurer.' then 'Hi <first name>,'. Close with:\nWe're here to help,\nThe team at Illustrative Insurer\nKeep it short. Never promise or hint at an outcome (approval, amount, payment, relief, waiver, arrangement or timing). Never use language that judges the person's circumstances. If identity is not verified, ask for the verification details before saying anything about their policy or claim."
+  },
+  "intents": {
+    "hardship_premium_relief": {
+      "snippet": "Acknowledge their situation with care and without judgement. Say that Illustrative Insurer has a team that looks at financial hardship, and that a specialist will review their circumstances and contact them. Explain that it helps to send recent evidence (for example an income statement or a benefit letter) as a PDF with the policy number in the subject, but that they should not feel they must send everything at once. Do NOT confirm or hint at any outcome: no payment arrangement, pause, reduction, waiver or timing. Do not tell them whether to keep or cancel the policy.",
+      "sources": [
+        "hardship-policy"
+      ]
+    },
+    "hardship_claim_support": {
+      "snippet": "Acknowledge the pressure they are under while the claim is open, with care and without judgement. Say that a specialist will review their circumstances alongside the claim and contact them. Explain that recent evidence (for example a bank statement or a benefit letter) as a PDF with the policy number in the subject helps. Do NOT confirm or hint at an early, partial or urgent payment, an amount, or a date. If a pending case is on file, refer to it and say only that it is pending review.",
+      "sources": [
+        "hardship-policy",
+        "claims-guide"
+      ]
+    },
+    "claim_lodgement": {
+      "snippet": "Explain how to lodge a claim (the claim form and supporting documents such as photos or invoices, sent as PDFs or images with the policy number in the subject). Say a claims team member will review it and be in touch. Do not confirm that the event is covered, the amount, or the timing.",
+      "sources": [
+        "claims-guide"
+      ]
+    },
+    "claim_status": {
+      "snippet": "Confirm what can be seen on file about their claim, and that it is pending review if a pending case is shown. Do not invent a status, a decision, a date or an outcome. If no case can be found, say so and ask how and when they lodged it.",
+      "sources": [
+        "claims-guide"
+      ]
+    },
+    "cancellation_request": {
+      "snippet": "Acknowledge the request. Say that a team member will confirm the details of cancelling, reducing or pausing cover, including any effect on existing claims, once their identity is confirmed. Do not process or confirm a cancellation, and do not advise whether they should cancel. If they mention money worries, say that a specialist can talk through the support available.",
+      "sources": [
+        "claims-guide"
+      ]
+    },
+    "complaint_dispute": {
+      "snippet": "Acknowledge the complaint sincerely and without defensiveness. Say that it has been passed to the team that handles complaints and that they will contact the person. Do not defend, explain away or decide the matter, and do not state a timeframe.",
+      "sources": [
+        "complaints-handling"
+      ]
+    },
+    "change_of_details": {
+      "snippet": "Confirm that a change to phone number or postal address can be actioned once identity is verified. A change of email address, or restoring online access, is always handled by a team member after additional checks.",
+      "sources": [
+        "general-faq"
+      ]
+    },
+    "policy_enquiry": {
+      "snippet": "Give only general information about how the policy type works, and point to the policy documents for the detail. Do not state what is or is not covered for their situation, and do not recommend a level of cover.",
+      "sources": [
+        "general-faq"
+      ]
+    },
+    "other_unknown": {
+      "snippet": "Acknowledge the enquiry, ask a brief clarifying question to identify what the person needs, and confirm identity if any account action may be required.",
+      "sources": [
+        "general-faq"
+      ]
+    }
+  }
+}

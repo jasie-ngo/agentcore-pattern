@@ -1,0 +1,9 @@
+{
+  "approved_at": "2026-10-30T00:00:00Z",
+  "approved_by_name": "Synthetic Demo Owner",
+  "approved_by_role": "Synthetic (no real client)",
+  "client": "fininsurer",
+  "content_sha256": "8520bed10b9a2611fe2ddfbc8cc9b2c109910de87fbdf1f0f59af3dfda724427",
+  "reviewed_by": "Synthetic Demo Reviewer",
+  "version": "20261030-v1"
+}

@@ -1,0 +1,18 @@
+{
+  "hardship-policy": {
+    "title": "Financial Hardship Policy (synthetic)",
+    "uri": "clients/fininsurer/synthetic-sources/hardship-policy.html"
+  },
+  "claims-guide": {
+    "title": "How to lodge and track a claim (synthetic)",
+    "uri": "clients/fininsurer/synthetic-sources/claims-guide.html"
+  },
+  "complaints-handling": {
+    "title": "Complaints handling (synthetic)",
+    "uri": "clients/fininsurer/synthetic-sources/complaints-handling.md"
+  },
+  "general-faq": {
+    "title": "General FAQ (synthetic)",
+    "uri": "clients/fininsurer/synthetic-sources/general-faq.txt"
+  }
+}
