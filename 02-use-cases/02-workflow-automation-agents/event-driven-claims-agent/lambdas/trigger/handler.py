@@ -83,20 +83,47 @@ def invoke_runtime_async(payload_dict):
     return status, preview_lines
 
 
+_HEADER_LINE = re.compile(
+    r"^(From|Subject|Date|To|Message-ID|In-Reply-To|References):[ \t]*(.*)$",
+    re.IGNORECASE,
+)
+
+
 def parse_email(content):
-    """Parse email-format text into structured fields."""
+    """Parse email-format text into structured fields.
+
+    Headers are attacker-controlled, so they are only read, never evaluated.
+    Names match case-insensitively. A line starting with a space or tab folds
+    into the previous header (RFC 5322 section 2.2.3). If a header appears more
+    than once the FIRST occurrence wins, and any folded lines after a repeat are
+    discarded rather than appended to the first. A header with no value is left
+    out. The blank-line test runs before the fold test, so a folded line can
+    never swallow the blank line that ends the headers.
+    """
     headers = {}
     lines = content.split("\n")
-    body_start = 0
+    body_start = 0  # unchanged: with no blank line the whole text is the body
+    current = None  # the header name a folded line would continue, or None
     for i, line in enumerate(lines):
         if line.strip() == "":
             body_start = i + 1
             break
-        match = re.match(r"^(From|Subject|Date|To):\s*(.+)$", line, re.IGNORECASE)
-        if match:
-            headers[match.group(1).lower()] = match.group(2).strip()
+        if line[0] in " \t":
+            if current is not None:
+                headers[current] = f"{headers[current]} {line.strip()}".strip()
+            continue
+        match = _HEADER_LINE.match(line.rstrip("\r"))
+        if match is None:
+            current = None
+            continue
+        name = match.group(1).lower()
+        if name in headers:
+            current = None  # first wins; ignore this repeat and its folded lines
+            continue
+        headers[name] = match.group(2).strip()
+        current = name
     body = "\n".join(lines[body_start:]).strip()
-    return headers, body
+    return {k: v for k, v in headers.items() if v}, body
 
 
 def is_email_format(content):
@@ -116,8 +143,10 @@ def handler(event, context):
     content = obj["Body"].read().decode("utf-8")
 
     # Determine format and extract claim info
+    email_headers = None  # set only for email-format input
     if is_email_format(content):
         headers, body = parse_email(content)
+        email_headers = headers
         prompt = f"Process this insurance claim from email:\n\n{body}"
         claimant_email = headers.get("from", "")
         source = f"email:{headers.get('subject', 'No Subject')}"
@@ -133,6 +162,16 @@ def handler(event, context):
             source = f"s3://{bucket}/{key}"
 
     payload = {"prompt": prompt, "source": source}
+    if email_headers is not None:
+        # Email-format input only; JSON and plain-text payloads stay as they were.
+        # Values are forwarded as plain strings, unevaluated.
+        payload["headers"] = {
+            "message_id": email_headers.get("message-id", ""),
+            "in_reply_to": email_headers.get("in-reply-to", ""),
+            "references": email_headers.get("references", "").split(),
+            "subject": email_headers.get("subject", ""),
+            "from": claimant_email,
+        }
     if claimant_email:
         payload["claimant_email"] = claimant_email
 
